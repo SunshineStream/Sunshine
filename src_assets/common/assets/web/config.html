@@ -455,7 +455,7 @@
           <label for="adapter_name" class="form-label">Adapter Name</label>
           <input class="form-control" id="adapter_name" placeholder="/dev/dri/renderD128" v-model="config.adapter_name" />
           <div class="form-text">
-            Manually specify a GPU to use for capture.<br>
+            Manually specify a GPU to use for encoding. This MUST be a render node (renderD*) not a primary node (card*).<br>
             <pre>ls /dev/dri/renderD*  # to find all devices capable of VAAPI</pre>
             <pre>
               vainfo --display drm --device /dev/dri/renderD129 | \

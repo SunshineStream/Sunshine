@@ -568,6 +568,8 @@ keybindings
       **Linux + VA-API**
          Unlike with `amdvce` and `nvenc`, it doesn't matter if video encoding is done on a different GPU.
 
+         .. note:: This MUST be a render node (renderD*) not a primary node (card*).
+
          .. code-block:: bash
 
             ls /dev/dri/renderD*  # to find all devices capable of VAAPI

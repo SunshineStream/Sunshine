@@ -449,6 +449,10 @@ namespace va {
       return false;
     }
 
+    if (video::active_av1_mode > 1 && !query(display.get(), VAProfileAV1Profile0)) {
+      return false;
+    }
+
     return true;
   }
 
