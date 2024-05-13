@@ -777,6 +777,8 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_CUDA
   std::vector<std::string>
   nvfbc_display_names();
+  std::vector<config::display_options_t>
+  nvfbc_display_options();
   std::shared_ptr<display_t>
   nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
@@ -789,6 +791,8 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_WAYLAND
   std::vector<std::string>
   wl_display_names();
+  std::vector<config::display_options_t>
+  wl_display_options();
   std::shared_ptr<display_t>
   wl_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
@@ -801,6 +805,8 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_DRM
   std::vector<std::string>
   kms_display_names(mem_type_e hwdevice_type);
+  std::vector<config::display_options_t>
+  kms_display_options();
   std::shared_ptr<display_t>
   kms_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
@@ -813,6 +819,8 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_X11
   std::vector<std::string>
   x11_display_names();
+  std::vector<config::display_options_t>
+  x11_display_options();
   std::shared_ptr<display_t>
   x11_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
@@ -837,6 +845,23 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_X11
     if (sources[source::X11]) return x11_display_names();
 #endif
+    return {};
+  }
+
+  std::vector<config::display_options_t>
+  display_options() {
+    #ifdef SUNSHINE_BUILD_CUDA
+    if (sources[source::NVFBC]) return nvfbc_display_options();
+    #endif
+    #ifdef SUNSHINE_BUILD_WAYLAND
+    if (sources[source::WAYLAND]) return wl_display_options();
+    #endif
+    #ifdef SUNSHINE_BUILD_DRM
+    if (sources[source::KMS]) return kms_display_options();
+    #endif
+    #ifdef SUNSHINE_BUILD_X11
+    if (sources[source::X11]) return x11_display_options();
+    #endif
     return {};
   }
 

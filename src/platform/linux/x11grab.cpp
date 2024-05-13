@@ -64,6 +64,7 @@ namespace platf {
 
     namespace rr {
       _FN(GetScreenResources, XRRScreenResources *, (Display * dpy, Window window));
+      _FN(GetOutputPrimary, RROutput, (Display * dpy, Window window));
       _FN(GetOutputInfo, XRROutputInfo *, (Display * dpy, XRRScreenResources *resources, RROutput output));
       _FN(GetCrtcInfo, XRRCrtcInfo *, (Display * dpy, XRRScreenResources *resources, RRCrtc crtc));
       _FN(FreeScreenResources, void, (XRRScreenResources * resources));
@@ -86,6 +87,7 @@ namespace platf {
 
         std::vector<std::tuple<dyn::apiproc *, const char *>> funcs {
           { (dyn::apiproc *) &GetScreenResources, "XRRGetScreenResources" },
+          { (dyn::apiproc *) &GetOutputPrimary, "XRRGetOutputPrimary" },
           { (dyn::apiproc *) &GetOutputInfo, "XRRGetOutputInfo" },
           { (dyn::apiproc *) &GetCrtcInfo, "XRRGetCrtcInfo" },
           { (dyn::apiproc *) &FreeScreenResources, "XRRFreeScreenResources" },
@@ -836,6 +838,44 @@ namespace platf {
     }
 
     return names;
+  }
+
+  std::vector<config::display_options_t>
+  x11_display_options() {
+    if (load_x11() || load_xcb()) {
+      return {};
+    }
+
+    x11::xdisplay_t xdisplay { x11::OpenDisplay(nullptr) };
+    if (!xdisplay) {
+      return {};
+    }
+
+    auto xwindow = DefaultRootWindow(xdisplay.get());
+    screen_res_t screenr { x11::rr::GetScreenResources(xdisplay.get(), xwindow) };
+    int output = screenr->noutput;
+
+    auto main_display = x11::rr::GetOutputPrimary(xdisplay.get(), xwindow);
+
+    std::vector<config::display_options_t> display_options;
+
+    int monitor = 0;
+    for (int x = 0; x < output; ++x) {
+      output_info_t out_info { x11::rr::GetOutputInfo(xdisplay.get(), screenr.get(), screenr->outputs[x]) };
+      if (out_info) {
+		std::string name = out_info->name;
+        auto is_connected_value = (out_info->connection == RR_Connected) ? "true" : "false";
+        auto option = config::display_options_t {
+          monitor,
+          name + " connected: " + is_connected_value,
+          main_display == screenr->outputs[x]
+        };
+        display_options.emplace_back(option);
+        ++monitor;
+      }
+    }
+
+    return display_options;
   }
 
   void

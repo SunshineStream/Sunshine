@@ -1749,4 +1749,76 @@ namespace platf {
     return display_names;
   }
 
+  std::vector<config::display_options_t>
+  kms_display_options() {
+    int count = 0;
+
+    if (!fs::exists("/dev/dri")) {
+      return {};
+    }
+
+    if (!gbm::create_device) {
+      return {};
+    }
+
+    std::vector<config::display_options_t> display_options;
+
+    kms::conn_type_count_t conn_type_count;
+
+    fs::path card_dir { "/dev/dri"sv };
+    for (auto &entry : fs::directory_iterator { card_dir }) {
+      auto file = entry.path().filename();
+
+      auto filestring = file.generic_string();
+      if (std::string_view { filestring }.substr(0, 4) != "card"sv) {
+        continue;
+      }
+
+      kms::card_t card;
+      if (card.init(entry.path().c_str())) {
+        continue;
+      }
+
+      auto crtc_to_monitor = kms::map_crtc_to_monitor(card.monitors(conn_type_count));
+
+      auto end = std::end(card);
+      for (auto plane = std::begin(card); plane != end; ++plane) {
+        // Skip unused planes
+        if (!plane->fb_id) {
+          continue;
+        }
+
+        if (card.is_cursor(plane->plane_id)) {
+          continue;
+        }
+
+        auto fb = card.fb(plane.get());
+        if (!fb) {
+          continue;
+        }
+
+        if (!fb->handles[0]) {
+          break;
+        }
+
+        // This appears to return the offset of the monitor
+        auto crtc = card.crtc(plane->crtc_id);
+        if (!crtc) {
+          continue;
+        }
+
+        auto monitor = crtc_to_monitor[plane->crtc_id];
+
+        auto option = config::display_options_t {
+          count++,
+          std::to_string(count) + ", type: " +  std::to_string(monitor.index), // TODO: Get real display name
+          false // TODO: Dunno how to find if it is primary
+        };
+        display_options.emplace_back(option);
+      }
+    }
+
+    return display_options;
+  }
+
 }  // namespace platf

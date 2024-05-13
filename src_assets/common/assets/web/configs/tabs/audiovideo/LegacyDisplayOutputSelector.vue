@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import {reactive, ref} from 'vue'
 import { $tp } from '../../../platform-i18n'
 import PlatformLayout from '../../../PlatformLayout.vue'
 
@@ -8,7 +8,7 @@ const props = defineProps([
   'config'
 ])
 
-const config = ref(props.config)
+const config = reactive(props.config)
 const outputNamePlaceholder = (props.platform === 'windows') ? '\\.\DISPLAY1' : '0'
 </script>
 

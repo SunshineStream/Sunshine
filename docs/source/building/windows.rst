@@ -28,7 +28,6 @@ Install dependencies:
         mingw-w64-x86_64-curl \
         mingw-w64-x86_64-graphviz \
         mingw-w64-x86_64-miniupnpc \
-        mingw-w64-x86_64-nlohmann-json \
         mingw-w64-x86_64-nodejs \
         mingw-w64-x86_64-onevpl \
         mingw-w64-x86_64-openssl \

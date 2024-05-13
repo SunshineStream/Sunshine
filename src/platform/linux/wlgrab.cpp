@@ -454,4 +454,46 @@ namespace platf {
     return display_names;
   }
 
+  std::vector<config::display_options_t>
+  wl_display_options() {
+    wl::display_t display;
+    if (display.init()) {
+      return {};
+    }
+
+    wl::interface_t interface;
+    interface.listen(display.registry());
+
+    display.roundtrip();
+
+    if (!interface[wl::interface_t::XDG_OUTPUT]) {
+      return {};
+    }
+
+    if (!interface[wl::interface_t::WLR_EXPORT_DMABUF]) {
+      return {};
+    }
+
+    for (auto &monitor : interface.monitors) {
+      monitor->listen(interface.output_manager);
+    }
+
+    display.roundtrip();
+
+    std::vector<config::display_options_t> display_options;
+
+    for (int x = 0; x < interface.monitors.size(); ++x) {
+      auto monitor = interface.monitors[x].get();
+
+      auto option = config::display_options_t {
+        x,
+        monitor->name + ": " + monitor->description,
+        false // TODO: Find proper way of doing it, found no way of checking for primary display myself
+      };
+      display_options.emplace_back(option);
+    }
+
+    return display_options;
+  }
+
 }  // namespace platf

@@ -26,6 +26,8 @@
 #include <Simple-Web-Server/server_https.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include "config.h"
 #include "confighttp.h"
 #include "crypto.h"
@@ -531,23 +533,24 @@ namespace confighttp {
 
     print_req(request);
 
-    pt::ptree outputTree;
+    nlohmann::json outputJson;
     auto g = util::fail_guard([&]() {
-      std::ostringstream data;
-
-      pt::write_json(data, outputTree);
-      response->write(data.str());
+      response->write(outputJson.dump());
     });
 
-    outputTree.put("status", "true");
-    outputTree.put("platform", SUNSHINE_PLATFORM);
-    outputTree.put("version", PROJECT_VER);
+    outputJson.emplace("status", "true");
+    outputJson.emplace("platform", SUNSHINE_PLATFORM);
+    outputJson.emplace("version", PROJECT_VER);
+
+    nlohmann::json displays = platf::display_options();
+    outputJson.emplace("displays", displays);
 
     auto vars = config::parse_config(file_handler::read_file(config::sunshine.config_file.c_str()));
-
+    nlohmann::json config_file;
     for (auto &[name, value] : vars) {
-      outputTree.put(std::move(name), std::move(value));
+      config_file.emplace(std::move(name), std::move(value));
     }
+    outputJson.emplace(std::make_pair("config_file", config_file));
   }
 
   void

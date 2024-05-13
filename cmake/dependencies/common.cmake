@@ -19,6 +19,15 @@ pkg_check_modules(CURL REQUIRED libcurl)
 pkg_check_modules(MINIUPNP miniupnpc REQUIRED)
 include_directories(SYSTEM ${MINIUPNP_INCLUDE_DIRS})
 
+# nlohmann_json
+if(SUNSHINE_SYSTEM_NLOHMANN_JSON)
+    pkg_check_modules(NLOHMANN_JSON nlohmann_json>=3.9.0 REQUIRED IMPORTED_TARGET)
+    set(JSON_LIBRARIES PkgConfig::NLOHMANN_JSON)
+else()
+    add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/nlohmann_json")
+    set(JSON_LIBRARIES nlohmann_json::nlohmann_json)
+endif()
+
 # ffmpeg pre-compiled binaries
 if(WIN32)
     if(NOT CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")

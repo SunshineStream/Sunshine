@@ -1049,4 +1049,36 @@ namespace platf {
 
     return display_names;
   }
+
+  std::vector<config::display_options_t>
+  nvfbc_display_options() {
+    if (cuda::init() || cuda::nvfbc::init()) {
+      return {};
+    }
+
+    std::vector<config::display_options_t> display_options;
+
+    auto handle = cuda::nvfbc::handle_t::make();
+    if (!handle) {
+      return {};
+    }
+
+    auto status_params = handle->status();
+    if (!status_params) {
+      return {};
+    }
+
+    for (auto x = 0; x < status_params->dwOutputNum; ++x) {
+      auto &output = status_params->outputs[x];
+      std::string name = output.name;
+      auto option = config::display_options_t {
+        x,
+        name + ",  dwID: " + std::to_string(output.dwId),
+        false // TODO: Find proper way of doing it, found no way of checking for primary display myself
+      };
+      display_options.emplace_back(option);
+    }
+
+    return display_options;
+  }
 }  // namespace platf

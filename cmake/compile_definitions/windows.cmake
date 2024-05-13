@@ -74,7 +74,6 @@ list(PREPEND PLATFORM_LIBRARIES
         avrt
         iphlpapi
         shlwapi
-        PkgConfig::NLOHMANN_JSON
         ${CURL_STATIC_LIBRARIES})
 
 if(SUNSHINE_ENABLE_TRAY)

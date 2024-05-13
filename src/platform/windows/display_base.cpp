@@ -1138,6 +1138,53 @@ namespace platf {
     return display_names;
   }
 
+  std::vector<config::display_options_t>
+  display_options() {
+    // We sync the thread desktop once before we start the enumeration process
+    // to ensure test_dxgi_duplication() returns consistent results for all GPUs
+    // even if the current desktop changes during our enumeration process.
+    // It is critical that we either fully succeed in enumeration or fully fail,
+    // otherwise it can lead to the capture code switching monitors unexpectedly.
+    syncThreadDesktop();
+
+    dxgi::factory1_t factory;
+    auto status = CreateDXGIFactory1(IID_IDXGIFactory1, (void **) &factory);
+    if (FAILED(status)) {
+      return {};
+    }
+
+    std::vector<config::display_options_t> display_options;
+
+    dxgi::adapter_t adapter;
+    int monitorIndex = 0;
+    for (int x = 0; factory->EnumAdapters1(x, &adapter) != DXGI_ERROR_NOT_FOUND; ++x) {
+      DXGI_ADAPTER_DESC1 adapter_desc;
+      adapter->GetDesc1(&adapter_desc);
+
+      dxgi::output_t::pointer output_p {};
+      for (int y = 0; adapter->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
+        dxgi::output_t output { output_p };
+
+        DXGI_OUTPUT_DESC desc;
+        output->GetDesc(&desc);
+
+        auto device_name = to_utf8(desc.DeviceName);
+
+        // Don't include the display in the list if we can't actually capture it
+        if (desc.AttachedToDesktop && dxgi::test_dxgi_duplication(adapter, output, true)) {
+          auto option = config::display_options_t {
+            monitorIndex++,
+            std::move(device_name),
+            false // TODO: Correclty check if this is the primary display for windows, idk how
+          };
+          display_options.emplace_back(option);
+        }
+      }
+    }
+
+    return display_options;
+  }
+
   /**
    * @brief Returns if GPUs/drivers have changed since the last call to this function.
    * @return `true` if a change has occurred or if it is unknown whether a change occurred.

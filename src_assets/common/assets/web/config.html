@@ -57,6 +57,7 @@
         :platform="platform"
         :resolutions="resolutions"
         :fps="fps"
+        :displays="displays"
       >
       </audio-video>
 
@@ -131,6 +132,7 @@
     data() {
       return {
         platform: "",
+        displays: [],
         saved: false,
         restarted: false,
         config: null,
@@ -288,8 +290,9 @@
       fetch("/api/config")
         .then((r) => r.json())
         .then((r) => {
-          this.config = r;
-          this.platform = this.config.platform;
+          this.config = r.config_file;
+          this.platform = r.platform;
+          this.displays = r.displays;
 
           var app = document.getElementById("app");
           if (this.platform === "windows") {
@@ -308,12 +311,7 @@
             });
           }
 
-          // remove values we don't want in the config file
-          delete this.config.platform;
-          delete this.config.status;
-          delete this.config.version;
-
-          // TODO: let each tab's Component handle it's own data instead of doing it here
+         // TODO: let each tab's Component handle it's own data instead of doing it here
 
           // Populate default values from tabs options
           this.tabs.forEach(tab => {

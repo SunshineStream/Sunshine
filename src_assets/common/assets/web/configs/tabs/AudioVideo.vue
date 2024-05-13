@@ -1,5 +1,5 @@
 <script setup>
-import {ref} from 'vue'
+import {reactive, ref} from 'vue'
 import {$tp} from '../../platform-i18n'
 import PlatformLayout from '../../PlatformLayout.vue'
 import AdapterNameSelector from './audiovideo/AdapterNameSelector.vue'
@@ -13,9 +13,10 @@ const props = defineProps([
   'config',
   'resolutions',
   'fps',
+  'displays'
 ])
 
-const config = ref(props.config)
+const config = reactive(props.config)
 </script>
 
 <template>
@@ -72,9 +73,10 @@ const config = ref(props.config)
         :config="config"
     />
 
-    <LegacyDisplayOutputSelector
+    <NewDisplayOutputSelector
       :platform="platform"
       :config="config"
+      :displays="displays"
     />
 
     <!-- Display Modes -->
