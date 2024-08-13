@@ -1,5 +1,5 @@
 /**
- * @file src/crypto.h
+ * @file src/server/crypto.h
  * @brief Declarations for cryptography functions.
  */
 #pragma once
@@ -10,7 +10,7 @@
 #include <openssl/sha.h>
 #include <openssl/x509.h>
 
-#include "utility.h"
+#include "src/utility.h"
 
 namespace crypto {
   struct creds_t {

@@ -1,5 +1,5 @@
 /**
- * @file src/nvhttp.cpp
+ * @file src/server/nvhttp.cpp
  * @brief Definitions for the nvhttp (GameStream) server.
  */
 // macros
@@ -20,21 +20,21 @@
 #include <string>
 
 // local includes
-#include "config.h"
-#include "crypto.h"
-#include "file_handler.h"
-#include "globals.h"
-#include "httpcommon.h"
-#include "logging.h"
-#include "network.h"
-#include "nvhttp.h"
-#include "platform/common.h"
-#include "process.h"
-#include "rtsp.h"
-#include "system_tray.h"
-#include "utility.h"
-#include "uuid.h"
-#include "video.h"
+#include "src/config.h"
+#include "src/file_handler.h"
+#include "src/globals.h"
+#include "src/logging.h"
+#include "src/platform/common.h"
+#include "src/process.h"
+#include "src/server/crypto.h"
+#include "src/server/httpcommon.h"
+#include "src/server/network.h"
+#include "src/server/nvhttp.h"
+#include "src/server/rtsp.h"
+#include "src/system_tray.h"
+#include "src/utility.h"
+#include "src/uuid.h"
+#include "src/video.h"
 
 using namespace std::literals;
 namespace nvhttp {

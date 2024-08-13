@@ -1,12 +1,12 @@
 /**
- * @file src/upnp.h
+ * @file src/server/upnp.h
  * @brief Declarations for UPnP port mapping.
  */
 #pragma once
 
 #include <miniupnpc/miniupnpc.h>
 
-#include "platform/common.h"
+#include "src/platform/common.h"
 
 /**
  * @brief UPnP port mapping.

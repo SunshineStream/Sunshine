@@ -15,7 +15,7 @@
 
 #include "config.h"
 #include "platform/common.h"
-#include "rtsp.h"
+#include "server/rtsp.h"
 #include "utility.h"
 
 namespace proc {

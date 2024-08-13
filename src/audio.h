@@ -6,6 +6,7 @@
 
 #include "thread_safe.h"
 #include "utility.h"
+
 namespace audio {
   enum stream_config_e : int {
     STEREO,  ///< Stereo

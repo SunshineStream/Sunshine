@@ -36,10 +36,10 @@
   #include <boost/process/environment.hpp>
 
   // local includes
-  #include "confighttp.h"
   #include "logging.h"
   #include "platform/common.h"
   #include "process.h"
+  #include "server/confighttp.h"
   #include "src/entry_handler.h"
   #include "version.h"
 

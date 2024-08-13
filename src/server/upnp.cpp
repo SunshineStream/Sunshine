@@ -1,20 +1,20 @@
 /**
- * @file src/upnp.cpp
+ * @file src/server/upnp.cpp
  * @brief Definitions for UPnP port mapping.
  */
 #include <miniupnpc/miniupnpc.h>
 #include <miniupnpc/upnpcommands.h>
 
-#include "config.h"
-#include "confighttp.h"
-#include "globals.h"
-#include "logging.h"
-#include "network.h"
-#include "nvhttp.h"
-#include "rtsp.h"
-#include "stream.h"
-#include "upnp.h"
-#include "utility.h"
+#include "src/config.h"
+#include "src/globals.h"
+#include "src/logging.h"
+#include "src/server/confighttp.h"
+#include "src/server/network.h"
+#include "src/server/nvhttp.h"
+#include "src/server/rtsp.h"
+#include "src/server/upnp.h"
+#include "src/stream.h"
+#include "src/utility.h"
 
 using namespace std::literals;
 

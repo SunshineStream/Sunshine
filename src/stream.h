@@ -8,7 +8,7 @@
 #include <boost/asio.hpp>
 
 #include "audio.h"
-#include "crypto.h"
+#include "server/rtsp.h"
 #include "video.h"
 
 namespace stream {

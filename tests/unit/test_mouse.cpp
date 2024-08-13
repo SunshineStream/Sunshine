@@ -2,7 +2,7 @@
  * @file tests/unit/test_mouse.cpp
  * @brief Test src/input.*.
  */
-#include <src/input.h>
+#include <src/input/common.h>
 #include <src/platform/common.h>
 
 #include <tests/conftest.cpp>

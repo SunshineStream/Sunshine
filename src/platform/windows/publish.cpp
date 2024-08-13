@@ -14,9 +14,9 @@
 #include "misc.h"
 #include "src/config.h"
 #include "src/logging.h"
-#include "src/network.h"
-#include "src/nvhttp.h"
 #include "src/platform/common.h"
+#include "src/server/network.h"
+#include "src/server/nvhttp.h"
 #include "src/thread_safe.h"
 
 #define _FN(x, ret, args)    \

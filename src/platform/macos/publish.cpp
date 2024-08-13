@@ -6,9 +6,10 @@
 #include <thread>
 
 #include "src/logging.h"
-#include "src/network.h"
-#include "src/nvhttp.h"
 #include "src/platform/common.h"
+#include "src/server/network.h"
+#include "src/server/nvhttp.h"
+#include "src/utility.h"
 
 using namespace std::literals;
 

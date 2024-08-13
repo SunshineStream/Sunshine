@@ -80,7 +80,7 @@ else()
 endif()
 
 # src/upnp
-set_source_files_properties("${CMAKE_SOURCE_DIR}/src/upnp.cpp"
+set_source_files_properties("${CMAKE_SOURCE_DIR}/src/server/upnp.cpp"
         DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}"
         PROPERTIES COMPILE_FLAGS -Wno-pedantic)
 
@@ -106,7 +106,7 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViG
 string(TOUPPER "x${CMAKE_BUILD_TYPE}" BUILD_TYPE)
 if("${BUILD_TYPE}" STREQUAL "XDEBUG")
     if(WIN32)
-        set_source_files_properties("${CMAKE_SOURCE_DIR}/src/nvhttp.cpp"
+        set_source_files_properties("${CMAKE_SOURCE_DIR}/src/server/nvhttp.cpp"
                 DIRECTORY "${CMAKE_SOURCE_DIR}" "${CMAKE_SOURCE_DIR}/tests"
                 PROPERTIES COMPILE_FLAGS -O2)
     endif()

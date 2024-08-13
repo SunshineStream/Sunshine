@@ -9,13 +9,13 @@
 
 // local includes
 #include "config.h"
-#include "confighttp.h"
 #include "entry_handler.h"
 #include "globals.h"
-#include "httpcommon.h"
 #include "logging.h"
-#include "network.h"
 #include "platform/common.h"
+#include "server/confighttp.h"
+#include "server/httpcommon.h"
+#include "server/network.h"
 #include "version.h"
 
 extern "C" {

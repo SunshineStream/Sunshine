@@ -21,9 +21,9 @@ extern "C" {
 
 #include "config.h"
 #include "globals.h"
-#include "input.h"
+#include "input/processor.h"
 #include "logging.h"
-#include "network.h"
+#include "server/network.h"
 #include "stream.h"
 #include "sync.h"
 #include "system_tray.h"

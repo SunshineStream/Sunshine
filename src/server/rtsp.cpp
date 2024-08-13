@@ -1,5 +1,5 @@
 /**
- * @file src/rtsp.cpp
+ * @file src/server/rtsp.cpp
  * @brief Definitions for RTSP streaming.
  */
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
@@ -16,15 +16,15 @@ extern "C" {
 #include <boost/asio.hpp>
 #include <boost/bind.hpp>
 
-#include "config.h"
-#include "globals.h"
-#include "input.h"
-#include "logging.h"
-#include "network.h"
-#include "rtsp.h"
-#include "stream.h"
-#include "sync.h"
-#include "video.h"
+#include "src/config.h"
+#include "src/globals.h"
+#include "src/input/processor.h"
+#include "src/logging.h"
+#include "src/server/network.h"
+#include "src/server/rtsp.h"
+#include "src/stream.h"
+#include "src/sync.h"
+#include "src/video.h"
 
 #include <unordered_map>
 

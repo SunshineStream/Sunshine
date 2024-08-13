@@ -2,7 +2,7 @@
  * @file tests/unit/test_httpcommon.cpp
  * @brief Test src/httpcommon.*.
  */
-#include <src/httpcommon.h>
+#include <src/server/httpcommon.h>
 
 #include <tests/conftest.cpp>
 

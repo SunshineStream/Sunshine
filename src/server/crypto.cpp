@@ -1,15 +1,22 @@
 /**
- * @file src/crypto.cpp
+ * @file src/server/crypto.cpp
  * @brief Definitions for cryptography functions.
  */
-#include "crypto.h"
 #include <openssl/pem.h>
+
+#include "src/server/crypto.h"
 
 namespace crypto {
   using asn1_string_t = util::safe_ptr<ASN1_STRING, ASN1_STRING_free>;
 
-  cert_chain_t::cert_chain_t():
-      _certs {}, _cert_ctx { X509_STORE_CTX_new() } {}
+  /**
+   * @memberof crypto
+   */
+  cert_chain_t::
+    cert_chain_t():
+      _certs {},
+      _cert_ctx { X509_STORE_CTX_new() } {}
+
   void
   cert_chain_t::add(x509_t &&cert) {
     x509_store_t x509_store { X509_STORE_new() };
@@ -17,6 +24,7 @@ namespace crypto {
     X509_STORE_add_cert(x509_store.get(), cert.get());
     _certs.emplace_back(std::make_pair(std::move(cert), std::move(x509_store)));
   }
+
   void
   cert_chain_t::clear() {
     _certs.clear();
@@ -309,13 +317,16 @@ namespace crypto {
       return update_outlen + final_outlen;
     }
 
-    ecb_t::ecb_t(const aes_t &key, bool padding):
+    ecb_t::
+      ecb_t(const aes_t &key, bool padding):
         cipher_t { EVP_CIPHER_CTX_new(), EVP_CIPHER_CTX_new(), key, padding } {}
 
-    cbc_t::cbc_t(const aes_t &key, bool padding):
+    cbc_t::
+      cbc_t(const aes_t &key, bool padding):
         cipher_t { nullptr, nullptr, key, padding } {}
 
-    gcm_t::gcm_t(const crypto::aes_t &key, bool padding):
+    gcm_t::
+      gcm_t(const crypto::aes_t &key, bool padding):
         cipher_t { nullptr, nullptr, key, padding } {}
 
   }  // namespace cipher

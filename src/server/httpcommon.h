@@ -1,11 +1,10 @@
 /**
- * @file src/httpcommon.h
+ * @file src/server/httpcommon.h
  * @brief Declarations for common HTTP.
  */
 #pragma once
 
-#include "network.h"
-#include "thread_safe.h"
+#include "src/server/network.h"
 
 namespace http {
 

@@ -22,9 +22,9 @@
 #include <openssl/sha.h>
 
 #include "config.h"
-#include "crypto.h"
 #include "logging.h"
 #include "platform/common.h"
+#include "server/crypto.h"
 #include "system_tray.h"
 #include "utility.h"
 

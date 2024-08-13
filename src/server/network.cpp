@@ -1,11 +1,11 @@
 /**
- * @file src/network.cpp
+ * @file src/server/network.cpp
  * @brief Definitions for networking related functions.
  */
-#include "network.h"
-#include "config.h"
-#include "logging.h"
-#include "utility.h"
+#include "src/server/network.h"
+#include "src/config.h"
+#include "src/logging.h"
+#include "src/utility.h"
 #include <algorithm>
 #include <sstream>
 

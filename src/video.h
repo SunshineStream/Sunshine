@@ -4,7 +4,7 @@
  */
 #pragma once
 
-#include "input.h"
+#include "input/processor.h"
 #include "platform/common.h"
 #include "thread_safe.h"
 #include "video_colorspace.h"

@@ -1,5 +1,5 @@
 /**
- * @file src/nvhttp.h
+ * @file src/server/nvhttp.h
  * @brief Declarations for the nvhttp (GameStream) server.
  */
 // macros
@@ -12,7 +12,7 @@
 #include <boost/property_tree/ptree.hpp>
 
 // local includes
-#include "thread_safe.h"
+#include "src/thread_safe.h"
 
 /**
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.

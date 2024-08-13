@@ -20,8 +20,8 @@
 #include "entry_handler.h"
 #include "file_handler.h"
 #include "logging.h"
-#include "nvhttp.h"
-#include "rtsp.h"
+#include "server/nvhttp.h"
+#include "server/rtsp.h"
 #include "utility.h"
 
 #include "platform/common.h"

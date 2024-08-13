@@ -1,12 +1,10 @@
 /**
- * @file src/confighttp.cpp
+ * @file src/server/confighttp.cpp
  * @brief Definitions for the Web UI Config HTTP server.
  *
  * @todo Authentication, better handling of routes common to nvhttp, cleanup
  */
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
-
-#include "process.h"
 
 #include <filesystem>
 #include <set>
@@ -25,19 +23,20 @@
 #include <Simple-Web-Server/server_https.hpp>
 #include <boost/asio/ssl/context_base.hpp>
 
-#include "config.h"
-#include "confighttp.h"
-#include "crypto.h"
-#include "file_handler.h"
-#include "globals.h"
-#include "httpcommon.h"
-#include "logging.h"
-#include "network.h"
-#include "nvhttp.h"
-#include "platform/common.h"
-#include "rtsp.h"
-#include "utility.h"
-#include "uuid.h"
+#include "src/config.h"
+#include "src/file_handler.h"
+#include "src/globals.h"
+#include "src/logging.h"
+#include "src/platform/common.h"
+#include "src/process.h"
+#include "src/server/confighttp.h"
+#include "src/server/crypto.h"
+#include "src/server/httpcommon.h"
+#include "src/server/network.h"
+#include "src/server/nvhttp.h"
+#include "src/server/rtsp.h"
+#include "src/utility.h"
+#include "src/uuid.h"
 #include "version.h"
 
 using namespace std::literals;

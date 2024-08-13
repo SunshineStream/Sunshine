@@ -9,16 +9,16 @@
 #include <iostream>
 
 // local includes
-#include "confighttp.h"
 #include "entry_handler.h"
 #include "globals.h"
-#include "httpcommon.h"
 #include "logging.h"
 #include "main.h"
-#include "nvhttp.h"
 #include "process.h"
+#include "server/confighttp.h"
+#include "server/httpcommon.h"
+#include "server/nvhttp.h"
+#include "server/upnp.h"
 #include "system_tray.h"
-#include "upnp.h"
 #include "version.h"
 #include "video.h"
 

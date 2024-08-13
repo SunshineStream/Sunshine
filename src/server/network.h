@@ -1,5 +1,5 @@
 /**
- * @file src/network.h
+ * @file src/server/network.h
  * @brief Declarations for networking related functions.
  */
 #pragma once
@@ -11,7 +11,7 @@
 
 #include <enet/enet.h>
 
-#include "utility.h"
+#include "src/utility.h"
 
 namespace net {
   void

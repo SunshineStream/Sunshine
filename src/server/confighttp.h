@@ -1,5 +1,5 @@
 /**
- * @file src/confighttp.h
+ * @file src/server/confighttp.h
  * @brief Declarations for the Web UI Config HTTP server.
  */
 #pragma once
@@ -7,7 +7,7 @@
 #include <functional>
 #include <string>
 
-#include "thread_safe.h"
+#include "src/thread_safe.h"
 
 #define WEB_DIR SUNSHINE_ASSETS_DIR "/web/"
 

@@ -26,7 +26,7 @@ extern "C" {
 #include <thread>
 
 #include "src/config.h"
-#include "src/input.h"
+#include "src/input/processor.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/utility.h"

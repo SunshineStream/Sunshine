@@ -1,10 +1,8 @@
 /**
- * @file src/httpcommon.cpp
+ * @file src/server/httpcommon.cpp
  * @brief Definitions for common HTTP.
  */
 #define BOOST_BIND_GLOBAL_PLACEHOLDERS
-
-#include "process.h"
 
 #include <filesystem>
 #include <utility>
@@ -20,17 +18,18 @@
 #include <boost/asio/ssl/context_base.hpp>
 #include <curl/curl.h>
 
-#include "config.h"
-#include "crypto.h"
-#include "file_handler.h"
-#include "httpcommon.h"
-#include "logging.h"
-#include "network.h"
-#include "nvhttp.h"
-#include "platform/common.h"
-#include "rtsp.h"
-#include "utility.h"
-#include "uuid.h"
+#include "src/config.h"
+#include "src/file_handler.h"
+#include "src/logging.h"
+#include "src/platform/common.h"
+#include "src/process.h"
+#include "src/server/crypto.h"
+#include "src/server/httpcommon.h"
+#include "src/server/network.h"
+#include "src/server/nvhttp.h"
+#include "src/server/rtsp.h"
+#include "src/utility.h"
+#include "src/uuid.h"
 
 namespace http {
   using namespace std::literals;

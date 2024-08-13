@@ -2,7 +2,8 @@
  * @file src/platform/macos/input.cpp
  * @brief Definitions for macOS input handling.
  */
-#include "src/input.h"
+#include "src/input/common.h"
+#include "src/input/processor.h"
 
 #import <Carbon/Carbon.h>
 #include <chrono>
