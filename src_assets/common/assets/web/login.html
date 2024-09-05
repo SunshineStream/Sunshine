@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="auto">
+
+<head>
+  <%- header %>
+</head>
+
+<body id="app">
+  <navbar :is-logged-in="false"></navbar>
+  <main role="main" style="max-width: 1200px; margin: 1em auto">
+    <div class="d-flex justify-content-center gap-4">
+      <div class="p-4 card">
+        <header>
+          <h1 class="mb-2">
+            <img src="/images/logo-sunshine-45.png" height="45" alt="" style="vertical-align: bottom;">
+            Hello, Sunshine!
+          </h1>
+        </header>
+        <login-form @loggedin="onLogin"></login-form>
+      </div>
+      <div>
+        <resource-card></resource-card>
+      </div>
+    </div>
+  </main>
+</body>
+
+<script type="module">
+  import { createApp } from 'vue'
+  import ResourceCard from './ResourceCard.vue'
+  import LoginForm from './LoginForm.vue'
+  import Navbar from './Navbar.vue'
+  import { initApp } from './init'
+
+  let app = createApp({
+    components: {
+      ResourceCard,
+      LoginForm,
+      Navbar
+    },
+    methods: {
+      onLogin() {
+          const searchParams = new URLSearchParams(window.location.search);
+          let newPath = '/';
+          if (searchParams.has('redirect')) {
+              const redirect = searchParams.get('redirect');
+              const encodePath = (path) => {
+                  return path.split('').map(char => {
+                      if (char === '/') return char; // Keep '/' unencoded
+                      return encodeURIComponent(char);
+                  }).join('');
+              };
+
+              try {
+                  const redirectUrl = new URL(redirect);
+                  newPath = redirectUrl.pathname;
+              } catch (error) {
+                  if (redirect.startsWith('/')) {
+                      newPath = encodePath(redirect);
+                  }
+              }
+          }
+
+          document.location.href = newPath;
+      }
+    }
+  });
+
+  initApp(app);
+</script>
