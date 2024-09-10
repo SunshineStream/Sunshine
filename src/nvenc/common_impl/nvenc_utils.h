@@ -1,5 +1,5 @@
 /**
- * @file src/nvenc/nvenc_utils.h
+ * @file src/nvenc/common_impl/nvenc_utils.h
  * @brief Declarations for NVENC utilities.
  */
 #pragma once
@@ -8,14 +8,25 @@
   #include <dxgiformat.h>
 #endif
 
-#include "nvenc_colorspace.h"
-
 #include "src/platform/common.h"
 #include "src/video_colorspace.h"
 
-#include <ffnvcodec/nvEncodeAPI.h>
-
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
+  #include <ffnvcodec/nvEncodeAPI.h>
 namespace nvenc {
+#endif
+
+  /**
+   * @brief YUV colorspace and color range.
+   */
+  struct nvenc_colorspace_t {
+    NV_ENC_VUI_COLOR_PRIMARIES primaries;
+    NV_ENC_VUI_TRANSFER_CHARACTERISTIC tranfer_function;
+    NV_ENC_VUI_MATRIX_COEFFS matrix;
+    bool full_range;
+  };
 
 #ifdef _WIN32
   DXGI_FORMAT
@@ -27,5 +38,4 @@ namespace nvenc {
 
   nvenc_colorspace_t
   nvenc_colorspace_from_sunshine_colorspace(const video::sunshine_colorspace_t &sunshine_colorspace);
-
-}  // namespace nvenc
+}

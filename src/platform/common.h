@@ -60,7 +60,7 @@ namespace video {
   struct config_t;
 }  // namespace video
 namespace nvenc {
-  class nvenc_base;
+  class nvenc_encoder;
 }
 
 namespace platf {
@@ -434,7 +434,7 @@ namespace platf {
     virtual bool
     init_encoder(const video::config_t &client_config, const video::sunshine_colorspace_t &colorspace) = 0;
 
-    nvenc::nvenc_base *nvenc = nullptr;
+    nvenc::nvenc_encoder *nvenc = nullptr;
   };
 
   enum class capture_e : int {

@@ -1,16 +1,19 @@
 /**
- * @file src/nvenc/nvenc_d3d11_on_cuda.cpp
+ * @file src/nvenc/win/impl/nvenc_d3d11_on_cuda.cpp
  * @brief Definitions for CUDA NVENC encoder with Direct3D11 input surfaces.
  */
-#ifdef _WIN32
-  #include "nvenc_d3d11_on_cuda.h"
+#include "nvenc_d3d11_on_cuda.h"
 
-  #include "nvenc_utils.h"
+#include "../../common_impl/nvenc_utils.h"
 
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
 namespace nvenc {
+#endif
 
-  nvenc_d3d11_on_cuda::nvenc_d3d11_on_cuda(ID3D11Device *d3d_device):
-      nvenc_d3d11(NV_ENC_DEVICE_TYPE_CUDA),
+  nvenc_d3d11_on_cuda::nvenc_d3d11_on_cuda(ID3D11Device *d3d_device, shared_dll dll):
+      nvenc_d3d11_base(NV_ENC_DEVICE_TYPE_CUDA, dll),
       d3d_device(d3d_device) {
   }
 
@@ -41,11 +44,6 @@ namespace nvenc {
       }
       cuda_context = nullptr;
     }
-
-    if (cuda_functions.dll) {
-      FreeLibrary(cuda_functions.dll);
-      cuda_functions = {};
-    }
   }
 
   ID3D11Texture2D *
@@ -55,13 +53,13 @@ namespace nvenc {
 
   bool
   nvenc_d3d11_on_cuda::init_library() {
-    if (!nvenc_d3d11::init_library()) return false;
+    if (!nvenc_d3d11_base::init_library()) return false;
 
     constexpr auto dll_name = "nvcuda.dll";
 
-    if ((cuda_functions.dll = LoadLibraryEx(dll_name, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32))) {
+    if ((cuda_functions.dll = make_shared_dll(LoadLibraryEx(dll_name, NULL, LOAD_LIBRARY_SEARCH_SYSTEM32)))) {
       auto load_function = [&]<typename T>(T &location, auto symbol) -> bool {
-        location = (T) GetProcAddress(cuda_functions.dll, symbol);
+        location = (T) GetProcAddress(cuda_functions.dll.get(), symbol);
         return location != nullptr;
       };
       if (!load_function(cuda_functions.cuInit, "cuInit") ||
@@ -79,7 +77,6 @@ namespace nvenc {
           !load_function(cuda_functions.cuGraphicsSubResourceGetMappedArray, "cuGraphicsSubResourceGetMappedArray") ||
           !load_function(cuda_functions.cuMemcpy2D, "cuMemcpy2D_v2")) {
         BOOST_LOG(error) << "NvEnc: missing CUDA functions in " << dll_name;
-        FreeLibrary(cuda_functions.dll);
         cuda_functions = {};
       }
     }
@@ -164,7 +161,7 @@ namespace nvenc {
     }
 
     if (!registered_input_buffer) {
-      NV_ENC_REGISTER_RESOURCE register_resource = { min_struct_version(NV_ENC_REGISTER_RESOURCE_VER, 3, 4) };
+      NV_ENC_REGISTER_RESOURCE register_resource = { NV_ENC_REGISTER_RESOURCE_VER };
       register_resource.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR;
       register_resource.width = encoder_params.width;
       register_resource.height = encoder_params.height;
@@ -262,6 +259,4 @@ namespace nvenc {
       return { *this, nullptr };
     }
   }
-
-}  // namespace nvenc
-#endif
+}

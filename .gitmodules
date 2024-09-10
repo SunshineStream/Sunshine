@@ -26,10 +26,18 @@
 	path = third-party/nanors
 	url = https://github.com/sleepybishop/nanors.git
 	branch = master
-[submodule "third-party/nv-codec-headers"]
-	path = third-party/nv-codec-headers
-	url = https://github.com/FFmpeg/nv-codec-headers
+[submodule "third-party/nvenc-headers/1100"]
+	path = third-party/nvenc-headers/1100
+	url = https://github.com/FFmpeg/nv-codec-headers.git
+	branch = sdk/11.0
+[submodule "third-party/nvenc-headers/1200"]
+	path = third-party/nvenc-headers/1200
+	url = https://github.com/FFmpeg/nv-codec-headers.git
 	branch = sdk/12.0
+[submodule "third-party/nvenc-headers/1202"]
+	path = third-party/nvenc-headers/1202
+	url = https://github.com/FFmpeg/nv-codec-headers.git
+	branch = master
 [submodule "third-party/nvapi-open-source-sdk"]
 	path = third-party/nvapi-open-source-sdk
 	url = https://github.com/LizardByte/nvapi-open-source-sdk

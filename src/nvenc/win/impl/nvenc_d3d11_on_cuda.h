@@ -1,27 +1,29 @@
 /**
- * @file src/nvenc/nvenc_d3d11_on_cuda.h
+ * @file src/nvenc/win/impl/nvenc_d3d11_on_cuda.h
  * @brief Declarations for CUDA NVENC encoder with Direct3D11 input surfaces.
  */
 #pragma once
-#ifdef _WIN32
 
-  #include "nvenc_d3d11.h"
+#include "nvenc_d3d11_base.h"
 
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
   #include <ffnvcodec/dynlink_cuda.h>
-
 namespace nvenc {
+#endif
 
   /**
    * @brief Interop Direct3D11 on CUDA NVENC encoder.
    *        Input surface is Direct3D11, encoding is performed by CUDA.
    */
-  class nvenc_d3d11_on_cuda final: public nvenc_d3d11 {
+  class nvenc_d3d11_on_cuda final: public nvenc_d3d11_base {
   public:
     /**
      * @param d3d_device Direct3D11 device that will create input surface texture.
      *                   CUDA encoding device will be derived from it.
      */
-    explicit nvenc_d3d11_on_cuda(ID3D11Device *d3d_device);
+    nvenc_d3d11_on_cuda(ID3D11Device *d3d_device, shared_dll dll);
     ~nvenc_d3d11_on_cuda();
 
     ID3D11Texture2D *
@@ -82,7 +84,7 @@ namespace nvenc {
       tcuGraphicsUnmapResources *cuGraphicsUnmapResources;
       tcuGraphicsSubResourceGetMappedArray *cuGraphicsSubResourceGetMappedArray;
       tcuMemcpy2D_v2 *cuMemcpy2D;
-      HMODULE dll;
+      shared_dll dll;
     } cuda_functions = {};
 
     CUresult last_cuda_error = CUDA_SUCCESS;
@@ -91,6 +93,4 @@ namespace nvenc {
     CUdeviceptr cuda_surface = 0;
     size_t cuda_surface_pitch = 0;
   };
-
-}  // namespace nvenc
-#endif
+}

@@ -1,25 +1,20 @@
 /**
- * @file src/nvenc/nvenc_base.cpp
+ * @file src/nvenc/common_impl/nvenc_base.cpp
  * @brief Definitions for abstract platform-agnostic base of standalone NVENC encoder.
  */
 #include "nvenc_base.h"
 
-#include "src/config.h"
-#include "src/logging.h"
+#include "nvenc_utils.h"
+
 #include "src/utility.h"
 
-#define MAKE_NVENC_VER(major, minor) ((major) | ((minor) << 24))
-
-// Make sure we check backwards compatibility when bumping the Video Codec SDK version
-// Things to look out for:
-// - NV_ENC_*_VER definitions where the value inside NVENCAPI_STRUCT_VERSION() was increased
-// - Incompatible struct changes in nvEncodeAPI.h (fields removed, semantics changed, etc.)
-// - Test both old and new drivers with all supported codecs
-#if NVENCAPI_VERSION != MAKE_NVENC_VER(12U, 0U)
-  #error Check and update NVENC code for backwards compatibility!
-#endif
+#define NVENC_INT_VERSION (NVENCAPI_MAJOR_VERSION * 100 + NVENCAPI_MINOR_VERSION)
 
 namespace {
+
+#ifdef NVENC_NAMESPACE
+  using namespace NVENC_NAMESPACE;
+#endif
 
   GUID
   quality_preset_guid_from_number(unsigned number) {
@@ -83,7 +78,11 @@ namespace {
 
 }  // namespace
 
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
 namespace nvenc {
+#endif
 
   nvenc_base::nvenc_base(NV_ENC_DEVICE_TYPE device_type):
       device_type(device_type) {
@@ -94,25 +93,28 @@ namespace nvenc {
   }
 
   bool
-  nvenc_base::create_encoder(const nvenc_config &config, const video::config_t &client_config, const nvenc_colorspace_t &colorspace, NV_ENC_BUFFER_FORMAT buffer_format) {
-    // Pick the minimum NvEncode API version required to support the specified codec
-    // to maximize driver compatibility. AV1 was introduced in SDK v12.0.
-    minimum_api_version = (client_config.videoFormat <= 1) ? MAKE_NVENC_VER(11U, 0U) : MAKE_NVENC_VER(12U, 0U);
-
+  nvenc_base::create_encoder(
+    const nvenc_config &config,
+    const video::config_t &client_config,
+    const video::sunshine_colorspace_t &sunshine_colorspace,
+    platf::pix_fmt_e sunshine_buffer_format) {
     if (!nvenc && !init_library()) return false;
 
     if (encoder) destroy_encoder();
     auto fail_guard = util::fail_guard([this] { destroy_encoder(); });
+
+    auto colorspace = nvenc_colorspace_from_sunshine_colorspace(sunshine_colorspace);
+    auto buffer_format = nvenc_format_from_sunshine_format(sunshine_buffer_format);
 
     encoder_params.width = client_config.width;
     encoder_params.height = client_config.height;
     encoder_params.buffer_format = buffer_format;
     encoder_params.rfi = true;
 
-    NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS session_params = { min_struct_version(NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER) };
+    NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS session_params = { NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER };
     session_params.device = device;
     session_params.deviceType = device_type;
-    session_params.apiVersion = minimum_api_version;
+    session_params.apiVersion = NVENCAPI_VERSION;
     if (nvenc_failed(nvenc->nvEncOpenEncodeSessionEx(&session_params, &encoder))) {
       BOOST_LOG(error) << "NvEnc: NvEncOpenEncodeSessionEx() failed: " << last_nvenc_error_string;
       return false;
@@ -130,7 +132,7 @@ namespace nvenc {
       return false;
     }
 
-    NV_ENC_INITIALIZE_PARAMS init_params = { min_struct_version(NV_ENC_INITIALIZE_PARAMS_VER) };
+    NV_ENC_INITIALIZE_PARAMS init_params = { NV_ENC_INITIALIZE_PARAMS_VER };
 
     switch (client_config.videoFormat) {
       case 0:
@@ -143,10 +145,12 @@ namespace nvenc {
         init_params.encodeGUID = NV_ENC_CODEC_HEVC_GUID;
         break;
 
+#if NVENC_INT_VERSION >= 1200
       case 2:
         // AV1
         init_params.encodeGUID = NV_ENC_CODEC_AV1_GUID;
         break;
+#endif
 
       default:
         BOOST_LOG(error) << "NvEnc: unknown video format " << client_config.videoFormat;
@@ -164,7 +168,8 @@ namespace nvenc {
     }
 
     auto get_encoder_cap = [&](NV_ENC_CAPS cap) {
-      NV_ENC_CAPS_PARAM param = { min_struct_version(NV_ENC_CAPS_PARAM_VER), cap };
+      NV_ENC_CAPS_PARAM param = { NV_ENC_CAPS_PARAM_VER };
+      param.capsToQuery = cap;
       int value = 0;
       nvenc->nvEncGetEncodeCaps(encoder, init_params.encodeGUID, &param, &value);
       return value;
@@ -182,7 +187,8 @@ namespace nvenc {
       auto supported_width = get_encoder_cap(NV_ENC_CAPS_WIDTH_MAX);
       auto supported_height = get_encoder_cap(NV_ENC_CAPS_HEIGHT_MAX);
       if (encoder_params.width > supported_width || encoder_params.height > supported_height) {
-        BOOST_LOG(error) << "NvEnc: gpu max encode resolution " << supported_width << "x" << supported_height << ", requested " << encoder_params.width << "x" << encoder_params.height;
+        BOOST_LOG(error) << "NvEnc: gpu max encode resolution " << supported_width << "x" << supported_height
+                         << ", requested " << encoder_params.width << "x" << encoder_params.height;
         return false;
       }
     }
@@ -217,7 +223,19 @@ namespace nvenc {
     init_params.frameRateNum = client_config.framerate;
     init_params.frameRateDen = 1;
 
-    NV_ENC_PRESET_CONFIG preset_config = { min_struct_version(NV_ENC_PRESET_CONFIG_VER), { min_struct_version(NV_ENC_CONFIG_VER, 7, 8) } };
+#if NVENC_INT_VERSION >= 1202
+    {
+      using enum nvenc_split_frame_encoding;
+      init_params.splitEncodeMode = config.split_frame_encoding == disabled      ? NV_ENC_SPLIT_DISABLE_MODE :
+                                    config.split_frame_encoding == force_enabled ? NV_ENC_SPLIT_AUTO_FORCED_MODE :
+                                                                                   NV_ENC_SPLIT_AUTO_MODE;
+    }
+#endif
+
+    NV_ENC_PRESET_CONFIG preset_config = {
+      .version = NV_ENC_PRESET_CONFIG_VER,
+      .presetCfg = { .version = NV_ENC_CONFIG_VER },
+    };
     if (nvenc_failed(nvenc->nvEncGetEncodePresetConfigEx(encoder, init_params.encodeGUID, init_params.presetGUID, init_params.tuningInfo, &preset_config))) {
       BOOST_LOG(error) << "NvEnc: NvEncGetEncodePresetConfigEx() failed: " << last_nvenc_error_string;
       return false;
@@ -248,8 +266,12 @@ namespace nvenc {
     auto set_h264_hevc_common_format_config = [&](auto &format_config) {
       format_config.repeatSPSPPS = 1;
       format_config.idrPeriod = NVENC_INFINITE_GOPLENGTH;
-      format_config.sliceMode = 3;
-      format_config.sliceModeData = client_config.slicesPerFrame;
+      if (client_config.slicesPerFrame > 1 ||
+          NVENC_INT_VERSION < 1202 ||
+          config.split_frame_encoding == nvenc_split_frame_encoding::disabled) {
+        format_config.sliceMode = 3;
+        format_config.sliceModeData = client_config.slicesPerFrame;
+      }
       if (buffer_is_yuv444()) {
         format_config.chromaFormatIDC = 3;
       }
@@ -316,7 +338,12 @@ namespace nvenc {
         auto &format_config = enc_config.encodeCodecConfig.hevcConfig;
         set_h264_hevc_common_format_config(format_config);
         if (buffer_is_10bit()) {
+#if NVENC_INT_VERSION >= 1202
+          format_config.inputBitDepth = NV_ENC_BIT_DEPTH_10;
+          format_config.outputBitDepth = NV_ENC_BIT_DEPTH_10;
+#else
           format_config.pixelBitDepthMinus8 = 2;
+#endif
         }
         set_ref_frames(format_config.maxNumRefFramesInDPB, format_config.numRefL0, 5);
         set_minqp_if_enabled(config.min_qp_hevc);
@@ -324,6 +351,7 @@ namespace nvenc {
         break;
       }
 
+#if NVENC_INT_VERSION >= 1200
       case 2: {
         // AV1
         auto &format_config = enc_config.encodeCodecConfig.av1Config;
@@ -334,8 +362,13 @@ namespace nvenc {
         }
         format_config.enableBitstreamPadding = config.insert_filler_data;
         if (buffer_is_10bit()) {
+  #if NVENC_INT_VERSION >= 1202
+          format_config.inputBitDepth = NV_ENC_BIT_DEPTH_10;
+          format_config.outputBitDepth = NV_ENC_BIT_DEPTH_10;
+  #else
           format_config.inputPixelBitDepthMinus8 = 2;
           format_config.pixelBitDepthMinus8 = 2;
+  #endif
         }
         format_config.colorPrimaries = colorspace.primaries;
         format_config.transferCharacteristics = colorspace.tranfer_function;
@@ -353,6 +386,7 @@ namespace nvenc {
         }
         break;
       }
+#endif
     }
 
     init_params.encodeConfig = &enc_config;
@@ -363,7 +397,7 @@ namespace nvenc {
     }
 
     if (async_event_handle) {
-      NV_ENC_EVENT_PARAMS event_params = { min_struct_version(NV_ENC_EVENT_PARAMS_VER) };
+      NV_ENC_EVENT_PARAMS event_params = { NV_ENC_EVENT_PARAMS_VER };
       event_params.completionEvent = async_event_handle;
       if (nvenc_failed(nvenc->nvEncRegisterAsyncEvent(encoder, &event_params))) {
         BOOST_LOG(error) << "NvEnc: NvEncRegisterAsyncEvent() failed: " << last_nvenc_error_string;
@@ -371,7 +405,7 @@ namespace nvenc {
       }
     }
 
-    NV_ENC_CREATE_BITSTREAM_BUFFER create_bitstream_buffer = { min_struct_version(NV_ENC_CREATE_BITSTREAM_BUFFER_VER) };
+    NV_ENC_CREATE_BITSTREAM_BUFFER create_bitstream_buffer = { NV_ENC_CREATE_BITSTREAM_BUFFER_VER };
     if (nvenc_failed(nvenc->nvEncCreateBitstreamBuffer(encoder, &create_bitstream_buffer))) {
       BOOST_LOG(error) << "NvEnc: NvEncCreateBitstreamBuffer() failed: " << last_nvenc_error_string;
       return false;
@@ -397,14 +431,17 @@ namespace nvenc {
       if (buffer_is_yuv444()) extra += " yuv444";
       if (buffer_is_10bit()) extra += " 10-bit";
       if (enc_config.rcParams.multiPass != NV_ENC_MULTI_PASS_DISABLED) extra += " two-pass";
-      if (config.vbv_percentage_increase > 0 && get_encoder_cap(NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE)) extra += " vbv+" + std::to_string(config.vbv_percentage_increase);
+      if (config.vbv_percentage_increase > 0 && get_encoder_cap(NV_ENC_CAPS_SUPPORT_CUSTOM_VBV_BUF_SIZE)) {
+        extra += " vbv+" + std::to_string(config.vbv_percentage_increase);
+      }
       if (encoder_params.rfi) extra += " rfi";
       if (init_params.enableWeightedPrediction) extra += " weighted-prediction";
       if (enc_config.rcParams.enableAQ) extra += " spatial-aq";
       if (enc_config.rcParams.enableMinQP) extra += " qpmin=" + std::to_string(enc_config.rcParams.minQP.qpInterP);
       if (config.insert_filler_data) extra += " filler-data";
 
-      BOOST_LOG(info) << "NvEnc: created encoder " << video_format_string << quality_preset_string_from_guid(init_params.presetGUID) << extra;
+      BOOST_LOG(info) << "NvEnc: created encoder v" << NVENC_INT_VERSION << " "
+                      << video_format_string << quality_preset_string_from_guid(init_params.presetGUID) << extra;
     }
 
     encoder_state = {};
@@ -421,7 +458,7 @@ namespace nvenc {
       output_bitstream = nullptr;
     }
     if (encoder && async_event_handle) {
-      NV_ENC_EVENT_PARAMS event_params = { min_struct_version(NV_ENC_EVENT_PARAMS_VER) };
+      NV_ENC_EVENT_PARAMS event_params = { NV_ENC_EVENT_PARAMS_VER };
       event_params.completionEvent = async_event_handle;
       if (nvenc_failed(nvenc->nvEncUnregisterAsyncEvent(encoder, &event_params))) {
         BOOST_LOG(error) << "NvEnc: NvEncUnregisterAsyncEvent() failed: " << last_nvenc_error_string;
@@ -458,7 +495,7 @@ namespace nvenc {
       return {};
     }
 
-    NV_ENC_MAP_INPUT_RESOURCE mapped_input_buffer = { min_struct_version(NV_ENC_MAP_INPUT_RESOURCE_VER) };
+    NV_ENC_MAP_INPUT_RESOURCE mapped_input_buffer = { NV_ENC_MAP_INPUT_RESOURCE_VER };
     mapped_input_buffer.registeredResource = registered_input_buffer;
 
     if (nvenc_failed(nvenc->nvEncMapInputResource(encoder, &mapped_input_buffer))) {
@@ -471,7 +508,7 @@ namespace nvenc {
       }
     });
 
-    NV_ENC_PIC_PARAMS pic_params = { min_struct_version(NV_ENC_PIC_PARAMS_VER, 4, 6) };
+    NV_ENC_PIC_PARAMS pic_params = { NV_ENC_PIC_PARAMS_VER };
     pic_params.inputWidth = encoder_params.width;
     pic_params.inputHeight = encoder_params.height;
     pic_params.encodePicFlags = force_idr ? NV_ENC_PIC_FLAG_FORCEIDR : 0;
@@ -487,7 +524,7 @@ namespace nvenc {
       return {};
     }
 
-    NV_ENC_LOCK_BITSTREAM lock_bitstream = { min_struct_version(NV_ENC_LOCK_BITSTREAM_VER, 1, 2) };
+    NV_ENC_LOCK_BITSTREAM lock_bitstream = { NV_ENC_LOCK_BITSTREAM_VER };
     lock_bitstream.outputBitstream = output_bitstream;
     lock_bitstream.doNotWait = 0;
 
@@ -546,7 +583,8 @@ namespace nvenc {
       return false;
     }
 
-    BOOST_LOG(debug) << "NvEnc: rfi request " << first_frame << "-" << last_frame << " expanding to last encoded frame " << encoder_state.last_encoded_frame_index;
+    BOOST_LOG(debug) << "NvEnc: rfi request " << first_frame << "-" << last_frame
+                     << " expanding to last encoded frame " << encoder_state.last_encoded_frame_index;
     last_frame = encoder_state.last_encoded_frame_index;
 
     encoder_state.last_rfi_range = { first_frame, last_frame };
@@ -620,21 +658,4 @@ namespace nvenc {
 
     return false;
   }
-
-  uint32_t
-  nvenc_base::min_struct_version(uint32_t version, uint32_t v11_struct_version, uint32_t v12_struct_version) {
-    assert(minimum_api_version);
-
-    // Mask off and replace the original NVENCAPI_VERSION
-    version &= ~NVENCAPI_VERSION;
-    version |= minimum_api_version;
-
-    // If there's a struct version override, apply that too
-    if (v11_struct_version || v12_struct_version) {
-      version &= ~(0xFFu << 16);
-      version |= (((minimum_api_version & 0xFF) >= 12) ? v12_struct_version : v11_struct_version) << 16;
-    }
-
-    return version;
-  }
-}  // namespace nvenc
+}

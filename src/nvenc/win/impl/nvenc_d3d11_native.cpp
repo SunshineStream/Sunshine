@@ -1,16 +1,19 @@
 /**
- * @file src/nvenc/nvenc_d3d11_native.cpp
+ * @file src/nvenc/win/impl/nvenc_d3d11_native.cpp
  * @brief Definitions for native Direct3D11 NVENC encoder.
  */
-#ifdef _WIN32
-  #include "nvenc_d3d11_native.h"
+#include "nvenc_d3d11_native.h"
 
-  #include "nvenc_utils.h"
+#include "../../common_impl/nvenc_utils.h"
 
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
 namespace nvenc {
+#endif
 
-  nvenc_d3d11_native::nvenc_d3d11_native(ID3D11Device *d3d_device):
-      nvenc_d3d11(NV_ENC_DEVICE_TYPE_DIRECTX),
+  nvenc_d3d11_native::nvenc_d3d11_native(ID3D11Device *d3d_device, shared_dll dll):
+      nvenc_d3d11_base(NV_ENC_DEVICE_TYPE_DIRECTX, dll),
       d3d_device(d3d_device) {
     device = d3d_device;
   }
@@ -48,7 +51,7 @@ namespace nvenc {
     }
 
     if (!registered_input_buffer) {
-      NV_ENC_REGISTER_RESOURCE register_resource = { min_struct_version(NV_ENC_REGISTER_RESOURCE_VER, 3, 4) };
+      NV_ENC_REGISTER_RESOURCE register_resource = { NV_ENC_REGISTER_RESOURCE_VER };
       register_resource.resourceType = NV_ENC_INPUT_RESOURCE_TYPE_DIRECTX;
       register_resource.width = encoder_params.width;
       register_resource.height = encoder_params.height;
@@ -66,6 +69,4 @@ namespace nvenc {
 
     return true;
   }
-
-}  // namespace nvenc
-#endif
+}

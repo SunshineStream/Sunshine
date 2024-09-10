@@ -21,7 +21,7 @@ extern "C" {
 #include "globals.h"
 #include "input.h"
 #include "logging.h"
-#include "nvenc/nvenc_base.h"
+#include "nvenc/nvenc_encoder.h"
 #include "platform/common.h"
 #include "sync.h"
 #include "video.h"

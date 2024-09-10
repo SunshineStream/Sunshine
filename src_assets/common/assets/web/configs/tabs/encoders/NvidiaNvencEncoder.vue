@@ -85,6 +85,17 @@ const config = ref(props.config)
               </div>
             </div>
 
+            <!-- Split frame encoding -->
+            <div class="mb-3" v-if="platform === 'windows'">
+              <label for="nvenc_split_encode" class="form-label">{{ $t('config.nvenc_split_encode') }}</label>
+              <select id="nvenc_split_encode" class="form-select" v-model="config.nvenc_split_encode">
+                <option value="disabled">{{ $t('_common.disabled') }}</option>
+                <option value="driver_decides">{{ $t('config.nvenc_split_encode_driver_decides_def') }}</option>
+                <option value="enabled">{{ $t('_common.enabled') }}</option>
+              </select>
+              <div class="form-text">{{ $t('config.nvenc_split_encode_desc') }}</div>
+            </div>
+
             <!-- Prefer lower encoding latency over power savings -->
             <div class="mb-3" v-if="platform === 'windows'">
               <label for="nvenc_latency_over_power" class="form-label">{{ $t('config.nvenc_latency_over_power') }}</label>

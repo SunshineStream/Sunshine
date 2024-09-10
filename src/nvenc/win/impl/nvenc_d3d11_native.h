@@ -1,26 +1,26 @@
 /**
- * @file src/nvenc/nvenc_d3d11_native.h
+ * @file src/nvenc/win/impl/nvenc_d3d11_native.h
  * @brief Declarations for native Direct3D11 NVENC encoder.
  */
 #pragma once
-#ifdef _WIN32
 
-  #include <comdef.h>
-  #include <d3d11.h>
+#include "nvenc_d3d11_base.h"
 
-  #include "nvenc_d3d11.h"
-
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
 namespace nvenc {
+#endif
 
   /**
    * @brief Native Direct3D11 NVENC encoder.
    */
-  class nvenc_d3d11_native final: public nvenc_d3d11 {
+  class nvenc_d3d11_native final: public nvenc_d3d11_base {
   public:
     /**
      * @param d3d_device Direct3D11 device used for encoding.
      */
-    explicit nvenc_d3d11_native(ID3D11Device *d3d_device);
+    nvenc_d3d11_native(ID3D11Device *d3d_device, shared_dll dll);
     ~nvenc_d3d11_native();
 
     ID3D11Texture2D *
@@ -33,6 +33,4 @@ namespace nvenc {
     const ID3D11DevicePtr d3d_device;
     ID3D11Texture2DPtr d3d_input_texture;
   };
-
-}  // namespace nvenc
-#endif
+}

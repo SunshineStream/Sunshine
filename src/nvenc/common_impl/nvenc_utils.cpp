@@ -1,12 +1,16 @@
 /**
- * @file src/nvenc/nvenc_utils.cpp
+ * @file src/nvenc/common_impl/nvenc_utils.cpp
  * @brief Definitions for NVENC utilities.
  */
-#include <cassert>
-
 #include "nvenc_utils.h"
 
+#include <cassert>
+
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
 namespace nvenc {
+#endif
 
 #ifdef _WIN32
   DXGI_FORMAT
@@ -90,5 +94,4 @@ namespace nvenc {
 
     return colorspace;
   }
-
-}  // namespace nvenc
+}

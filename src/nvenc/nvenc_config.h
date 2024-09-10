@@ -12,6 +12,12 @@ namespace nvenc {
     full_resolution,  ///< Better overall statistics, slower and uses more extra vram
   };
 
+  enum class nvenc_split_frame_encoding {
+    disabled,  ///< Disable
+    driver_decides,  ///< Let driver decide
+    force_enabled,  ///< Force-enable
+  };
+
   /**
    * @brief NVENC encoder configuration.
    */
@@ -48,6 +54,9 @@ namespace nvenc {
 
     // Add filler data to encoded frames to stay at target bitrate, mainly for testing
     bool insert_filler_data = false;
+
+    // Enable split-frame encoding if the gpu has multiple NVENC hardware clusters
+    nvenc_split_frame_encoding split_frame_encoding = nvenc_split_frame_encoding::driver_decides;
   };
 
 }  // namespace nvenc

@@ -56,6 +56,16 @@ namespace config {
       return nvenc::nvenc_two_pass::quarter_resolution;
     }
 
+    nvenc::nvenc_split_frame_encoding
+    split_encode_from_view(const std::string_view &preset) {
+      using enum nvenc::nvenc_split_frame_encoding;
+      if (preset == "disabled") return disabled;
+      if (preset == "driver_decides") return driver_decides;
+      if (preset == "enabled") return force_enabled;
+      BOOST_LOG(warning) << "config: unknown nvenc_split_encode value: " << preset;
+      return driver_decides;
+    }
+
   }  // namespace nv
 
   namespace amd {
@@ -960,6 +970,7 @@ namespace config {
     bool_f(vars, "nvenc_spatial_aq", video.nv.adaptive_quantization);
     generic_f(vars, "nvenc_twopass", video.nv.two_pass, nv::twopass_from_view);
     bool_f(vars, "nvenc_h264_cavlc", video.nv.h264_cavlc);
+    generic_f(vars, "nvenc_split_encode", video.nv.split_frame_encoding, nv::split_encode_from_view);
     bool_f(vars, "nvenc_realtime_hags", video.nv_realtime_hags);
     bool_f(vars, "nvenc_opengl_vulkan_on_dxgi", video.nv_opengl_vulkan_on_dxgi);
     bool_f(vars, "nvenc_latency_over_power", video.nv_sunshine_high_power_mode);

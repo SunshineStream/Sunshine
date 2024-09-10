@@ -16,10 +16,7 @@ extern "C" {
 #include "misc.h"
 #include "src/config.h"
 #include "src/logging.h"
-#include "src/nvenc/nvenc_config.h"
-#include "src/nvenc/nvenc_d3d11_native.h"
-#include "src/nvenc/nvenc_d3d11_on_cuda.h"
-#include "src/nvenc/nvenc_utils.h"
+#include "src/nvenc/win/nvenc_dynamic_factory.h"
 #include "src/video.h"
 
 #include <AMF/core/Factory.h>
@@ -1073,20 +1070,21 @@ namespace platf::dxgi {
   public:
     bool
     init_device(std::shared_ptr<platf::display_t> display, adapter_t::pointer adapter_p, pix_fmt_e pix_fmt) {
-      buffer_format = nvenc::nvenc_format_from_sunshine_format(pix_fmt);
-      if (buffer_format == NV_ENC_BUFFER_FORMAT_UNDEFINED) {
-        BOOST_LOG(error) << "Unexpected pixel format for NvENC ["sv << from_pix_fmt(pix_fmt) << ']';
-        return false;
-      }
-
       if (base.init(display, adapter_p, pix_fmt)) return false;
 
+      auto factory = nvenc::nvenc_dynamic_factory::get();
+      if (!factory) return false;
+
       if (pix_fmt == pix_fmt_e::yuv444p16) {
-        nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_on_cuda>(base.device.get());
+        nvenc_d3d = factory->create_nvenc_d3d11_on_cuda(base.device.get());
       }
       else {
-        nvenc_d3d = std::make_unique<nvenc::nvenc_d3d11_native>(base.device.get());
+        nvenc_d3d = factory->create_nvenc_d3d11_native(base.device.get());
       }
+
+      if (!nvenc_d3d) return false;
+
+      buffer_format = pix_fmt;
       nvenc = nvenc_d3d.get();
 
       return true;
@@ -1096,8 +1094,7 @@ namespace platf::dxgi {
     init_encoder(const ::video::config_t &client_config, const ::video::sunshine_colorspace_t &colorspace) override {
       if (!nvenc_d3d) return false;
 
-      auto nvenc_colorspace = nvenc::nvenc_colorspace_from_sunshine_colorspace(colorspace);
-      if (!nvenc_d3d->create_encoder(config::video.nv, client_config, nvenc_colorspace, buffer_format)) return false;
+      if (!nvenc_d3d->create_encoder(config::video.nv, client_config, colorspace, buffer_format)) return false;
 
       base.apply_colorspace(colorspace);
       return base.init_output(nvenc_d3d->get_input_texture(), client_config.width, client_config.height) == 0;
@@ -1111,7 +1108,7 @@ namespace platf::dxgi {
   private:
     d3d_base_encode_device base;
     std::unique_ptr<nvenc::nvenc_d3d11> nvenc_d3d;
-    NV_ENC_BUFFER_FORMAT buffer_format = NV_ENC_BUFFER_FORMAT_UNDEFINED;
+    platf::pix_fmt_e buffer_format = platf::pix_fmt_e::unknown;
   };
 
   bool

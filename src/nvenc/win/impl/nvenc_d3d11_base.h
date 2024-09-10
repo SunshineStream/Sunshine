@@ -1,16 +1,21 @@
 /**
- * @file src/nvenc/nvenc_d3d11.h
+ * @file src/nvenc/win/impl/nvenc_d3d11_base.h
  * @brief Declarations for abstract Direct3D11 NVENC encoder.
  */
 #pragma once
-#ifdef _WIN32
 
-  #include <comdef.h>
-  #include <d3d11.h>
+#include "../../common_impl/nvenc_base.h"
+#include "../nvenc_d3d11.h"
+#include "nvenc_shared_dll.h"
 
-  #include "nvenc_base.h"
+#include <comdef.h>
+#include <d3d11.h>
 
+#ifdef NVENC_NAMESPACE
+namespace NVENC_NAMESPACE {
+#else
 namespace nvenc {
+#endif
 
   _COM_SMARTPTR_TYPEDEF(ID3D11Device, IID_ID3D11Device);
   _COM_SMARTPTR_TYPEDEF(ID3D11Texture2D, IID_ID3D11Texture2D);
@@ -21,27 +26,17 @@ namespace nvenc {
    * @brief Abstract Direct3D11 NVENC encoder.
    *        Encapsulates common code used by native and interop implementations.
    */
-  class nvenc_d3d11: public nvenc_base {
+  class nvenc_d3d11_base: public nvenc_base, virtual public nvenc_d3d11 {
   public:
-    explicit nvenc_d3d11(NV_ENC_DEVICE_TYPE device_type):
-        nvenc_base(device_type) {}
-
-    ~nvenc_d3d11();
-
-    /**
-     * @brief Get input surface texture.
-     * @return Input surface texture.
-     */
-    virtual ID3D11Texture2D *
-    get_input_texture() = 0;
+    nvenc_d3d11_base(NV_ENC_DEVICE_TYPE device_type, shared_dll dll):
+        nvenc_base(device_type),
+        dll(dll) {}
 
   protected:
     bool
     init_library() override;
 
   private:
-    HMODULE dll = NULL;
+    shared_dll dll;
   };
-
-}  // namespace nvenc
-#endif
+}
