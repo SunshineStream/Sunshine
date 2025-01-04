@@ -33,6 +33,8 @@ namespace config {
     bool nv_realtime_hags;
     bool nv_opengl_vulkan_on_dxgi;
     bool nv_sunshine_high_power_mode;
+    bool nv_force_disable_vsync;
+    bool nv_enable_frame_limiter;
 
     struct {
       int preset;

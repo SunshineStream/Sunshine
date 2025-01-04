@@ -52,6 +52,8 @@ namespace nvprefs {
   struct nvprefs_options {
     bool opengl_vulkan_on_dxgi = true;
     bool sunshine_high_power_mode = true;
+    bool force_disable_vsync = true;
+    bool enable_frame_limiter = true;
   };
 
   nvprefs_options

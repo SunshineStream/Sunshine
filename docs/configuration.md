@@ -1900,6 +1900,58 @@ editing the `conf` file in a text editor. Use the examples as reference.
     </tr>
 </table>
 
+### nvenc_force_disable_vsync
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Force disable V-Sync using NVAPI.
+            In-game V-Sync should also be disabled to prevent input lag.
+            @note{This option only applies when using NVENC [encoder](#encoder).}
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_force_disable_vsync = enabled
+            @endcode</td>
+    </tr>
+</table>
+
+### nvenc_enable_frame_limiter
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Limit frames based on the host refresh rate using NVAPI.
+            If V-Sync is disabled, this option should be turned on to prevent rendering too much frames.
+            @note{This option only applies when using NVENC [encoder](#encoder).}
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            nvenc_enable_frame_limiter = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ## Intel QuickSync Encoder
 
 ### qsv_preset

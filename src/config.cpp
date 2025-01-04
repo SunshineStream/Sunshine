@@ -346,6 +346,8 @@ namespace config {
     true,  // nv_realtime_hags
     true,  // nv_opengl_vulkan_on_dxgi
     true,  // nv_sunshine_high_power_mode
+    true,  // nv_force_disable_vsync
+    true,  // nv_enable_frame_limiter
     {},  // nv_legacy
 
     {
@@ -969,6 +971,8 @@ namespace config {
     bool_f(vars, "nvenc_realtime_hags", video.nv_realtime_hags);
     bool_f(vars, "nvenc_opengl_vulkan_on_dxgi", video.nv_opengl_vulkan_on_dxgi);
     bool_f(vars, "nvenc_latency_over_power", video.nv_sunshine_high_power_mode);
+    bool_f(vars, "nvenc_force_disable_vsync", video.nv_force_disable_vsync);
+    bool_f(vars, "nvenc_enable_frame_limiter", video.nv_enable_frame_limiter);
 
 #ifndef __APPLE__
     video.nv_legacy.preset = video.nv.quality_preset + 11;

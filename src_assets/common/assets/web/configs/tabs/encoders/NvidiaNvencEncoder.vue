@@ -114,6 +114,26 @@ const config = ref(props.config)
               </select>
               <div class="form-text">{{ $t('config.nvenc_h264_cavlc_desc') }}</div>
             </div>
+
+            <!-- Force disable V-Sync (NVAPI) -->
+            <div class="mb-3" v-if="platform === 'windows'">
+              <label for="nvenc_force_disable_vsync" class="form-label">{{ $t('config.nvenc_force_disable_vsync') }}</label>
+              <select id="nvenc_force_disable_vsync" class="form-select" v-model="config.nvenc_force_disable_vsync">
+                <option value="disabled">{{ $t('_common.disabled') }}</option>
+                <option value="enabled">{{ $t('_common.enabled_def') }}</option>
+              </select>
+              <div class="form-text">{{ $t('config.nvenc_force_disable_vsync') }}</div>
+            </div>
+
+            <!-- Enable frame limiter (NVAPI) -->
+            <div class="mb-3" v-if="platform === 'windows'">
+              <label for="nvenc_enable_frame_limiter" class="form-label">{{ $t('config.nvenc_enable_frame_limiter') }}</label>
+              <select id="nvenc_enable_frame_limiter" class="form-select" v-model="config.nvenc_enable_frame_limiter">
+                <option value="disabled">{{ $t('_common.disabled') }}</option>
+                <option value="enabled">{{ $t('_common.enabled_def') }}</option>
+              </select>
+              <div class="form-text">{{ $t('config.nvenc_enable_frame_limiter') }}</div>
+            </div>
           </div>
         </div>
       </div>

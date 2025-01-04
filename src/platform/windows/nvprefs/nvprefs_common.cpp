@@ -36,6 +36,8 @@ namespace nvprefs {
     nvprefs_options options;
     options.opengl_vulkan_on_dxgi = config::video.nv_opengl_vulkan_on_dxgi;
     options.sunshine_high_power_mode = config::video.nv_sunshine_high_power_mode;
+    options.force_disable_vsync = config::video.nv_force_disable_vsync;
+    options.enable_frame_limiter = config::video.nv_enable_frame_limiter;
     return options;
   }
 

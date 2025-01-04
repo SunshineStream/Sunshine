@@ -162,17 +162,61 @@ namespace nvprefs {
     undo_data.reset();
     NvAPI_Status status;
 
-    if (!get_nvprefs_options().opengl_vulkan_on_dxgi) {
-      // User requested to leave OpenGL/Vulkan DXGI swapchain setting alone
-      return true;
-    }
-
     NvDRSProfileHandle profile_handle = 0;
     status = NvAPI_DRS_GetBaseProfile(session_handle, &profile_handle);
     if (status != NVAPI_OK) {
       nvapi_error_message(status);
       error_message("NvAPI_DRS_GetBaseProfile() failed");
       return false;
+    }
+
+    if (get_nvprefs_options().force_disable_vsync)
+    {
+      NVDRS_SETTING setting = {};
+      setting.version = NVDRS_SETTING_VER;
+      status = NvAPI_DRS_GetSetting(session_handle, profile_handle, VSYNCMODE_ID, &setting);
+      if (status != NVAPI_OK) {
+        nvapi_error_message(status);
+        error_message("NvAPI_DRS_GetSetting() VSYNCMODE failed");
+        return false;
+      }
+
+      // TODO: save current setting and restore it later
+      setting.u32CurrentValue = VSYNCMODE_FORCEOFF;
+
+      status = NvAPI_DRS_SetSetting(session_handle, profile_handle, &setting);
+      if (status != NVAPI_OK) {
+        nvapi_error_message(status);
+        error_message("NvAPI_DRS_SetSetting() VSYNCMODE failed");
+        return false;
+      }
+    }
+
+    if (get_nvprefs_options().enable_frame_limiter)
+    {
+      NVDRS_SETTING setting = {};
+      setting.version = NVDRS_SETTING_VER;
+      status = NvAPI_DRS_GetSetting(session_handle, profile_handle, FRL_FPS_ID, &setting);
+      if (status != NVAPI_OK) {
+        nvapi_error_message(status);
+        error_message("NvAPI_DRS_GetSetting() FRL_FPS_ID failed");
+        return false;
+      }
+
+      // TODO: save current setting and restore it later
+      setting.u32CurrentValue = 60; // TODO: change this according to host refresh rate
+
+      status = NvAPI_DRS_SetSetting(session_handle, profile_handle, &setting);
+      if (status != NVAPI_OK) {
+        nvapi_error_message(status);
+        error_message("NvAPI_DRS_SetSetting() FRL_FPS_ID failed");
+        return false;
+      }
+    }
+
+    if (!get_nvprefs_options().opengl_vulkan_on_dxgi) {
+      // User requested to leave OpenGL/Vulkan DXGI swapchain setting alone
+      return true;
     }
 
     NVDRS_SETTING setting = {};
