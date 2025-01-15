@@ -100,6 +100,12 @@ namespace platf {
       uint32_t offsets[4];
     };
 
+    struct monitor_info_t {
+      int display_index;
+      unsigned int width;
+      unsigned int height;
+    };
+
     using plane_res_t = util::safe_ptr<drmModePlaneRes, drmModeFreePlaneResources>;
     using encoder_t = util::safe_ptr<drmModeEncoder, drmModeFreeEncoder>;
     using res_t = util::safe_ptr<drmModeRes, drmModeFreeResources>;
@@ -115,6 +121,7 @@ namespace platf {
 
     static int env_width;
     static int env_height;
+    static std::vector<monitor_info_t> env_monitors;
 
     std::string_view
     plane_type(std::uint64_t val) {
@@ -701,8 +708,8 @@ namespace platf {
             img_offset_x = crtc->x;
             img_offset_y = crtc->y;
 
-            this->env_width = ::platf::kms::env_width;
-            this->env_height = ::platf::kms::env_height;
+            this->env_width = ::platf::kms::env_monitors[monitor].width;
+            this->env_height = ::platf::kms::env_monitors[monitor].height;
 
             auto monitor = pos->crtc_to_monitor.find(plane->crtc_id);
             if (monitor != std::end(pos->crtc_to_monitor)) {
@@ -1712,6 +1719,10 @@ namespace platf {
 
         kms::print(plane.get(), fb.get(), crtc.get());
 
+        kms::env_monitors.push_back(kms::monitor_info_t {
+          count,
+          crtc->width,
+          crtc->height });
         display_names.emplace_back(std::to_string(count++));
       }
 
