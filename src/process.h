@@ -89,10 +89,18 @@ namespace proc {
     get_apps() const;
     std::vector<ctx_t> &
     get_apps();
+    void
+    set_apps(std::vector<ctx_t> apps);
     std::string
     get_app_image(int app_id);
     std::string
     get_last_run_app_name();
+    const boost::process::v1::environment &
+    get_env() const;
+    boost::process::v1::environment &
+    get_env();
+    void
+    set_env(boost::process::v1::environment env);
     void
     terminate();
 
