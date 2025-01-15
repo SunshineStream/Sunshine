@@ -50,13 +50,32 @@ namespace wl {
         return -1;
       }
 
+      // load output names, to allow matching by name
+      for (auto &monitor : interface.monitors) {
+        monitor->listen(interface.output_manager);
+      }
+
+      display.roundtrip();
+
       auto monitor = interface.monitors[0].get();
 
       if (!display_name.empty()) {
-        auto streamedMonitor = util::from_view(display_name);
-
-        if (streamedMonitor >= 0 && streamedMonitor < interface.monitors.size()) {
-          monitor = interface.monitors[streamedMonitor].get();
+        // if display_name is numeric, match a display number
+        if (display_name.find_first_not_of("0123456789") == std::string::npos) {
+          auto streamedMonitor = util::from_view(display_name);
+          if (streamedMonitor >= 0 && streamedMonitor < interface.monitors.size()) {
+            monitor = interface.monitors[streamedMonitor].get();
+          }
+        }
+        // otherwise, match a display name
+        else {
+          for (auto &candidate : interface.monitors) {
+            auto candidateMonitor = candidate.get();
+            if (candidateMonitor->name == display_name) {
+              monitor = candidateMonitor;
+              break;
+            }
+          }
         }
       }
 
