@@ -23,6 +23,7 @@ extern "C" {
 #include "src/video.h"
 
 #include <AMF/core/Factory.h>
+#include <AMF/components/DisplayCapture.h>
 
 #include <boost/algorithm/string/predicate.hpp>
 
@@ -1627,6 +1628,94 @@ namespace platf::dxgi {
     device_ctx->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     return 0;
+  }
+
+
+  int
+  display_amd_vram_t::init(const ::video::config_t &config, const std::string &display_name) {
+    if (display_base_t::init(config, display_name) || dup.init(this, config, output_index))
+    {
+      BOOST_LOG(error) << "AMD VRAM() failed";
+      return -1;
+    }
+
+    return 0;
+  }
+
+
+  /**
+   * @brief Get the next frame from the Windows.Graphics.Capture API and copy it into a new snapshot texture.
+   * @param pull_free_image_cb call this to get a new free image from the video subsystem.
+   * @param img_out the captured frame is returned here
+   * @param timeout how long to wait for the next frame
+   * @param cursor_visible whether to capture the cursor
+   */
+  capture_e
+  display_amd_vram_t::snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool cursor_visible) {
+    amf::AMFSurfacePtr output;
+    D3D11_TEXTURE2D_DESC desc;
+
+    // Check for display configuration change
+    auto capture_status = dup.next_frame(timeout, (amf::AMFData **) &output);
+    if (capture_status != capture_e::ok) {
+      return capture_status;
+    }
+    dup.capturedSurface = output;
+
+    texture2d_t src = (ID3D11Texture2D*) dup.capturedSurface->GetPlaneAt(0)->GetNative();
+    src->GetDesc(&desc);
+
+    // It's possible for our display enumeration to race with mode changes and result in
+    // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
+    if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
+      BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+      return capture_e::reinit;
+    }
+
+    // If we don't know the capture format yet, grab it from this texture
+    if (capture_format == DXGI_FORMAT_UNKNOWN) {
+      capture_format = desc.Format;
+      BOOST_LOG(info) << "AMD Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
+    }
+
+    // It's also possible for the capture format to change on the fly. If that happens,
+    // reinitialize capture to try format detection again and create new images.
+    if (capture_format != desc.Format) {
+      BOOST_LOG(info) << "AMD Capture format changed ["sv << dxgi_format_to_string(capture_format) << " -> "sv << dxgi_format_to_string(desc.Format) << ']';
+      return capture_e::reinit;
+    }
+
+    std::shared_ptr<platf::img_t> img;
+    if (!pull_free_image_cb(img))
+      return capture_e::interrupted;
+
+    auto d3d_img = std::static_pointer_cast<img_d3d_t>(img);
+    d3d_img->blank = false;  // image is always ready for capture
+    if (complete_img(d3d_img.get(), false) == 0) {
+      texture_lock_helper lock_helper(d3d_img->capture_mutex.get());
+      if (lock_helper.lock()) {
+        device_ctx->CopyResource(d3d_img->capture_texture.get(), src.get());
+      }
+      else {
+        return capture_e::error;
+      }
+    }
+    else {
+      return capture_e::error;
+    }
+    img_out = img;
+    if (img_out) {
+      img_out->frame_timestamp = std::chrono::steady_clock::now();
+    }
+
+    src.release();
+    return capture_e::ok;
+  }
+
+  capture_e
+  display_amd_vram_t::release_snapshot() {
+    dup.release_frame();
+    return capture_e::ok;
   }
 
   /**
