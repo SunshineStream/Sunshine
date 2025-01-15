@@ -1392,9 +1392,9 @@ namespace input {
    */
   batch_result_e
   batch(PSS_PEN_PACKET dest, PSS_PEN_PACKET src) {
-    // Only batch hover or move events
-    if (dest->eventType != LI_TOUCH_EVENT_MOVE &&
-        dest->eventType != LI_TOUCH_EVENT_HOVER) {
+    // Only batch hover events
+    // Move events may not be batched due to graphics programs.
+    if (dest->eventType != LI_TOUCH_EVENT_HOVER) {
       return batch_result_e::terminate_batch;
     }
 
