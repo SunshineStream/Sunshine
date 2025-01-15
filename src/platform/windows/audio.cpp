@@ -417,7 +417,7 @@ namespace platf::audio {
   class mic_wasapi_t: public mic_t {
   public:
     capture_e
-    sample(std::vector<float> &sample_out) override {
+    sample(std::vector<float> &sample_out, std::chrono::steady_clock::time_point &capture_timestamp_out) override {
       auto sample_size = sample_out.size();
 
       // Refill the sample buffer if needed
@@ -427,6 +427,8 @@ namespace platf::audio {
           return capture_result;
         }
       }
+
+      capture_timestamp_out = capture_timestamp;
 
       // Fill the output buffer with samples
       std::copy_n(std::begin(sample_buf), sample_size, std::begin(sample_out));
@@ -499,6 +501,8 @@ namespace platf::audio {
       REFERENCE_TIME default_latency;
       audio_client->GetDevicePeriod(&default_latency, nullptr);
       default_latency_ms = default_latency / 1000;
+      // XXX the above is actually wrong because REFERENCE_TIME is in 100ns units,
+      // but I dont want to fix it for no reason. The correct millisecond conversion is to divide by 10000.
 
       std::uint32_t frames;
       status = audio_client->GetBufferSize(&frames);
@@ -541,6 +545,8 @@ namespace platf::audio {
         return -1;
       }
 
+      qpc_status = QPC_PENDING;
+
       return 0;
     }
 
@@ -572,6 +578,7 @@ namespace platf::audio {
       // number of samples / number of channels
       struct block_aligned_t {
         std::uint32_t audio_sample_size;
+        std::uint64_t capture_ts_100ns;
       } block_aligned;
 
       // Check if the default audio device has changed
@@ -606,7 +613,10 @@ namespace platf::audio {
           (BYTE **) &sample_aligned.samples,
           &block_aligned.audio_sample_size,
           &buffer_flags,
-          nullptr, nullptr);
+          nullptr,
+          &block_aligned.capture_ts_100ns);
+
+        auto capture_timestamp_fallback = std::chrono::steady_clock::now();
 
         switch (status) {
           case S_OK:
@@ -620,6 +630,10 @@ namespace platf::audio {
 
         if (buffer_flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) {
           BOOST_LOG(debug) << "Audio capture signaled buffer discontinuity";
+        }
+
+        if (buffer_flags & AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR) {
+          BOOST_LOG(warning) << "Audio capture signaled AUDCLNT_BUFFERFLAGS_TIMESTAMP_ERROR";
         }
 
         sample_aligned.uninitialized = std::end(sample_buf) - sample_buf_pos;
@@ -637,6 +651,29 @@ namespace platf::audio {
         }
 
         sample_buf_pos += n;
+
+        // When beginning capture, check that the QPC timestasmps from GetBuffer() are using the
+        // same clock. If the offset is too large, we fallback to fudging the timestamps
+        if (qpc_status == QPC_PENDING) {
+          auto qpc_capture_timestamp = std::chrono::steady_clock::time_point{std::chrono::microseconds{block_aligned.capture_ts_100ns / 10}};
+          auto qpc_offset_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            capture_timestamp_fallback - qpc_capture_timestamp
+          ).count();
+
+          // Expected value for qpc_offset_ms should be around -10ms, where 10 is the device's buffer size
+          if (abs(qpc_offset_ms) < MAX_QPC_TIMESTAMP_OFFSET_MS) {
+            qpc_status = QPC_VALID;
+            BOOST_LOG(info) << "Audio supports accurate timestamps. Offset (ms): " << qpc_offset_ms;
+          }
+          else {
+            qpc_status = QPC_INVALID;
+            BOOST_LOG(info) << "Audio timestamps out of range, accurate timestamps are disabled. Offset (ms): " << qpc_offset_ms;
+          }
+        }
+
+        capture_timestamp = (qpc_status == QPC_VALID)
+          ? std::chrono::steady_clock::time_point{std::chrono::microseconds{block_aligned.capture_ts_100ns / 10}}
+          : capture_timestamp_fallback; // std::chrono::steady_clock::now()
 
         audio_capture->ReleaseBuffer(block_aligned.audio_sample_size);
       }
@@ -668,6 +705,8 @@ namespace platf::audio {
     util::buffer_t<float> sample_buf;
     float *sample_buf_pos;
     int channels;
+    std::chrono::steady_clock::time_point capture_timestamp;
+    qpc_status_t qpc_status;
 
     HANDLE mmcss_task_handle = NULL;
   };

@@ -54,8 +54,9 @@ namespace platf {
     util::safe_ptr<pa_simple, pa_simple_free> mic;
 
     capture_e
-    sample(std::vector<float> &sample_buf) override {
+    sample(std::vector<float> &sample_buf, std::chrono::steady_clock::time_point &capture_timestamp_out) override {
       auto sample_size = sample_buf.size();
+      capture_timestamp_out = std::chrono::steady_clock::now();
 
       auto buf = sample_buf.data();
       int status;

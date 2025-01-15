@@ -68,7 +68,31 @@ namespace audio {
   };
 
   using buffer_t = util::buffer_t<std::uint8_t>;
-  using packet_t = std::pair<void *, buffer_t>;
+
+  struct packet_raw_t {
+    virtual ~packet_raw_t() = default;
+
+    packet_raw_t(buffer_t &&packet_data):
+        packet_data { std::move(packet_data) }
+    { }
+
+    size_t
+    data_size() {
+      return packet_data.size();
+    }
+
+    buffer_t packet_data;
+    void *channel_data = nullptr;
+    std::chrono::steady_clock::time_point capture_timestamp;
+  };
+
+  using packet_t = std::unique_ptr<packet_raw_t>;
+
+  struct audio_with_timestamp_t {
+    std::vector<float> pcm;
+    std::chrono::steady_clock::time_point capture_timestamp;
+  };
+
   using audio_ctx_ref_t = safe::shared_t<audio_ctx_t>::ptr_t;
 
   void

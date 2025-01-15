@@ -19,8 +19,9 @@ namespace platf {
     }
 
     capture_e
-    sample(std::vector<float> &sample_in) override {
+    sample(std::vector<float> &sample_in, std::chrono::steady_clock::time_point &capture_timestamp_out) override {
       auto sample_size = sample_in.size();
+      capture_timestamp_out = std::chrono::steady_clock::now();
 
       uint32_t length = 0;
       void *byteSampleBuffer = TPCircularBufferTail(&av_audio_capture->audioSampleBuffer, &length);

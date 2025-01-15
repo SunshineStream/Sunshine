@@ -9,6 +9,17 @@
 #include <windows.h>
 #include <winnt.h>
 
+// Windows provides a timestamp from GetBuffer() indicating exactly when audio was captured.
+// Before trusting this timestamp, we check if it is compatible with our other time code.
+
+#define MAX_QPC_TIMESTAMP_OFFSET_MS 50  ///< QPC is allowed to be +/- this many milliseconds from now().
+
+enum qpc_status_t : int {
+  QPC_PENDING,   ///< QPC offset will be checked after capturing the first audio packet
+  QPC_INVALID,   ///< QPC offset exceeded MAX_QPC_TIMESTAMP_OFFSET_MS and we will generate timestamps
+  QPC_VALID      ///< QPC offset fell within acceptable range and will be used
+};
+
 namespace platf {
   void
   print_status(const std::string_view &prefix, HRESULT status);

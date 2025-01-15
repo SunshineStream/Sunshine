@@ -537,7 +537,7 @@ namespace platf {
   class mic_t {
   public:
     virtual capture_e
-    sample(std::vector<float> &frame_buffer) = 0;
+    sample(std::vector<float> &frame_buffer, std::chrono::steady_clock::time_point &capture_timestamp_out) = 0;
 
     virtual ~mic_t() = default;
   };

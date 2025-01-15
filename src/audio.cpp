@@ -18,7 +18,7 @@
 namespace audio {
   using namespace std::literals;
   using opus_t = util::safe_ptr<OpusMSEncoder, opus_multistream_encoder_destroy>;
-  using sample_queue_t = std::shared_ptr<safe::queue_t<std::vector<float>>>;
+  using sample_queue_t = std::shared_ptr<safe::queue_t<audio_with_timestamp_t>>;
 
   static int
   start_audio_control(audio_ctx_t &ctx);
@@ -114,9 +114,9 @@ namespace audio {
 
     auto frame_size = config.packetDuration * stream.sampleRate / 1000;
     while (auto sample = samples->pop()) {
-      buffer_t packet { 1400 };
+      buffer_t packet_data { 1400 };
 
-      int bytes = opus_multistream_encode_float(opus.get(), sample->data(), frame_size, std::begin(packet), packet.size());
+      int bytes = opus_multistream_encode_float(opus.get(), sample->pcm.data(), frame_size, std::begin(packet_data), packet_data.size());
       if (bytes < 0) {
         BOOST_LOG(error) << "Couldn't encode audio: "sv << opus_strerror(bytes);
         packets->stop();
@@ -124,8 +124,12 @@ namespace audio {
         return;
       }
 
-      packet.fake_resize(bytes);
-      packets->raise(channel_data, std::move(packet));
+      packet_data.fake_resize(bytes);
+
+      auto packet = std::make_unique<packet_raw_t>(std::move(packet_data));
+      packet->channel_data = channel_data;
+      packet->capture_timestamp = sample->capture_timestamp;
+      packets->raise(std::move(packet));
     }
   }
 
@@ -216,10 +220,10 @@ namespace audio {
     int samples_per_frame = frame_size * stream.channelCount;
 
     while (!shutdown_event->peek()) {
-      std::vector<float> sample_buffer;
-      sample_buffer.resize(samples_per_frame);
+      audio_with_timestamp_t sample_buffer;
+      sample_buffer.pcm.resize(samples_per_frame);
 
-      auto status = mic->sample(sample_buffer);
+      auto status = mic->sample(sample_buffer.pcm, sample_buffer.capture_timestamp);
       switch (status) {
         case platf::capture_e::ok:
           break;

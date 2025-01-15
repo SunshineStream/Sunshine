@@ -54,7 +54,7 @@ TEST_P(AudioTest, TestEncode) {
       if (shutdown_event->peek()) {
         break;
       }
-      auto packet_data = packet->second;
+      auto packet_data = packet->packet_data;
       if (packet_data.size() == 0) {
         FAIL() << "Empty packet data";
       }
