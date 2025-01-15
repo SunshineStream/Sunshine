@@ -101,7 +101,7 @@ namespace platf {
 
     int
     dummy_img(img_t *img) override {
-      if (!platf::is_screen_capture_allowed()) {
+      if (!platf::permissions_manager.is_screen_capture_allowed()) {
         // If we don't have the screen capture permission, this function will hang
         // indefinitely without doing anything useful. Exit instead to avoid this.
         // A non-zero return value indicates failure to the calling function.

@@ -4,13 +4,14 @@
  */
 #pragma once
 
+#include "permissions_manager.h"
+
 #include <vector>
 
 #include <CoreGraphics/CoreGraphics.h>
 
 namespace platf {
-  bool
-  is_screen_capture_allowed();
+  static auto permissions_manager = PermissionsManager();
 }
 
 namespace dyn {
