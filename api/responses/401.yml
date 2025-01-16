@@ -1,0 +1,8 @@
+---
+description: Unauthorized - The request requires user authentication.
+content:
+  # TODO: return JSON response.
+  text/plain:
+    schema:
+      type: string
+      example: ''

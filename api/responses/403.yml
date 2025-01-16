@@ -1,0 +1,8 @@
+---
+description: Forbidden - The server understood the request, but is refusing to fulfill it.
+content:
+  # TODO: return JSON response.
+  text/plain:
+    schema:
+      type: string
+      example: ''

@@ -1,0 +1,14 @@
+---
+description: Not Found - The requested resource could not be found.
+content:
+  application/json:
+    schema:
+      type: object
+      properties:
+        status_code:
+          type: integer
+          format: int32
+          example: 404
+        error:
+          type: string
+          example: Not Found

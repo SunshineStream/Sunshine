@@ -1,0 +1,50 @@
+---
+# https://openapi.tools
+
+openapi: 3.1.0
+
+info:
+  title: Sunshine
+  summary: Self-hosted game stream host for Moonlight.
+  version: 0.0.0
+  contact:
+    name: LizardByte
+    url: https://app.lizardbyte.dev/support
+  license:
+    name: GNU General Public License v3.0 only
+    url: https://github.com/LizardByte/Sunshine/blob/master/LICENSE
+
+servers:
+  - url: "https://{host}:{port}"
+    description: Sunshine server
+    variables:
+      host:
+        default: "localhost"
+        description: The IP address or hostname of your Sunshine server
+      port:
+        default: "47990"
+        description: The Sunshine config port number
+
+security:
+  - basicAuth: []
+
+components:
+  securitySchemes:
+    # TODO: update when JWT is implemented (https://github.com/LizardByte/Sunshine/pull/2995)
+    # https://swagger.io/specification/#security-scheme-object-examples
+    basicAuth:
+      description: HTTP Basic authentication
+      type: http
+      scheme: basic
+
+paths:
+  /api/apps:
+    get:
+      $ref: "./paths/config_api/apps.yml#/get"
+    post:
+      $ref: "./paths/config_api/apps.yml#/post"
+  /api/apps/{index}:
+    delete:
+      $ref: "./paths/config_api/apps.yml#/delete"
+  /api/logs:
+    $ref: "./paths/config_api/logs.yml"

@@ -96,6 +96,7 @@ namespace confighttp {
    * @brief Send a 401 Unauthorized response.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
+   * @todo Return JSON response.
    */
   void
   send_unauthorized(resp_https_t response, req_https_t request) {
@@ -468,25 +469,6 @@ namespace confighttp {
   }
 
   /**
-   * @brief Get the logs from the log file.
-   * @param response The HTTP response object.
-   * @param request The HTTP request object.
-   *
-   * @api_examples{/api/logs| GET| null}
-   */
-  void
-  getLogs(resp_https_t response, req_https_t request) {
-    if (!authenticate(response, request)) return;
-
-    print_req(request);
-
-    std::string content = file_handler::read_file(config::sunshine.log_file.c_str());
-    SimpleWeb::CaseInsensitiveMultimap headers;
-    headers.emplace("Content-Type", "text/plain");
-    response->write(SimpleWeb::StatusCode::success_ok, content, headers);
-  }
-
-  /**
    * @brief Save an application. To save a new application the index must be `-1`. To update an existing application, you must provide the current index of the application.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -651,6 +633,25 @@ namespace confighttp {
       BOOST_LOG(warning) << "DeleteApp: "sv << e.what();
       bad_request(response, request, e.what());
     }
+  }
+
+  /**
+   * @brief Get the logs from the log file.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   *
+   * @api_examples{/api/logs| GET| null}
+   */
+  void
+  getLogs(resp_https_t response, req_https_t request) {
+    if (!authenticate(response, request)) return;
+
+    print_req(request);
+
+    std::string content = file_handler::read_file(config::sunshine.log_file.c_str());
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Content-Type", "text/plain");
+    response->write(SimpleWeb::StatusCode::success_ok, content, headers);
   }
 
   /**

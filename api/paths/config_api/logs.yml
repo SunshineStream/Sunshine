@@ -1,0 +1,17 @@
+---
+get:
+  summary: Get the logs from the log file.
+  description: |
+    Get the logs from the log file.
+  operationId: getLogs
+  tags:
+    - Logs
+  responses:
+    $ref: "../../responses/authorize.yml"
+    "200":
+      description: The contents of the log file.
+      content:
+        text/plain:
+          schema:
+            type: string
+            example: '[2025-01-15 17:07:58.131]: Info: Sunshine version: v...'

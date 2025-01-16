@@ -1,0 +1,16 @@
+---
+type: object
+required:
+  - do
+  - undo
+  - elevated
+properties:
+  do:
+    $ref: "cmd.yml"
+    description: Command to run before the application starts.
+  undo:
+    $ref: "cmd.yml"
+    description: Command to run after the application exits.
+  elevated:
+    $ref: "../types/boolean.yml"
+    description: Run the command as an elevated process.
