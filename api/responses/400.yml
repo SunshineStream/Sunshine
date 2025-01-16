@@ -1,0 +1,18 @@
+---
+description: Bad Request - A parameter was not specified, or was specified incorrectly.
+content:
+  application/json:
+    schema:
+      x-speakeasy-name-override: BadRequest
+      type: object
+      properties:
+        status_code:
+          type: integer
+          format: int32
+          example: 400
+        status:
+          type: string
+          example: false
+        error:
+          type: string
+          example: Bad Request

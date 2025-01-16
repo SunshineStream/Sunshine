@@ -1,0 +1,160 @@
+---
+get:
+  summary: Get the list of available applications.
+  description: |
+    Get the list of available applications.
+  operationId: getApps
+  tags:
+    - Apps
+  responses:
+    $ref: "../../responses/authorize.yml"
+    "200":
+      description: A list of available applications.
+      content:
+        application/json:
+          schema:
+            type: array
+            items:
+              $ref: "../../models/app.yml"
+
+post:
+  summary: Save an application.
+  description: |
+    Save an application.
+    To save a new application the index must be `-1`.
+    To update an existing application, you must provide the current index of the application.
+  operationId: postApps
+  tags:
+    - Apps
+  parameters:
+    - name: index
+      in: query
+      description: The index of the application to update. If the index is -1, a new application will be created.
+      required: true
+      schema:
+        type: integer
+        format: int32
+    - name: name
+      in: query
+      description: Application Name
+      required: false
+      schema:
+        type: string
+    - name: output
+      in: query
+      description: Log Output Path
+      required: false
+      schema:
+        type: string
+    - name: cmd
+      in: query
+      description: Command to run the application
+      required: false
+      schema:
+        $ref: "../../models/cmd.yml"
+    - name: exclude-global-prep-cmd
+      in: query
+      description: Enable/Disable the execution of Global Prep Commands for this application.
+      required: false
+      schema:
+        type: boolean
+    - name: elevated
+      in: query
+      description: Run the application as an elevated process.
+      required: false
+      schema:
+        type: boolean
+    - name: auto-detach
+      in: query
+      description: Continue streaming if the application exits quickly
+      required: false
+      schema:
+        type: boolean
+    - name: wait-all
+      in: query
+      description: Continue streaming until all app processes exit
+      required: false
+      schema:
+        type: boolean
+    - name: exit-timeout
+      in: query
+      description: Number of seconds to wait for all app processes to gracefully exit when requested to quit.
+      required: false
+      schema:
+        type: integer
+        format: int32
+    - name: prep-cmd
+      in: query
+      description: Commands to run before the main application
+      required: false
+      schema:
+        type: array
+        items:
+          $ref: "../../models/prep-cmd.yml"
+    - name: detached
+      in: query
+      description: Commands to run in detached processes
+      required: false
+      schema:
+        type: array
+        items:
+        $ref: "../../models/cmd.yml"
+    - name: image-path
+      in: query
+      description: Full path to the application image. Must be a png file.
+      required: false
+      schema:
+        type: string
+    - name: working-dir
+      in: query
+      description: The working directory that should be passed to the process.
+      required: false
+      schema:
+        type: string
+  responses:
+    $ref: "../../responses/authorize.yml"
+    "200":
+      description: The application was saved successfully.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: true
+    "400":
+      $ref: "../../responses/400.yml"
+
+delete:
+  summary: Delete an application.
+  description: |
+    Delete an application.
+  operationId: deleteApps
+  tags:
+    - Apps
+  parameters:
+    - name: index
+      in: path
+      description: The index of the application to delete.
+      required: true
+      schema:
+        type: integer
+        format: int32
+  responses:
+    $ref: "../../responses/authorize.yml"
+    "200":
+      description: The application was deleted successfully.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: true
+              result:
+                type: string
+                example: application 9999 deleted
+    "400":
+      $ref: "../../responses/400.yml"
