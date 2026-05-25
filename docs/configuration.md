@@ -2281,6 +2281,85 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### mpeg2_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allows compatibility clients to request MPEG-2/H.262 video streams. Automatic mode keeps this legacy codec
+            below H.264, HEVC, and AV1 by not advertising it unless explicitly forced. When forced, Sunshine may use a
+            legacy-capable fallback encoder for MPEG-2 streams without changing the encoder used for modern codecs.
+            @warning{MPEG-2 may be more CPU-intensive to encode than modern hardware-accelerated codecs when hardware
+            encoding is unavailable.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            mpeg2_mode = 2
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>0</td>
+        <td>preserve modern codec automatic selection and keep MPEG-2 unadvertised</td>
+    </tr>
+    <tr>
+        <td>1</td>
+        <td>do not advertise support for MPEG-2</td>
+    </tr>
+    <tr>
+        <td>2</td>
+        <td>advertise support for MPEG-2/H.262 video</td>
+    </tr>
+</table>
+
+### h263p_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allows compatibility clients to request H.263+ video streams. Automatic mode keeps this legacy codec below
+            H.264, HEVC, and AV1 by not advertising it unless explicitly forced. When forced, Sunshine may use a
+            legacy-capable fallback encoder for H.263+ streams without changing the encoder used for modern codecs.
+            @warning{H.263+ uses software encoding in Sunshine and may reduce host performance.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            h263p_mode = 2
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="3">Choices</td>
+        <td>0</td>
+        <td>preserve modern codec automatic selection and keep H.263+ unadvertised</td>
+    </tr>
+    <tr>
+        <td>1</td>
+        <td>do not advertise support for H.263+</td>
+    </tr>
+    <tr>
+        <td>2</td>
+        <td>advertise support for H.263+ video</td>
+    </tr>
+</table>
+
 ### capture
 
 <table>

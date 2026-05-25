@@ -34,6 +34,16 @@ namespace stream {
 }
 
 namespace video {
+  /**
+   * @brief Video stream format identifiers used by GameStream setup.
+   */
+  enum video_format_e {
+    format_h264 = 0,  ///< H.264 High profile.
+    format_hevc = 1,  ///< HEVC Main/Main10 profile.
+    format_av1 = 2,  ///< AV1 Main/Main10 profile.
+    format_mpeg2 = 3,  ///< MPEG-2/H.262 video.
+    format_h263p = 4,  ///< H.263+ video.
+  };
 
   /**
    * @brief Encoding configuration requested by a remote client.
@@ -47,7 +57,7 @@ namespace video {
     int slicesPerFrame;  ///< Number of slices per frame.
     int numRefFrames;  ///< Maximum number of reference frames.
     int encoderCscMode;  ///< Requested color range and SDR colorspace; HDR always uses BT.2020 and ST2084.
-    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1.
+    int videoFormat;  ///< Video codec format selected from video_format_e.
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
@@ -481,24 +491,30 @@ namespace video {
     codec_t av1;  ///< AV1 codec capability and option set.
     codec_t hevc;  ///< HEVC codec capability and option set.
     codec_t h264;  ///< H.264 codec capability and option set.
+    codec_t mpeg2;  ///< MPEG-2 codec capability and option set.
+    codec_t h263p;  ///< H.263+ codec capability and option set.
 
     /**
      * @brief Select the codec descriptor requested by a stream configuration.
      *
      * @param config Configuration values to apply.
-     * @return Codec descriptor for H.264, HEVC, or AV1.
+     * @return Codec descriptor for H.264, HEVC, AV1, MPEG-2, or H.263+.
      */
     const codec_t &codec_from_config(const config_t &config) const {
       switch (config.videoFormat) {
         default:
           BOOST_LOG(error) << "Unknown video format " << config.videoFormat << ", falling back to H.264";
           // fallthrough
-        case 0:
+        case format_h264:
           return h264;
-        case 1:
+        case format_hevc:
           return hevc;
-        case 2:
+        case format_av1:
           return av1;
+        case format_mpeg2:
+          return mpeg2;
+        case format_h263p:
+          return h263p;
       }
     }
 
@@ -765,8 +781,10 @@ namespace video {
    */
   using hdr_info_t = std::unique_ptr<hdr_info_raw_t>;
 
-  extern int active_hevc_mode;
-  extern int active_av1_mode;
+  extern int active_hevc_mode;  ///< Active HEVC codec advertisement mode.
+  extern int active_av1_mode;  ///< Active AV1 codec advertisement mode.
+  extern int active_mpeg2_mode;  ///< Active MPEG-2 codec advertisement mode.
+  extern int active_h263p_mode;  ///< Active H.263+ codec advertisement mode.
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
   extern std::array<bool, 3> last_encoder_probe_supported_dynamic_range_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1

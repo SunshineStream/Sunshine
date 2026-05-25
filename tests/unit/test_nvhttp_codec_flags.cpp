@@ -89,7 +89,7 @@ using CodecProbeAdvertisementTest = CodecProbeStateTest;
 TEST_F(CodecProbeAdvertisementTest, Probed8Bit444Without10Bit444AdvertisesOnly8Bit444) {
   using namespace std::literals;
 
-  video::encoder_t encoder {"test"sv, {}, {}, {}, {}, 0};
+  video::encoder_t encoder {"test"sv, {}, {}, {}, {}, {}, {}, 0};
   for (auto *codec : {&encoder.h264, &encoder.hevc, &encoder.av1}) {
     (*codec)[video::encoder_t::PASSED] = true;
     (*codec)[video::encoder_t::YUV444] = true;
