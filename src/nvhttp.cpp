@@ -509,6 +509,10 @@ namespace nvhttp {
       }
       x++;
     }
+    // Cap the session resolution up front so downstream consumers (e.g. the display device
+    // configuration that switches the host display mode) target the actual streamed size
+    // instead of the uncapped client request.
+    config::cap_stream_resolution(launch_session->width, launch_session->height);
     launch_session->unique_id = (get_arg(args, "uniqueid", "unknown"));
     launch_session->appid = (int) util::from_view(get_arg(args, "appid", "unknown"));
     launch_session->enable_sops = util::from_view(get_arg(args, "sops", "0"));

@@ -1134,6 +1134,10 @@ namespace rtsp_stream {
 
       config.monitor.height = (int) util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
       config.monitor.width = (int) util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
+
+      // Optionally cap the encode resolution below what the client requested: encoder latency
+      // scales with pixel count, and the capture backend already scales to the encode resolution.
+      config::cap_stream_resolution(config.monitor.width, config.monitor.height);
       config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));
       config.monitor.framerateX100 = (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
       // Validate framerateX100 against framerate. Some clients (e.g. Moonlight Android) send the

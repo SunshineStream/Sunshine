@@ -322,6 +322,8 @@
     "log_path_desc": "The file where the current Sunshine log is stored. At startup, up to five previous logs are retained with .1 through .5 suffixes.",
     "max_bitrate": "Maximum Bitrate",
     "max_bitrate_desc": "The maximum bitrate (in Kbps) that Sunshine will encode the stream at. If set to 0, it will always use the bitrate requested by Moonlight.",
+    "max_stream_resolution": "Maximum Stream Resolution",
+    "max_stream_resolution_desc": "The maximum resolution (formatted as WIDTHxHEIGHT, e.g. 2560x1440) that Sunshine will stream at. Larger client requests are downscaled, preserving aspect ratio. Lowering this reduces encoding latency on hosts where the encoder cannot keep up with the requested resolution. If empty, the resolution requested by Moonlight is used.",
     "minimum_fps_target": "Minimum FPS Target",
     "minimum_fps_target_desc": "The lowest effective FPS a stream can reach. A value of 0 is treated as roughly half of the stream's FPS. A setting of 20 is recommended if you stream 24 or 30fps content.",
     "min_log_level": "Log Level",

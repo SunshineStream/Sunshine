@@ -713,6 +713,9 @@ namespace config {
     0,  // av1_mode
 
     2,  // min_threads
+
+    0,  // max_stream_width
+    0,  // max_stream_height
     {
       "superfast"s,  // preset
       "zerolatency"s,  // tune
@@ -1589,6 +1592,26 @@ namespace config {
     }
   }
 
+  bool cap_stream_resolution(int &width, int &height) {
+    if (video.max_stream_width <= 0 || video.max_stream_height <= 0 || width <= 0 || height <= 0 ||
+        (width <= video.max_stream_width && height <= video.max_stream_height)) {
+      return false;
+    }
+
+    const double scale = std::min(
+      (double) video.max_stream_width / width,
+      (double) video.max_stream_height / height
+    );
+    // Encoders and decoders expect even dimensions
+    const int capped_width = ((int) (width * scale)) & ~1;
+    const int capped_height = ((int) (height * scale)) & ~1;
+    BOOST_LOG(info) << "Capping stream resolution: "sv << width << 'x' << height
+                    << " -> "sv << capped_width << 'x' << capped_height;
+    width = capped_width;
+    height = capped_height;
+    return true;
+  }
+
   /**
    * @brief Apply parsed configuration entries to the global runtime configuration.
    *
@@ -1601,6 +1624,19 @@ namespace config {
     int_between_f(vars, "hevc_mode", video.hevc_mode, {0, 3});
     int_between_f(vars, "av1_mode", video.av1_mode, {0, 3});
     int_f(vars, "min_threads", video.min_threads);
+
+    std::string max_stream_resolution;
+    string_f(vars, "max_stream_resolution", max_stream_resolution);
+    if (!max_stream_resolution.empty()) {
+      int w = 0, h = 0;
+      if (std::sscanf(max_stream_resolution.c_str(), "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
+        video.max_stream_width = w;
+        video.max_stream_height = h;
+      } else {
+        BOOST_LOG(warning) << "max_stream_resolution must be formatted as <width>x<height>, e.g. 2560x1440: "sv << max_stream_resolution;
+      }
+    }
+
     string_f(vars, "sw_preset", video.sw.sw_preset);
     if (!video.sw.sw_preset.empty()) {
       video.sw.svtav1_preset = sw::svtav1_preset_from_view(video.sw.sw_preset);
