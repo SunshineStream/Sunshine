@@ -5,6 +5,7 @@
 // standard includes
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -1613,6 +1614,40 @@ namespace config {
   }
 
   /**
+   * @brief Parse a `<width>x<height>` resolution string.
+   *
+   * @param value Resolution text such as `2560x1440`.
+   * @param width Parsed width, written only on success.
+   * @param height Parsed height, written only on success.
+   * @return `true` when the string is a valid positive resolution.
+   */
+  bool parse_stream_resolution(const std::string &value, int &width, int &height) {
+    const auto separator = value.find('x');
+    if (separator == std::string::npos) {
+      return false;
+    }
+
+    const auto *const begin = value.data();
+    const auto *const end = begin + value.size();
+
+    int parsed_width = 0;
+    const auto [width_end, width_ec] = std::from_chars(begin, begin + separator, parsed_width);
+    if (width_ec != std::errc {} || width_end != begin + separator || parsed_width <= 0) {
+      return false;
+    }
+
+    int parsed_height = 0;
+    const auto [height_end, height_ec] = std::from_chars(begin + separator + 1, end, parsed_height);
+    if (height_ec != std::errc {} || height_end != end || parsed_height <= 0) {
+      return false;
+    }
+
+    width = parsed_width;
+    height = parsed_height;
+    return true;
+  }
+
+  /**
    * @brief Apply parsed configuration entries to the global runtime configuration.
    *
    * @param vars Parsed configuration entries; consumed keys are erased.
@@ -1627,14 +1662,8 @@ namespace config {
 
     std::string max_stream_resolution;
     string_f(vars, "max_stream_resolution", max_stream_resolution);
-    if (!max_stream_resolution.empty()) {
-      int w = 0, h = 0;
-      if (std::sscanf(max_stream_resolution.c_str(), "%dx%d", &w, &h) == 2 && w > 0 && h > 0) {
-        video.max_stream_width = w;
-        video.max_stream_height = h;
-      } else {
-        BOOST_LOG(warning) << "max_stream_resolution must be formatted as <width>x<height>, e.g. 2560x1440: "sv << max_stream_resolution;
-      }
+    if (!max_stream_resolution.empty() && !parse_stream_resolution(max_stream_resolution, video.max_stream_width, video.max_stream_height)) {
+      BOOST_LOG(warning) << "max_stream_resolution must be formatted as <width>x<height>, e.g. 2560x1440: "sv << max_stream_resolution;
     }
 
     string_f(vars, "sw_preset", video.sw.sw_preset);
