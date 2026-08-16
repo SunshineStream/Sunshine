@@ -1621,7 +1621,7 @@ namespace config {
    * @param height Parsed height, written only on success.
    * @return `true` when the string is a valid positive resolution.
    */
-  bool parse_stream_resolution(const std::string &value, int &width, int &height) {
+  bool parse_stream_resolution(const std::string_view &value, int &width, int &height) {
     const auto separator = value.find('x');
     if (separator == std::string::npos) {
       return false;
