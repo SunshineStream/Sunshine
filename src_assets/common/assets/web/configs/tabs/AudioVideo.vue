@@ -87,6 +87,14 @@ const config = ref(props.config)
       </template>
     </PlatformLayout>
 
+    <!-- Keep Default Sink -->
+    <Checkbox class="mb-3"
+              id="keep_default_sink"
+              locale-prefix="config"
+              v-model="config.keep_default_sink"
+              default="false"
+    ></Checkbox>
+
     <AdapterNameSelector
         :platform="platform"
         :config="config"

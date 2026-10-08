@@ -804,6 +804,7 @@ namespace config {
     true,  // stream audio
     true,  // install_steam_drivers
     false,  // external_audio
+    false,  // keep_default_sink
   };
 
   /**
@@ -1811,6 +1812,7 @@ namespace config {
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
     bool_f(vars, "external_audio", audio.external_audio);
+    bool_f(vars, "keep_default_sink", audio.keep_default_sink);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
 

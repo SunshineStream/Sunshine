@@ -95,6 +95,37 @@ namespace audio {
   };
 
   /**
+   * @brief Startup/teardown sink behavior resolved for one capture session.
+   *
+   * Both fields always agree: a session either swaps the host default and
+   * restores it, or captures without touching it. Recording one decision at
+   * startup keeps teardown symmetric on every platform.
+   */
+  struct sink_routing_policy_t {
+    bool swap_at_startup;  ///< Whether startup may change the host default sink.
+    bool restore_at_teardown;  ///< Whether teardown must restore the previous sink.
+  };
+
+  /**
+   * @brief Resolve the sink routing policy from the user request and backend capability.
+   *
+   * Pure function: no I/O, no global state. Backends that never learned the
+   * keep-default behavior get the historical swap-and-restore path even when
+   * the option is enabled, so enabling it can never strand a foreign default.
+   *
+   * @param keep_default_requested Value of config::audio.keep_default_sink.
+   * @param platform_supports_keep_default Value of platf::audio_control_t::supports_keep_default_sink().
+   * @return Policy with matching startup and teardown behavior.
+   */
+  [[nodiscard]] constexpr sink_routing_policy_t resolve_sink_routing_policy(bool keep_default_requested, bool platform_supports_keep_default) noexcept {
+    if (keep_default_requested && platform_supports_keep_default) {
+      return {false, false};
+    }
+
+    return {true, true};
+  }
+
+  /**
    * @brief Byte buffer used for encoded audio packet payloads.
    */
   using buffer_t = util::buffer_t<std::uint8_t>;

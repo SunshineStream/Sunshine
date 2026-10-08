@@ -973,6 +973,31 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### keep_default_sink
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Capture the selected audio sink without changing the host default sink. When disabled, Sunshine sets the
+            selected sink as the host default sink while streaming.
+            @note{This option is only supported on Linux.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            keep_default_sink = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### adapter_name
 
 <table>

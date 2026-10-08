@@ -293,6 +293,8 @@
     "high_resolution_scrolling_desc": "When enabled, Sunshine will pass through high resolution scroll events from Moonlight clients. This can be useful to disable for older applications that scroll too fast with high resolution scroll events.",
     "install_steam_audio_drivers": "Install Steam Audio Drivers",
     "install_steam_audio_drivers_desc": "If Steam is installed, this will automatically install the Steam Streaming Speakers driver to support 5.1/7.1 surround sound and muting host audio.",
+    "keep_default_sink": "Keep Default Sink",
+    "keep_default_sink_desc": "Capture the selected audio sink without changing the host default sink. Only takes effect on Linux; ignored on other platforms.",
     "key_repeat_delay": "Key Repeat Delay",
     "key_repeat_delay_desc": "Control how fast keys will repeat themselves. The initial delay in milliseconds before repeating keys.",
     "key_repeat_frequency": "Key Repeat Frequency",

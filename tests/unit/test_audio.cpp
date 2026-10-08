@@ -114,3 +114,67 @@ TEST_P(AudioTest, TestEncode) {
   timer.join();
   capture.join();
 }
+
+// The routing policy is pure: resolvable at compile time, no I/O, no globals.
+static_assert(!resolve_sink_routing_policy(true, true).swap_at_startup);
+static_assert(!resolve_sink_routing_policy(true, true).restore_at_teardown);
+static_assert(resolve_sink_routing_policy(true, false).swap_at_startup);
+static_assert(resolve_sink_routing_policy(true, false).restore_at_teardown);
+
+TEST(SinkRoutingPolicyTest, KeepsDefaultOnlyWhenRequestedAndSupported) {
+  const auto keep = resolve_sink_routing_policy(true, true);
+  EXPECT_FALSE(keep.swap_at_startup);
+  EXPECT_FALSE(keep.restore_at_teardown);
+
+  // Unsupported backends keep legacy swap-and-restore even when requested:
+  // the (true, false) row is the MUST-1 regression pin (startup swapped,
+  // teardown skipped, host default stranded).
+  for (const auto [requested, supported] : {std::pair {false, false}, {false, true}, {true, false}}) {
+    const auto legacy = resolve_sink_routing_policy(requested, supported);
+    EXPECT_TRUE(legacy.swap_at_startup);
+    EXPECT_TRUE(legacy.restore_at_teardown);
+  }
+}
+
+TEST(SinkRoutingPolicyTest, StartupAndTeardownNeverDiverge) {
+  for (const auto requested : {false, true}) {
+    for (const auto supported : {false, true}) {
+      const auto policy = resolve_sink_routing_policy(requested, supported);
+      EXPECT_EQ(policy.swap_at_startup, policy.restore_at_teardown);
+    }
+  }
+}
+
+namespace {
+  /**
+   * @brief Minimal backend that never learned the keep-default behavior.
+   */
+  class legacy_audio_control_t: public platf::audio_control_t {
+  public:
+    int set_sink(const std::string &) override {
+      set_sink_called = true;
+      return 0;
+    }
+
+    std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
+      return nullptr;
+    }
+
+    bool is_sink_available(const std::string &) override {
+      return true;
+    }
+
+    std::optional<platf::sink_t> sink_info() override {
+      return std::nullopt;
+    }
+
+    bool set_sink_called = false;  ///< Whether the legacy swap path ran.
+  };
+}  // namespace
+
+TEST(AudioControlAdapterTest, LegacyBackendKeepsSwapBehavior) {
+  legacy_audio_control_t control;
+  EXPECT_FALSE(control.supports_keep_default_sink());
+  EXPECT_EQ(control.capture_sink("any-sink"), 0);
+  EXPECT_TRUE(control.set_sink_called);
+}

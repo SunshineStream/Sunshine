@@ -211,10 +211,22 @@ namespace audio {
 
     // Only the first to start a session may change the default sink
     if (!ref->sink_flag->exchange(true, std::memory_order_acquire)) {
-      // If the selected sink is different than the current one, change sinks.
-      ref->restore_sink = ref->sink.host != *sink;
-      if (ref->restore_sink) {
-        if (control->set_sink(*sink)) {
+      // One decision point for swap-vs-capture: the recorded restore flag keeps
+      // teardown symmetric with startup on every platform, including backends
+      // that never learned the keep-default behavior.
+      const auto policy = resolve_sink_routing_policy(config::audio.keep_default_sink, control->supports_keep_default_sink());
+
+      if (policy.swap_at_startup) {
+        // If the selected sink is different than the current one, change sinks.
+        // Conjoin the policy's restore flag so teardown honors the same decision
+        // object startup used; the policy keeps both fields in agreement.
+        ref->restore_sink = policy.restore_at_teardown && ref->sink.host != *sink;
+        if (ref->restore_sink && control->set_sink(*sink)) {
+          return;
+        }
+      } else {
+        ref->restore_sink = false;
+        if (control->capture_sink(*sink)) {
           return;
         }
       }
@@ -336,7 +348,8 @@ namespace audio {
   }
 
   void stop_audio_control(audio_ctx_t &ctx) {
-    // restore audio-sink if applicable
+    // restore audio-sink if applicable. Startup recorded whether it swapped;
+    // keep-default sessions never swap, so there is nothing to restore.
     if (!ctx.restore_sink) {
       return;
     }

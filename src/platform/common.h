@@ -894,6 +894,31 @@ namespace platf {
     virtual int set_sink(const std::string &sink) = 0;
 
     /**
+     * @brief Whether the backend can capture a sink without changing the host default.
+     *
+     * Backends that return true must implement capture_sink(). Legacy backends
+     * return false and keep the historical swap-and-restore behavior.
+     *
+     * @return True when capture_sink() captures without touching the host default.
+     */
+    virtual bool supports_keep_default_sink() const {
+      return false;
+    }
+
+    /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * Only called when supports_keep_default_sink() is true. The default
+     * implementation preserves legacy behavior by swapping via set_sink().
+     *
+     * @param sink Audio sink name to capture.
+     * @return Status from selecting the capture sink.
+     */
+    virtual int capture_sink(const std::string &sink) {
+      return set_sink(sink);
+    }
+
+    /**
      * @brief Create a microphone capture stream for the requested layout.
      *
      * @param mapping Opus channel mapping table for the requested layout.

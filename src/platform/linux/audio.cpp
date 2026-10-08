@@ -333,11 +333,24 @@ namespace platf {
       ctx_t ctx;  ///< PulseAudio threaded mainloop context.
       std::string requested_sink;  ///< Requested sink.
 
+      static constexpr const char *stereo_name = "sink-sunshine-stereo";  ///< Persistent stereo null sink name.
+      static constexpr const char *surround51_name = "sink-sunshine-surround51";  ///< Persistent 5.1 null sink name.
+      static constexpr const char *surround71_name = "sink-sunshine-surround71";  ///< Persistent 7.1 null sink name.
+
+      /**
+       * @brief Lifecycle state for one Sunshine null sink.
+       */
+      struct null_sink_t {
+        std::uint32_t module = PA_INVALID_INDEX;  ///< Owning PulseAudio module index, when module-backed.
+        bool present = false;  ///< Sink exists in the graph (pre-existing or loaded by this session).
+        bool owned = false;  ///< Loaded by this session; safe to unload on teardown.
+      };
+
       struct {
-        std::uint32_t stereo = PA_INVALID_INDEX;  ///< PulseAudio module index for the stereo null sink.
-        std::uint32_t surround51 = PA_INVALID_INDEX;  ///< PulseAudio module index for the 5.1 null sink.
-        std::uint32_t surround71 = PA_INVALID_INDEX;  ///< PulseAudio module index for the 7.1 null sink.
-      } index;  ///< PulseAudio module indexes for Sunshine-created null sinks.
+        null_sink_t stereo;  ///< Stereo null sink lifecycle.
+        null_sink_t surround51;  ///< 5.1 null sink lifecycle.
+        null_sink_t surround71;  ///< 7.1 null sink lifecycle.
+      } index;  ///< Per-sink lifecycle bookkeeping.
 
       std::unique_ptr<safe::event_t<ctx_event_e>> events;  ///< Event queue receiving PulseAudio context state changes.
       std::unique_ptr<std::function<void(ctx_t::pointer)>> events_cb;  ///< Callback that translates PulseAudio context updates into events.
@@ -464,10 +477,6 @@ namespace platf {
        * @return Host and virtual sink names when the backend can report them.
        */
       std::optional<sink_t> sink_info() override {
-        constexpr auto stereo = "sink-sunshine-stereo";
-        constexpr auto surround51 = "sink-sunshine-surround51";
-        constexpr auto surround71 = "sink-sunshine-surround71";
-
         auto alarm = safe::make_alarm<int>();
 
         sink_t sink;
@@ -487,17 +496,29 @@ namespace platf {
             return;
           }
 
-          // Ensure Sunshine won't create a sink that already exists.
-          if (!std::strcmp(sink_info->name, stereo)) {
-            index.stereo = sink_info->owner_module;
+          // Adopt sinks that already exist (persistent PipeWire config or a live
+          // session): reuse them, but never unload what we didn't create. The
+          // present guard also keeps repeat sink_info() calls from demoting
+          // owned sinks to adopted.
+          if (!std::strcmp(sink_info->name, stereo_name)) {
+            if (!index.stereo.present) {
+              index.stereo.module = sink_info->owner_module;
+              index.stereo.present = true;
+            }
 
             ++nullcount;
-          } else if (!std::strcmp(sink_info->name, surround51)) {
-            index.surround51 = sink_info->owner_module;
+          } else if (!std::strcmp(sink_info->name, surround51_name)) {
+            if (!index.surround51.present) {
+              index.surround51.module = sink_info->owner_module;
+              index.surround51.present = true;
+            }
 
             ++nullcount;
-          } else if (!std::strcmp(sink_info->name, surround71)) {
-            index.surround71 = sink_info->owner_module;
+          } else if (!std::strcmp(sink_info->name, surround71_name)) {
+            if (!index.surround71.present) {
+              index.surround71.module = sink_info->owner_module;
+              index.surround71.present = true;
+            }
 
             ++nullcount;
           }
@@ -520,29 +541,35 @@ namespace platf {
         auto sink_name = get_default_sink_name();
         sink.host = sink_name;
 
-        if (index.stereo == PA_INVALID_INDEX) {
-          index.stereo = load_null(stereo, speaker::map_stereo.data(), static_cast<int>(speaker::map_stereo.size()));
-          if (index.stereo == PA_INVALID_INDEX) {
+        if (!index.stereo.present) {
+          index.stereo.module = load_null(stereo_name, speaker::map_stereo.data(), static_cast<int>(speaker::map_stereo.size()));
+          if (index.stereo.module == PA_INVALID_INDEX) {
             BOOST_LOG(warning) << "Couldn't create virtual sink for stereo: "sv << pa_strerror(pa_context_errno(ctx.get()));
           } else {
+            index.stereo.present = true;
+            index.stereo.owned = true;
             ++nullcount;
           }
         }
 
-        if (index.surround51 == PA_INVALID_INDEX) {
-          index.surround51 = load_null(surround51, speaker::map_surround51.data(), static_cast<int>(speaker::map_surround51.size()));
-          if (index.surround51 == PA_INVALID_INDEX) {
+        if (!index.surround51.present) {
+          index.surround51.module = load_null(surround51_name, speaker::map_surround51.data(), static_cast<int>(speaker::map_surround51.size()));
+          if (index.surround51.module == PA_INVALID_INDEX) {
             BOOST_LOG(warning) << "Couldn't create virtual sink for surround-51: "sv << pa_strerror(pa_context_errno(ctx.get()));
           } else {
+            index.surround51.present = true;
+            index.surround51.owned = true;
             ++nullcount;
           }
         }
 
-        if (index.surround71 == PA_INVALID_INDEX) {
-          index.surround71 = load_null(surround71, speaker::map_surround71.data(), static_cast<int>(speaker::map_surround71.size()));
-          if (index.surround71 == PA_INVALID_INDEX) {
+        if (!index.surround71.present) {
+          index.surround71.module = load_null(surround71_name, speaker::map_surround71.data(), static_cast<int>(speaker::map_surround71.size()));
+          if (index.surround71.module == PA_INVALID_INDEX) {
             BOOST_LOG(warning) << "Couldn't create virtual sink for surround-71: "sv << pa_strerror(pa_context_errno(ctx.get()));
           } else {
+            index.surround71.present = true;
+            index.surround71.owned = true;
             ++nullcount;
           }
         }
@@ -552,7 +579,7 @@ namespace platf {
         }
 
         if (nullcount == 3) {
-          sink.null = std::make_optional(sink_t::null_t {stereo, surround51, surround71});
+          sink.null = std::make_optional(sink_t::null_t {stereo_name, surround51_name, surround71_name});
         }
 
         return std::make_optional(std::move(sink));
@@ -658,6 +685,28 @@ namespace platf {
       }
 
       /**
+       * @brief Whether the backend can capture a sink without changing the host default.
+       *
+       * @return Always true: capture_sink() records the target for the monitor lookup.
+       */
+      bool supports_keep_default_sink() const override {
+        return true;
+      }
+
+      /**
+       * @brief Capture the given sink without changing the host default.
+       *
+       * @param sink Audio sink name to capture.
+       * @return Always 0: selecting a capture target cannot fail here.
+       */
+      int capture_sink(const std::string &sink) override {
+        BOOST_LOG(info) << "Keeping host default sink; capturing ["sv << sink << "] without swapping"sv;
+        requested_sink = sink;
+
+        return 0;
+      }
+
+      /**
        * @brief Update the sink value on the backend.
        *
        * @param sink Audio sink name to route or capture.
@@ -693,10 +742,29 @@ namespace platf {
         return 0;
       }
 
+      /**
+       * @brief Unload a null sink loaded by this session; leave adopted sinks alone.
+       *
+       * Adopted sinks (persistent PipeWire config or another session's) stay
+       * loaded: unloading them would yank routed streams back to the host
+       * default mid-game.
+       *
+       * @param sink Lifecycle state for the sink.
+       * @param name Sink name for logging.
+       */
+      void unload_owned(null_sink_t &sink, const char *name) {
+        if (!sink.owned) {
+          BOOST_LOG(debug) << "Leaving adopted null-sink ["sv << name << "] loaded"sv;
+          return;
+        }
+
+        unload_null(sink.module);
+      }
+
       ~server_t() override {
-        unload_null(index.stereo);
-        unload_null(index.surround51);
-        unload_null(index.surround71);
+        unload_owned(index.stereo, stereo_name);
+        unload_owned(index.surround51, surround51_name);
+        unload_owned(index.surround71, surround71_name);
 
         if (worker.joinable()) {
           pa_context_disconnect(ctx.get());

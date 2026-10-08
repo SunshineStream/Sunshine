@@ -43,6 +43,7 @@
       "stream_audio": "enabled",
       "install_steam_audio_drivers": "enabled",
       "external_audio": "disabled",
+      "keep_default_sink": "disabled",
       "adapter_name": "",
       "output_name": "",
       "dd_configuration_option": "disabled",
