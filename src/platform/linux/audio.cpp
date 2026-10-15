@@ -765,6 +765,7 @@ namespace platf {
           unload_owned(index.surround71, surround71_name);
         } catch (...) {
           // Teardown must not throw: unload failures were already logged above.
+          BOOST_LOG(warning) << "Suppressed unexpected exception while unloading null-sinks during teardown"sv;
         }
 
         if (worker.joinable()) {
