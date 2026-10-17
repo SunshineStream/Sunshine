@@ -42,6 +42,7 @@ describe('externally managed audio configuration', () => {
       'install_steam_audio_drivers',
       'stream_audio',
       'external_audio',
+      'keep_default_sink',
     ])
     expect(config.external_audio).toBe('disabled')
     expect(wrapper.get('#external_audio').element.checked).toBe(false)
