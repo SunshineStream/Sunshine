@@ -184,51 +184,28 @@ namespace audio {
       return;
     }
 
-    // Order of priority:
-    // 1. Virtual sink
-    // 2. Audio sink
-    // 3. Host
-    std::string *sink = &ref->sink.host;
-    if (!config::audio.sink.empty()) {
-      sink = &config::audio.sink;
-    }
-
-    // Prefer the virtual sink if host playback is disabled or there's no other sink
-    if (ref->sink.null && (!config.flags[config_t::HOST_AUDIO] || sink->empty())) {
-      auto &null = *ref->sink.null;
-      switch (stream.channelCount) {
-        case 2:
-          sink = &null.stereo;
-          break;
-        case 6:
-          sink = &null.surround51;
-          break;
-        case 8:
-          sink = &null.surround71;
-          break;
-      }
-    }
-
     // Only the first to start a session may change the default sink
     if (!ref->sink_flag->exchange(true, std::memory_order_acquire)) {
       // One decision point for swap-vs-capture: the recorded restore flag keeps
       // teardown symmetric with startup on every platform, including backends
       // that never learned the keep-default behavior.
-      const auto policy = resolve_sink_routing_policy(config::audio.keep_default_sink, control->supports_keep_default_sink());
-
-      if (policy.swap_at_startup) {
+      const auto routing = resolve_capture_routing(
+        config::audio.keep_default_sink,
+        control->supports_keep_default_sink(),
+        config.flags[config_t::HOST_AUDIO],
+        stream.channelCount,
+        ref->sink.host,
+        config::audio.sink,
+        ref->sink.null
+      );
+      ref->restore_sink = routing.restore_at_teardown;
+      if (routing.swap_at_startup) {
         // If the selected sink is different than the current one, change sinks.
-        // Conjoin the policy's restore flag so teardown honors the same decision
-        // object startup used; the policy keeps both fields in agreement.
-        ref->restore_sink = policy.restore_at_teardown && ref->sink.host != *sink;
-        if (ref->restore_sink && control->set_sink(*sink)) {
+        if (ref->restore_sink && control->set_sink(routing.target)) {
           return;
         }
-      } else {
-        ref->restore_sink = false;
-        if (control->capture_sink(*sink)) {
-          return;
-        }
+      } else if (control->capture_sink(routing.target)) {
+        return;
       }
     }
 
