@@ -182,6 +182,8 @@ namespace audio {
         case 8:
           selected = null_sinks->surround71;
           break;
+        default:
+          break;
       }
     }
 
