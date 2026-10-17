@@ -1028,9 +1028,9 @@ namespace platf::audio {
         return nullptr;
       }
 
-      // If this is a virtual sink, set a callback that will change the sink back if it's changed
-      auto virtual_sink_info = extract_virtual_sink_info(assigned_sink);
-      if (virtual_sink_info && !config::audio.external_audio) {
+      // If this is a virtual sink, set a callback that will change the sink back if it's changed.
+      // Hands-off modes never reinstall: capture follows the recorded endpoint directly.
+      if (should_install_default_callback(assigned_sink)) {
         mic->default_endpt_changed_cb = [this] {
           BOOST_LOG(info) << "Resetting sink to ["sv << assigned_sink << "] after default changed";
           set_sink(assigned_sink);
@@ -1148,6 +1148,66 @@ namespace platf::audio {
       }
 
       return failure;
+    }
+
+    /**
+     * @brief Whether the backend can capture a sink without changing the host default.
+     *
+     * @return Always true: capture_sink() records the target for direct WASAPI capture.
+     */
+    bool supports_keep_default_sink() const override {
+      return true;
+    }
+
+    /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * Records the target for microphone(); unlike set_sink(), this never calls
+     * SetDefaultEndpoint and never installs the Steam drivers.
+     *
+     * @param sink Audio sink name to capture.
+     * @return Always 0: recording a capture target cannot fail here.
+     */
+    int capture_sink(const std::string &sink) override {
+      BOOST_LOG(info) << "Keeping host default sink; capturing ["sv << sink << "] without swapping"sv;
+      assigned_sink = sink;
+
+      return 0;
+    }
+
+    /**
+     * @brief Whether a default-endpoint change may reinstall the assigned sink.
+     *
+     * Keep-default sessions must never reassert the default: capture follows the
+     * recorded endpoint directly, so default changes are simply observed.
+     *
+     * @param sink Assigned sink name that would be reinstalled.
+     * @return True when the reassertion callback may be installed.
+     */
+    bool should_install_default_callback(const std::string &sink) {
+      return static_cast<bool>(extract_virtual_sink_info(sink)) && !config::audio.external_audio &&
+             !config::audio.keep_default_sink;
+    }
+
+    /**
+     * @brief Whether startup may move the default away from Steam Streaming Speakers.
+     *
+     * @return False in hands-off modes that never touch the host default.
+     */
+    bool should_reset_default_device() {
+      return !config::audio.external_audio && !config::audio.keep_default_sink;
+    }
+
+    /**
+     * @brief Whether the Steam Streaming Speakers driver may be installed.
+     *
+     * Installing a driver reconfigures the audio subsystem (device arrival makes
+     * Windows re-evaluate defaults), which keep-default sessions must not trigger.
+     *
+     * @return False in hands-off modes that never touch the host audio graph.
+     */
+    bool should_install_steam_drivers() {
+      return !config::audio.external_audio && !config::audio.keep_default_sink && config::audio.install_steam_drivers;
     }
 
     /**
@@ -1276,7 +1336,7 @@ namespace platf::audio {
      * @brief Resets the default audio device from Steam Streaming Speakers.
      */
     void reset_default_device() {
-      if (config::audio.external_audio) {
+      if (!should_reset_default_device()) {
         return;
       }
 
@@ -1510,6 +1570,93 @@ namespace platf::audio {
     }
 
     /**
+     * @brief Exercise keep-default support detection without initializing Windows policy interfaces.
+     * @return True when the backend captures without changing the host default.
+     */
+    bool keep_default_supported() {
+      audio_control_t control;
+      return control.supports_keep_default_sink();
+    }
+
+    /**
+     * @brief Exercise capture-only sink recording without policy interfaces.
+     * @param sink Sink a caller attempts to capture.
+     * @return Sink recorded for direct capture, or empty when recording failed.
+     */
+    std::string capture_assigned_sink(const std::string &sink) {
+      audio_control_t control;
+      if (control.capture_sink(sink)) {
+        return {};
+      }
+
+      return control.assigned_sink;
+    }
+
+    /**
+     * @brief Exercise the default-callback guard with controlled hands-off modes.
+     * @param sink Assigned sink name that would be reinstalled.
+     * @param keep_default keep_default_sink value to test with.
+     * @param external_audio external_audio value to test with.
+     * @return True when the production guard installs the reassertion callback.
+     */
+    bool installs_default_callback(const std::string &sink, bool keep_default, bool external_audio) {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
+      auto previous_external = std::exchange(config::audio.external_audio, external_audio);
+      bool installed = control.should_install_default_callback(sink);
+      config::audio.keep_default_sink = previous_keep;
+      config::audio.external_audio = previous_external;
+      return installed;
+    }
+
+    /**
+     * @brief Exercise the startup-reset guard with controlled hands-off modes.
+     * @param keep_default keep_default_sink value to test with.
+     * @param external_audio external_audio value to test with.
+     * @return True when the production guard permits resetting the default device.
+     */
+    bool resets_default_device(bool keep_default, bool external_audio) {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
+      auto previous_external = std::exchange(config::audio.external_audio, external_audio);
+      bool resets = control.should_reset_default_device();
+      config::audio.keep_default_sink = previous_keep;
+      config::audio.external_audio = previous_external;
+      return resets;
+    }
+
+    /**
+     * @brief Exercise the driver-install guard with controlled hands-off modes.
+     * @param keep_default keep_default_sink value to test with.
+     * @param external_audio external_audio value to test with.
+     * @param install_requested install_steam_drivers value to test with.
+     * @return True when the production guard permits installing the Steam drivers.
+     */
+    bool installs_steam_drivers(bool keep_default, bool external_audio, bool install_requested) {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
+      auto previous_external = std::exchange(config::audio.external_audio, external_audio);
+      auto previous_install = std::exchange(config::audio.install_steam_drivers, install_requested);
+      bool installs = control.should_install_steam_drivers();
+      config::audio.keep_default_sink = previous_keep;
+      config::audio.external_audio = previous_external;
+      config::audio.install_steam_drivers = previous_install;
+      return installs;
+    }
+
+    /**
+     * @brief Exercise the startup reset with keep-default enabled and null policy interfaces.
+     *
+     * Surviving this call proves the guard returns before touching policy or enumerator.
+     */
+    void reset_with_keep_default() {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, true);
+      control.reset_default_device();
+      config::audio.keep_default_sink = previous_keep;
+    }
+
+    /**
      * @brief Resolve a sink through the production Windows endpoint lookup.
      *
      * @param sink Sink name, virtual sink descriptor, or device identifier.
@@ -1623,7 +1770,8 @@ namespace platf {
 
     // Install Steam Streaming Speakers if needed. We do this during audio_control() to ensure
     // the sink information returned includes the new Steam Streaming Speakers device.
-    if (!config::audio.external_audio && config::audio.install_steam_drivers && !control->find_device_id(control->match_steam_speakers())) {
+    // Hands-off modes skip the install: driver installation reconfigures the audio subsystem.
+    if (control->should_install_steam_drivers() && !control->find_device_id(control->match_steam_speakers())) {
       // This is best effort. Don't fail if it doesn't work.
       control->install_steam_audio_drivers();
     }

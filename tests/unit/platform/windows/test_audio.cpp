@@ -29,6 +29,12 @@ namespace platf::audio::tests {
   int initialize_audio_control(const std::function<std::remove_pointer_t<decltype(&CoCreateInstance)>> &create_instance);
   std::optional<sink_t> configured_sink_info();
   int set_external_sink(const std::string &sink);
+  bool keep_default_supported();
+  std::string capture_assigned_sink(const std::string &sink);
+  bool installs_default_callback(const std::string &sink, bool keep_default, bool external_audio);
+  bool resets_default_device(bool keep_default, bool external_audio);
+  bool installs_steam_drivers(bool keep_default, bool external_audio, bool install_requested);
+  void reset_with_keep_default();
   bool sink_device_available(const std::string &sink, IMMDeviceEnumerator *device_enum);
   bool microphone_available(const std::string &assigned_sink, const std::string &configured_sink, IMMDeviceEnumerator *device_enum);
   bool capture_follows_default_device(IMMDeviceEnumerator *device_enum, IMMDevice *capture_device);
@@ -588,5 +594,30 @@ TEST(WindowsAudioTest, DefaultChangeWithoutCallbackStillReinitializes) {
     platf::capture_e::reinit
   );
   EXPECT_EQ(callback_count, 0);
+}
+
+TEST(WindowsAudioTest, KeepDefaultModeCapturesWithoutSwapping) {
+  EXPECT_TRUE(platf::audio::tests::keep_default_supported());
+  EXPECT_EQ(platf::audio::tests::capture_assigned_sink("endpoint-id"), "endpoint-id");
+}
+
+TEST(WindowsAudioTest, KeepDefaultModeInstallsNoReassertionCallback) {
+  constexpr const char *virtual_sink = "virtual-Stereoendpoint-id";
+  EXPECT_TRUE(platf::audio::tests::installs_default_callback(virtual_sink, false, false));
+  EXPECT_FALSE(platf::audio::tests::installs_default_callback(virtual_sink, true, false));
+  EXPECT_FALSE(platf::audio::tests::installs_default_callback(virtual_sink, false, true));
+  EXPECT_FALSE(platf::audio::tests::installs_default_callback(virtual_sink, true, true));
+  EXPECT_FALSE(platf::audio::tests::installs_default_callback("endpoint-id", false, false));
+}
+
+TEST(WindowsAudioTest, HandsOffModesSkipDefaultResetAndDriverInstall) {
+  EXPECT_TRUE(platf::audio::tests::resets_default_device(false, false));
+  EXPECT_FALSE(platf::audio::tests::resets_default_device(true, false));
+  EXPECT_FALSE(platf::audio::tests::resets_default_device(false, true));
+  EXPECT_TRUE(platf::audio::tests::installs_steam_drivers(false, false, true));
+  EXPECT_FALSE(platf::audio::tests::installs_steam_drivers(true, false, true));
+  EXPECT_FALSE(platf::audio::tests::installs_steam_drivers(false, true, true));
+  EXPECT_FALSE(platf::audio::tests::installs_steam_drivers(false, false, false));
+  platf::audio::tests::reset_with_keep_default();
 }
 #endif

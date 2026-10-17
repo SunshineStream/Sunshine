@@ -294,7 +294,7 @@
     "install_steam_audio_drivers": "Install Steam Audio Drivers",
     "install_steam_audio_drivers_desc": "If Steam is installed, this will automatically install the Steam Streaming Speakers driver to support 5.1/7.1 surround sound and muting host audio.",
     "keep_default_sink": "Keep Default Sink",
-    "keep_default_sink_desc": "Capture the selected audio sink without changing the host default sink. Only takes effect on Linux; ignored on other platforms.",
+    "keep_default_sink_desc": "Capture the selected audio sink without changing the host default sink. Supported on Linux, Windows, and macOS; backends without support keep the previous swap behavior.",
     "key_repeat_delay": "Key Repeat Delay",
     "key_repeat_delay_desc": "Control how fast keys will repeat themselves. The initial delay in milliseconds before repeating keys.",
     "key_repeat_frequency": "Key Repeat Frequency",

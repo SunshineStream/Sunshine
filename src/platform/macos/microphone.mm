@@ -82,6 +82,30 @@ namespace platf {
     }
 
     /**
+     * @brief Whether the backend can capture a sink without changing the host default.
+     *
+     * @return Always true: macOS captures through a system tap or a selected
+     *         input, neither of which changes the default output device.
+     */
+    bool supports_keep_default_sink() const override {
+      return true;
+    }
+
+    /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * No-op by design: microphone() already selects the system tap (empty sink)
+     * or the configured input without touching default output routing.
+     *
+     * @param sink Audio sink name to capture.
+     * @return Always 0: selecting a capture target cannot fail here.
+     */
+    int capture_sink(const std::string &sink) override {
+      BOOST_LOG(info) << "Keeping host default output; capturing ["sv << sink << "] through the macOS tap or input"sv;
+      return 0;
+    }
+
+    /**
      * @brief Create a microphone capture stream for the requested layout.
      *
      * @param mapping Opus channel mapping table for the requested layout.
@@ -158,4 +182,27 @@ namespace platf {
   std::unique_ptr<audio_control_t> audio_control() {
     return std::make_unique<macos_audio_control_t>();
   }
+
+#ifdef SUNSHINE_TESTS
+  namespace tests {
+    /**
+     * @brief Exercise keep-default support detection without audio hardware.
+     * @return True when the backend captures without changing the host default.
+     */
+    bool keep_default_supported() {
+      macos_audio_control_t control;
+      return control.supports_keep_default_sink();
+    }
+
+    /**
+     * @brief Exercise capture-only sink selection without audio hardware.
+     * @param sink Sink a caller attempts to capture.
+     * @return Status from the production capture setter.
+     */
+    int capture_sink_status(const std::string &sink) {
+      macos_audio_control_t control;
+      return control.capture_sink(sink);
+    }
+  }  // namespace tests
+#endif
 }  // namespace platf
