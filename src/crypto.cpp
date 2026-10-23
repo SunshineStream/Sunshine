@@ -427,8 +427,7 @@ namespace crypto {
     }
 
     sha256_t digest;
-    unsigned int size = 0;
-    if (X509_digest(cert.get(), EVP_sha256(), digest.data(), &size) != 1 || size != digest.size()) {
+    if (unsigned int size = 0; X509_digest(cert.get(), EVP_sha256(), digest.data(), &size) != 1 || size != digest.size()) {
       return {};
     }
 
