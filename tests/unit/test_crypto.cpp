@@ -101,3 +101,25 @@ TEST(CryptoTest, CertificateChainRequiresExactPairedIdentity) {
   EXPECT_EQ(certificate_chain.verify(paired_certificate.get()), nullptr);
   EXPECT_NE(certificate_chain.verify(derived_certificate.get()), nullptr);
 }
+
+TEST(CryptoTest, Fingerprint256HashesTheDerCertificate) {
+  const auto creds = crypto::gen_creds("Sunshine Fingerprint Client", 2048);
+  const auto cert = crypto::x509(creds.x509);
+  ASSERT_NE(cert.get(), nullptr);
+
+  unsigned char *der = nullptr;
+  const auto der_size = i2d_X509(cert.get(), &der);
+  ASSERT_GT(der_size, 0);
+  const std::string der_bytes {reinterpret_cast<const char *>(der), static_cast<std::size_t>(der_size)};
+  OPENSSL_free(der);
+
+  const auto fingerprint = crypto::fingerprint256(creds.x509);
+  EXPECT_EQ(fingerprint.size(), 64);
+  EXPECT_EQ(fingerprint, util::hex_vec(crypto::hash(der_bytes), true));
+  EXPECT_NE(fingerprint, crypto::fingerprint256(crypto::gen_creds("Sunshine Other Client", 2048).x509));
+}
+
+TEST(CryptoTest, Fingerprint256OfInvalidCertificateIsEmpty) {
+  EXPECT_TRUE(crypto::fingerprint256("").empty());
+  EXPECT_TRUE(crypto::fingerprint256("-----BEGIN CERTIFICATE-----\nnot a certificate\n-----END CERTIFICATE-----\n").empty());
+}

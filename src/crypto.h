@@ -158,6 +158,16 @@ namespace crypto {
   std::string_view signature(const x509_t &x);
 
   /**
+   * @brief Compute the SHA-256 fingerprint of a PEM certificate.
+   *
+   * The digest covers the DER encoding, as `openssl x509 -fingerprint -sha256` does.
+   *
+   * @param pem PEM text containing an X.509 certificate.
+   * @return Uppercase hexadecimal digest without separators, or an empty string when the PEM is invalid.
+   */
+  std::string fingerprint256(const std::string_view &pem);
+
+  /**
    * @brief Generate cryptographically secure random bytes.
    *
    * @param bytes Number of random bytes to generate.
