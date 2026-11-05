@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,6 +30,27 @@
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
  */
 namespace nvhttp {
+
+  /**
+   * @brief Run a probe until it succeeds, trying again for a while after it fails.
+   *
+   * Used before a stream starts, with the encoder probe: a display that was off (power saving) when the request
+   * arrived may still be lighting up, woken by something reacting to that same request.
+   *
+   * @param probe Returns `0` once it succeeds.
+   * @param wait How long after the first attempt to keep trying.
+   * @param interval Pause between attempts.
+   * @param now Current time.
+   * @param sleep Pauses for a duration.
+   * @return `0` once the probe succeeds, `-1` if it still fails when the wait is over.
+   */
+  int probe_until_ready(
+    const std::function<int()> &probe,
+    std::chrono::milliseconds wait,
+    std::chrono::milliseconds interval,
+    const std::function<std::chrono::steady_clock::time_point()> &now,
+    const std::function<void(std::chrono::milliseconds)> &sleep
+  );
 
   /**
    * @brief The protocol version.
