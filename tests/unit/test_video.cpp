@@ -26,6 +26,7 @@ extern "C" {
 
 // local includes
 #include <src/config.h>
+#include <src/platform/common.h>
 #include <src/video.h>
 
 using namespace std::literals;
@@ -120,6 +121,13 @@ struct EncoderTest: PlatformTestSuite, testing::WithParamInterface<video::encode
   void SetUp() override {
     BaseTest::SetUp();
     auto &encoder = *GetParam();
+#ifdef __linux__
+    // Platform initialization no longer requires a lit display on Linux (KMS is checked again before each probe), so
+    // without any display to capture (a headless runner) no encoder can be validated: skip instead of failing.
+    if (platf::display_names(platf::mem_type_e::unknown).empty()) {
+      GTEST_SKIP() << "No display to capture";
+    }
+#endif
     if (!video::validate_encoder(encoder, false)) {
       // Encoder failed validation,
       // if it's software - fail, otherwise skip
