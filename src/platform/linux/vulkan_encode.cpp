@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <drm_fourcc.h>
 #include <map>
 #include <optional>
@@ -184,6 +185,19 @@ namespace vk {
     *max_level = 0;
 
     if (!vk_ctx || !vk_ctx->inst || !vk_ctx->phys_dev || !vk_ctx->get_proc_addr) {
+      return std::nullopt;
+    }
+
+    // Only a device FFmpeg created with video encode support can be queried. The loader resolves
+    // vkGetPhysicalDeviceVideoCapabilitiesKHR for any instance, but on a device whose driver lacks video
+    // encode (Mesa's lavapipe, the only Vulkan device on GPUs without a Vulkan driver) the call reaches a
+    // null driver entry point and crashes Sunshine during encoder probing.
+    const auto *extensions_begin = vk_ctx->enabled_dev_extensions;
+    const auto *extensions_end = extensions_begin + std::max(vk_ctx->nb_enabled_dev_extensions, 0);
+    if (!extensions_begin || std::none_of(extensions_begin, extensions_end, [](const char *extension) {
+          return extension && std::strcmp(extension, VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME) == 0;
+        })) {
+      BOOST_LOG(debug) << "[vulkan] Device has no video encode support; keeping the driver's default quality"sv;
       return std::nullopt;
     }
 
