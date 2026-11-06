@@ -1181,8 +1181,13 @@ namespace platf {
 
   /**
    * @brief Replacement for the KMS display check in choose_kms_capture_if_none(), set by tests.
+   *
+   * @return Reference to the replacement, empty outside of tests.
    */
-  static std::function<bool()> kms_verifier_for_testing;
+  static std::function<bool()> &kms_verifier_for_testing() {
+    static std::function<bool()> verifier;
+    return verifier;
+  }
 
 #ifdef SUNSHINE_BUILD_CUDA
   std::vector<std::string> nvfbc_display_names();
@@ -1347,7 +1352,7 @@ namespace platf {
       return true;
     }
 #ifdef SUNSHINE_BUILD_DRM
-    if (kms_retry_allowed() && (kms_verifier_for_testing ? kms_verifier_for_testing() : verify_kms())) {
+    if (kms_retry_allowed() && (kms_verifier_for_testing() ? kms_verifier_for_testing()() : verify_kms())) {
       BOOST_LOG(info) << "A display is lit now: screencasting with KMS"sv;
       sources[source::KMS] = true;
     }
@@ -1356,7 +1361,7 @@ namespace platf {
   }
 
   void set_kms_verifier_for_testing(std::function<bool()> verifier) {
-    kms_verifier_for_testing = std::move(verifier);
+    kms_verifier_for_testing() = std::move(verifier);
   }
 
   void reset_capture_sources_for_testing() {
@@ -1374,7 +1379,7 @@ namespace platf {
   /**
    * @brief List display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+  std::vector<std::string> display_names([[maybe_unused]] mem_type_e hwdevice_type) {
     choose_kms_capture_if_none();
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
