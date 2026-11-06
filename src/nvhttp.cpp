@@ -65,16 +65,32 @@ namespace nvhttp {
     return 0;
   }
 
+  int probe_again_if_display_appeared(const std::function<int()> &probe, const std::function<bool()> &has_display) {
+    const bool display_before = has_display();
+    const int result = probe();
+    if (display_before || !has_display()) {
+      return result;
+    }
+    BOOST_LOG(info) << "A display appeared while probing: probing the encoders again"sv;
+    return probe();
+  }
+
   /**
    * @brief Probe the encoders for a stream about to start, giving displays up to 10 seconds to light up.
    *
    * A launch request can find every display off (power saving), and whatever wakes them (the host
    * reacting to the request) needs a moment; refusing at once made the first request always fail.
+   * A display lighting up during a probe gets the encoders probed once more.
    * @return 0 once an encoder works, nonzero if none does within the wait.
    */
   static int probe_encoders_for_stream() {
-    return probe_until_ready(video::probe_encoders, 10s, 500ms, std::chrono::steady_clock::now, [](std::chrono::milliseconds duration) {
-      std::this_thread::sleep_for(duration);
+    const auto probe = [] {
+      return probe_until_ready(video::probe_encoders, 10s, 500ms, std::chrono::steady_clock::now, [](std::chrono::milliseconds duration) {
+        std::this_thread::sleep_for(duration);
+      });
+    };
+    return probe_again_if_display_appeared(probe, [] {
+      return !platf::display_names(platf::mem_type_e::system).empty();
     });
   }
 

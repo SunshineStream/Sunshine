@@ -53,6 +53,19 @@ namespace nvhttp {
   );
 
   /**
+   * @brief Run an encoder probe, and once more if a display appeared while it ran.
+   *
+   * With every display off, the encoders tried first fail for want of a display. If one lights up
+   * partway through, a later encoder passes, usually the software one, so the result can't be
+   * trusted: the probe runs again with the display there.
+   *
+   * @param probe The probe. Returns `0` when an encoder works.
+   * @param has_display Whether any display can be captured now.
+   * @return The result of the last run of the probe.
+   */
+  int probe_again_if_display_appeared(const std::function<int()> &probe, const std::function<bool()> &has_display);
+
+  /**
    * @brief The protocol version.
    * @details The version of the GameStream protocol we are mocking.
    * @note The negative 4th number indicates to Moonlight that this is Sunshine.

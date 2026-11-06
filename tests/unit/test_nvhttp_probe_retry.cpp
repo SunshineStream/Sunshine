@@ -83,3 +83,50 @@ TEST(ProbeUntilReady, GivesUpAfterTheWait) {
   EXPECT_EQ(calls, 21);
   EXPECT_EQ(time.sleeps.size(), 20u);
 }
+
+namespace {
+  struct probe_run_t {
+    int calls = 0;
+    int checks = 0;
+    std::vector<bool> displays;  ///< What each display check answers.
+
+    int probe_again_with(int first_result, int second_result) {
+      return nvhttp::probe_again_if_display_appeared(
+        [this, first_result, second_result] {
+          return ++calls == 1 ? first_result : second_result;
+        },
+        [this] {
+          return displays[checks++];
+        }
+      );
+    }
+  };
+}  // namespace
+
+TEST(ProbeAgainIfDisplayAppeared, ProbesOnceWithADisplayFromTheStart) {
+  probe_run_t run {.displays = {true}};
+
+  EXPECT_EQ(run.probe_again_with(0, 1), 0);
+  EXPECT_EQ(run.calls, 1);
+}
+
+TEST(ProbeAgainIfDisplayAppeared, ProbesOnceWithNoDisplayAtAll) {
+  probe_run_t run {.displays = {false, false}};
+
+  EXPECT_EQ(run.probe_again_with(1, 0), 1);
+  EXPECT_EQ(run.calls, 1);
+}
+
+TEST(ProbeAgainIfDisplayAppeared, ProbesAgainWhenADisplayAppearedDuringAProbeThatPassed) {
+  probe_run_t run {.displays = {false, true}};
+
+  EXPECT_EQ(run.probe_again_with(0, 0), 0);
+  EXPECT_EQ(run.calls, 2);
+}
+
+TEST(ProbeAgainIfDisplayAppeared, ReturnsTheResultOfTheSecondProbe) {
+  probe_run_t run {.displays = {false, true}};
+
+  EXPECT_EQ(run.probe_again_with(1, 0), 0);
+  EXPECT_EQ(run.calls, 2);
+}
