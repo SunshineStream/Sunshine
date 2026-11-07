@@ -32,11 +32,11 @@ const config = ref(props.config)
           </template>
           <template #freebsd>
             <pre>pacmd list-sinks | grep "name:"</pre>
-            <pre>pactl info | grep Source</pre>
+            <pre>pactl get-default-sink</pre>
           </template>
           <template #linux>
             <pre>pacmd list-sinks | grep "name:"</pre>
-            <pre>pactl info | grep Source</pre>
+            <pre>pactl get-default-sink</pre>
           </template>
           <template #macos>
             <a href="https://github.com/mattingalls/Soundflower" target="_blank">Soundflower</a><br>

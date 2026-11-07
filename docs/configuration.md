@@ -810,9 +810,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             **FreeBSD/Linux + pipewire:**
             <br>
             @code{}
-            pactl info | grep Source
-            # in some causes you'd need to use the `Sink` device, if `Source` doesn't work, so try:
-            pactl info | grep Sink
+            pactl get-default-sink
             @endcode
             <br>
             <br>
