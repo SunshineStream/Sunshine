@@ -891,6 +891,22 @@ namespace platf {
   };
 
   /**
+   * @brief Microphone capture parameters for audio_control_t::microphone().
+   *
+   * Groups the six capture arguments into one named bundle so call sites pass
+   * a single struct instead of a long positional list. Field order matches the
+   * positional microphone() override for a mechanical translation.
+   */
+  struct microphone_params_t {
+    const std::uint8_t *mapping = nullptr;  ///< Opus channel mapping table for the requested layout.
+    int channels = 2;  ///< Number of audio channels in the stream.
+    std::uint32_t sample_rate = 48000;  ///< Audio sample rate in hertz.
+    std::uint32_t frame_size = 0;  ///< Number of samples captured per audio frame.
+    bool continuous_audio = false;  ///< Whether silent audio should continue to be emitted.
+    bool host_audio_enabled = false;  ///< Whether host playback should remain enabled during capture.
+  };
+
+  /**
    * @brief Platform audio controller that manages sinks and microphone capture.
    */
   class audio_control_t {
@@ -943,6 +959,21 @@ namespace platf {
     }
 
     /**
+     * @brief Release the recorded capture target when it still belongs to the caller.
+     *
+     * The default implementation is a no-op so backends without per-process
+     * capture are unchanged. Backends that store a capture target override
+     * this to reset to endpoint capture only when the stored intent and PID
+     * still equal the given ones, so one exiting session cannot wipe another
+     * session's recorded target.
+     *
+     * @param intent Capture intent recorded by the session being torn down.
+     * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
+     */
+    virtual void clear_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
+    }
+
+    /**
      * @brief Create a microphone capture stream for the requested layout.
      *
      * @param mapping Opus channel mapping table for the requested layout.
@@ -954,6 +985,22 @@ namespace platf {
      * @return Microphone capture object for the requested audio layout.
      */
     virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous, [[maybe_unused]] bool host_audio_enabled) = 0;
+
+    /**
+     * @brief Create a microphone capture stream from a parameter bundle.
+     *
+     * Non-virtual convenience wrapper: forwards every field to the positional
+     * microphone() override, so backends keep overriding that form. New code
+     * calls this overload; derived classes that override the positional form
+     * hide it for direct calls, so callers must use a base-class reference or
+     * add a using-declaration.
+     *
+     * @param params Capture parameters forwarded to the positional override.
+     * @return Microphone capture object for the requested audio layout.
+     */
+    std::unique_ptr<mic_t> microphone(const microphone_params_t &params) {
+      return microphone(params.mapping, params.channels, params.sample_rate, params.frame_size, params.continuous_audio, params.host_audio_enabled);
+    }
 
     /**
      * @brief Check if the audio sink is available in the system.

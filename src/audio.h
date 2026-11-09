@@ -13,6 +13,7 @@
 #include <bitset>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -149,6 +150,10 @@ namespace audio {
    * configured: without a swap, applications stay on the host default, so
    * capturing the virtual sink's monitor would yield silence.
    *
+   * The seven positional parameters are an accepted deviation from the bundle
+   * rule: one call site, one pure function, and bundling would only rename the
+   * same seven inputs.
+   *
    * @param keep_default_requested Value of config::audio.keep_default_sink.
    * @param platform_supports_keep_default Value of platf::audio_control_t::supports_keep_default_sink().
    * @param host_audio_enabled Whether host playback stays enabled (Moonlight HOST_AUDIO flag).
@@ -238,6 +243,90 @@ namespace audio {
     }
     return "unknown";
   }
+
+  /**
+   * @brief Select the capture sink for startup without touching the capture target.
+   *
+   * Encodes the swap-vs-capture dispatch used by capture(): the swap path swaps
+   * the host default via set_sink(), the capture-only path captures via
+   * capture_sink(). A swap with nothing to restore skips the sink call entirely
+   * because the target is already the host sink.
+   *
+   * @param control Platform audio controller used for sink selection.
+   * @param routing Startup plan resolved by resolve_capture_routing().
+   * @return True when capture may proceed; false when sink selection failed and the caller must abort.
+   */
+  bool select_audio_capture_sink(platf::audio_control_t &control, const capture_routing_t &routing);
+
+  /**
+   * @brief RAII owner of one session's shared capture target.
+   *
+   * Sessions share one audio control. Every create_microphone() call refreshes
+   * the endpoint target (set_capture_target()) and creates the microphone
+   * under one lock acquisition, so a refresh can never be dropped or
+   * interleaved with another session's refresh. Destruction releases exactly
+   * the last recorded target via clear_capture_target(), or nothing when no
+   * refresh ever ran (for example after an aborted sink selection), so one
+   * session cannot wipe another session's recorded target on its way out.
+   *
+   * The referenced control and mutex must outlive the guard.
+   */
+  class session_capture_target_t {
+  public:
+    /**
+     * @brief Create a guard that owns no target until the first refresh.
+     *
+     * @param control Platform audio controller holding the shared capture target.
+     * @param intent Capture intent resolved from the audio configuration.
+     * @param mutex Serializes refresh, microphone creation, and target release across sessions.
+     */
+    session_capture_target_t(platf::audio_control_t &control, platf::audio_capture_intent_e intent, std::mutex &mutex);
+
+    /**
+     * @brief Destroy the guard, releasing the recorded target when one exists.
+     */
+    ~session_capture_target_t();
+
+    session_capture_target_t(const session_capture_target_t &) = delete;
+    session_capture_target_t &operator=(const session_capture_target_t &) = delete;
+
+    /**
+     * @brief Refresh the endpoint capture target, then create the microphone for it.
+     *
+     * The refresh always runs before microphone creation so a dropped refresh
+     * is observable: set_capture_target() is called on every invocation,
+     * including reinitializations and microphone failures. The lock is held
+     * across the refresh/microphone pair so the shared target cannot change
+     * in between. The endpoint form always records PID 0: per-process capture
+     * is not selected here.
+     *
+     * @param mic_params Microphone capture parameters for the requested layout.
+     * @return Microphone capture object, or nullptr when creation failed.
+     */
+    [[nodiscard]] std::unique_ptr<platf::mic_t> create_microphone(const platf::microphone_params_t &mic_params);
+
+    /**
+     * @brief Get the capture intent owned by this session.
+     * @return Capture intent passed to the constructor.
+     */
+    [[nodiscard]] platf::audio_capture_intent_e intent() const noexcept {
+      return intent_;
+    }
+
+    /**
+     * @brief Check whether this session recorded a target that teardown will release.
+     * @return True after the first create_microphone() call.
+     */
+    [[nodiscard]] bool recorded() const noexcept {
+      return recorded_;
+    }
+
+  private:
+    platf::audio_control_t *control_;  ///< Controller holding the shared capture target.
+    platf::audio_capture_intent_e intent_;  ///< Capture intent recorded by this session.
+    std::mutex *mutex_;  ///< Mutex serializing refresh, creation, and release.
+    bool recorded_ = false;  ///< Whether this session called set_capture_target().
+  };
 
   /**
    * @brief Byte buffer used for encoded audio packet payloads.

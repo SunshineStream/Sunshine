@@ -4,6 +4,7 @@
  */
 // standard includes
 #include <array>
+#include <mutex>
 #include <thread>
 
 // lib includes
@@ -32,6 +33,17 @@ namespace audio {
   static int start_audio_control(audio_ctx_t &ctx);
   static void stop_audio_control(audio_ctx_t &);
   static void apply_surround_params(opus_stream_config_t &stream, const stream_params_t &params);
+
+  /**
+   * @brief Serializes capture-target refresh, microphone creation, and target release across concurrent sessions.
+   *
+   * All capture() threads share one audio control. Each session's
+   * session_capture_target_t guard holds this mutex across every
+   * refresh/microphone pair (and across the exit clear), which keeps one
+   * session from resetting the shared target between another session's
+   * refresh and microphone creation.
+   */
+  static std::mutex capture_target_mutex;
 
   /**
    * @brief Select the Opus stream configuration for a channel count and quality tier.
@@ -153,7 +165,68 @@ namespace audio {
   }
 
   /**
+   * @brief Select the capture sink for startup without touching the capture target.
+   *
+   * @param control Platform audio controller used for sink selection.
+   * @param routing Startup plan resolved by resolve_capture_routing().
+   * @return True when capture may proceed; false when sink selection failed and the caller must abort.
+   */
+  bool select_audio_capture_sink(platf::audio_control_t &control, const capture_routing_t &routing) {
+    if (routing.swap_at_startup) {
+      // The target is already the host sink when there is nothing to restore,
+      // so the swap is skipped entirely instead of reasserting the default.
+      if (routing.restore_at_teardown && control.set_sink(routing.target)) {
+        return false;
+      }
+    } else if (control.capture_sink(routing.target)) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Create a guard that owns no target until the first refresh.
+   */
+  session_capture_target_t::session_capture_target_t(platf::audio_control_t &control, platf::audio_capture_intent_e intent, std::mutex &mutex):
+      control_ {&control},
+      intent_ {intent},
+      mutex_ {&mutex} {
+  }
+
+  /**
+   * @brief Destroy the guard, releasing the recorded target when one exists.
+   */
+  session_capture_target_t::~session_capture_target_t() {
+    if (!recorded_) {
+      return;
+    }
+    std::lock_guard lock {*mutex_};
+    control_->clear_capture_target(intent_, 0);
+  }
+
+  /**
+   * @brief Refresh the endpoint capture target, then create the microphone for it.
+   */
+  std::unique_ptr<platf::mic_t> session_capture_target_t::create_microphone(const platf::microphone_params_t &mic_params) {
+    // Refresh the endpoint target before every microphone creation. The lock
+    // covers the refresh/microphone pair, and the refresh is recorded even
+    // when microphone creation fails so teardown still releases this
+    // session's target.
+    std::lock_guard lock {*mutex_};
+    control_->set_capture_target(intent_, 0);
+    recorded_ = true;
+    return control_->microphone(mic_params);
+  }
+
+  /**
    * @brief Run the capture loop for this backend.
+   *
+   * Sessions share one audio control: sink selection runs through
+   * select_audio_capture_sink(), the restore flag is assigned directly from
+   * the resolved routing, and one session_capture_target_t guard owns the
+   * shared target for the session. Both microphone call sites (startup and
+   * reinitialization) are the same single guard call, and guard destruction
+   * releases the shared target only when a refresh ran.
    */
   void capture(safe::mail_t mail, config_t config, stream::session_t *channel_data) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
@@ -186,6 +259,11 @@ namespace audio {
 
     const auto capture_intent = resolve_audio_capture_intent(config::audio.keep_default_sink, config::audio.sink);
 
+    // One RAII owner for the session's shared capture target. Destruction
+    // releases exactly the last recorded target, or nothing when no refresh
+    // ran, so one session cannot wipe another session's recorded target.
+    session_capture_target_t capture_target {*control, capture_intent, capture_target_mutex};
+
     // Only the first to start a session may change the default sink
     if (!ref->sink_flag->exchange(true, std::memory_order_acquire)) {
       // One decision point for swap-vs-capture: the recorded restore flag keeps
@@ -207,12 +285,8 @@ namespace audio {
                       << "], keep_default_sink requested ["sv << config::audio.keep_default_sink
                       << "], keep_default_sink supported ["sv << control->supports_keep_default_sink()
                       << "], capture intent ["sv << audio_capture_intent_name(capture_intent) << ']';
-      if (routing.swap_at_startup) {
-        // If the selected sink is different than the current one, change sinks.
-        if (ref->restore_sink && control->set_sink(routing.target)) {
-          return;
-        }
-      } else if (control->capture_sink(routing.target)) {
+      // If the selected sink cannot be selected, there is no audio to capture.
+      if (!select_audio_capture_sink(*control, routing)) {
         return;
       }
     }
@@ -220,7 +294,15 @@ namespace audio {
     auto frame_size = config.packetDuration * stream.sampleRate / 1000;
     bool host_audio = config.flags[config_t::HOST_AUDIO];
     bool continuous_audio = config.flags[config_t::CONTINUOUS_AUDIO];
-    auto mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size, continuous_audio, host_audio);
+    const platf::microphone_params_t mic_params {
+      stream.mapping,
+      stream.channelCount,
+      static_cast<std::uint32_t>(stream.sampleRate),
+      static_cast<std::uint32_t>(frame_size),
+      continuous_audio,
+      host_audio
+    };
+    auto mic = capture_target.create_microphone(mic_params);
     if (!mic) {
       return;
     }
@@ -257,7 +339,7 @@ namespace audio {
           BOOST_LOG(info) << "Reinitializing audio capture"sv;
           mic.reset();
           do {
-            mic = control->microphone(stream.mapping, stream.channelCount, stream.sampleRate, frame_size, continuous_audio, host_audio);
+            mic = capture_target.create_microphone(mic_params);
             if (!mic) {
               BOOST_LOG(warning) << "Couldn't re-initialize audio input"sv;
             }

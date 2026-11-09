@@ -6,6 +6,11 @@
 // test includes
 #include "../tests_common.h"
 
+// standard includes
+#include <mutex>
+#include <string>
+#include <vector>
+
 // local includes
 #include <src/audio.h>
 #include <src/config.h>
@@ -277,6 +282,13 @@ namespace {
   };
 }  // namespace
 
+/**
+ * @brief A backend that never learned keep-default must keep swap-and-restore.
+ *
+ * Fail-without-fix: if the capture_sink() default stops delegating to
+ * set_sink(), legacy backends silently capture nothing (returning success
+ * while selecting no sink) instead of taking the historical swap path.
+ */
 TEST(AudioControlAdapterTest, LegacyBackendKeepsSwapBehavior) {
   legacy_audio_control_t control;
   EXPECT_FALSE(control.supports_keep_default_sink());
@@ -284,11 +296,31 @@ TEST(AudioControlAdapterTest, LegacyBackendKeepsSwapBehavior) {
   EXPECT_TRUE(control.set_sink_called);
 }
 
+/**
+ * @brief Recording a capture target must be a safe no-op on legacy backends.
+ *
+ * Fail-without-fix: if the set_capture_target() default gains behavior (or
+ * crashes on backends without target storage), every legacy session breaks,
+ * since the guard refreshes unconditionally before microphone creation.
+ */
 TEST(AudioControlAdapterTest, DefaultCaptureTargetSetterIsNoOp) {
   legacy_audio_control_t control;
-  // Recording a capture target must be a safe no-op on legacy backends.
   control.set_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
   control.set_capture_target(platf::audio_capture_intent_e::client_only, 0);
+  EXPECT_FALSE(control.set_sink_called);
+}
+
+/**
+ * @brief Releasing a capture target must be a safe no-op on legacy backends.
+ *
+ * Fail-without-fix: if the clear_capture_target() default gains behavior (or
+ * crashes on backends without target storage), every legacy session teardown
+ * breaks, since the guard releases unconditionally when a target was recorded.
+ */
+TEST(AudioControlAdapterTest, DefaultCaptureTargetClearIsNoOp) {
+  legacy_audio_control_t control;
+  control.clear_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
+  control.clear_capture_target(platf::audio_capture_intent_e::client_only, 0);
   EXPECT_FALSE(control.set_sink_called);
 }
 
@@ -408,4 +440,442 @@ TEST(SinkAvailabilityProbeTest, UnsupportedBackendProbesHostSink) {
 
   EXPECT_TRUE(is_audio_ctx_sink_available(ctx));
   EXPECT_EQ(probed->probed_sink, "hw-default");
+}
+
+namespace {
+  /**
+   * @brief Microphone stub that never blocks the capture loop.
+   */
+  class stub_mic_t: public platf::mic_t {
+  public:
+    /**
+     * @brief Report a timeout instead of delivering samples.
+     * @param frame_buffer Destination for captured samples, left untouched.
+     * @return Timeout status so the capture loop keeps polling.
+     */
+    platf::capture_e sample(std::vector<float> &frame_buffer) override {
+      (void) frame_buffer;
+      return platf::capture_e::timeout;
+    }
+  };
+
+  /**
+   * @brief Backend that records the capture() orchestration calls for verification.
+   */
+  class recording_audio_control_t: public platf::audio_control_t {
+  public:
+    int set_sink(const std::string &sink) override {
+      calls.push_back("set_sink:" + sink);
+      return set_sink_status;
+    }
+
+    bool supports_keep_default_sink() const override {
+      return supports_keep;
+    }
+
+    int capture_sink(const std::string &sink) override {
+      calls.push_back("capture_sink:" + sink);
+      return capture_sink_status;
+    }
+
+    /**
+     * @brief Record the refreshed capture target.
+     * @param intent Capture intent resolved from the audio configuration.
+     * @param process_id Operating-system PID to capture, or 0 for endpoint capture.
+     */
+    void set_capture_target(platf::audio_capture_intent_e intent, std::uint32_t process_id) override {
+      calls.emplace_back("set_capture_target");
+      set_intent = intent;
+      set_process_id = process_id;
+    }
+
+    /**
+     * @brief Record the released capture target.
+     * @param intent Capture intent recorded by the session being torn down.
+     * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
+     */
+    void clear_capture_target(platf::audio_capture_intent_e intent, std::uint32_t process_id) override {
+      calls.emplace_back("clear_capture_target");
+      clear_intent = intent;
+      clear_process_id = process_id;
+    }
+
+    std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, bool host_audio_enabled) override {
+      calls.emplace_back("microphone");
+      mic_mapping = mapping;
+      mic_channels = channels;
+      mic_sample_rate = sample_rate;
+      mic_frame_size = frame_size;
+      mic_continuous_audio = continuous_audio;
+      mic_host_audio_enabled = host_audio_enabled;
+      if (fail_microphone) {
+        return nullptr;
+      }
+      return std::make_unique<stub_mic_t>();
+    }
+
+    bool is_sink_available(const std::string &) override {
+      return true;
+    }
+
+    std::optional<platf::sink_t> sink_info() override {
+      return std::nullopt;
+    }
+
+    /**
+     * @brief Find the position of a recorded call in the call sequence.
+     * @param prefix Call name prefix to search for.
+     * @return Index of the first matching call, or calls.size() when absent.
+     */
+    std::size_t call_index(const std::string &prefix) const {
+      for (std::size_t i = 0; i < calls.size(); ++i) {
+        if (calls[i].compare(0, prefix.size(), prefix) == 0) {
+          return i;
+        }
+      }
+      return calls.size();
+    }
+
+    bool supports_keep = true;  ///< Whether capture_sink() is supported without swapping.
+    int set_sink_status = 0;  ///< Status returned by set_sink().
+    int capture_sink_status = 0;  ///< Status returned by capture_sink().
+    bool fail_microphone = false;  ///< Whether microphone() returns nullptr.
+    std::vector<std::string> calls;  ///< Recorded call sequence in invocation order.
+    platf::audio_capture_intent_e set_intent = platf::audio_capture_intent_e::client_only;  ///< Intent from the last refresh.
+    std::uint32_t set_process_id = 0;  ///< PID from the last refresh.
+    platf::audio_capture_intent_e clear_intent = platf::audio_capture_intent_e::client_only;  ///< Intent from the last release.
+    std::uint32_t clear_process_id = 0;  ///< PID from the last release.
+    const std::uint8_t *mic_mapping = nullptr;  ///< Mapping from the last microphone() call.
+    int mic_channels = 0;  ///< Channels from the last microphone() call.
+    std::uint32_t mic_sample_rate = 0;  ///< Sample rate from the last microphone() call.
+    std::uint32_t mic_frame_size = 0;  ///< Frame size from the last microphone() call.
+    bool mic_continuous_audio = false;  ///< Continuous flag from the last microphone() call.
+    bool mic_host_audio_enabled = false;  ///< Host-audio flag from the last microphone() call.
+  };
+
+  /**
+   * @brief Build a capture-only routing that never swaps the host default.
+   * @return Startup plan targeting the saved host sink.
+   */
+  capture_routing_t make_capture_routing() {
+    return resolve_capture_routing(true, true, false, 2, "hw-default", "", std::nullopt);
+  }
+
+  /**
+   * @brief Build a swap routing that swaps to the virtual sink and restores it.
+   * @return Startup plan targeting the virtual stereo sink.
+   */
+  capture_routing_t make_swap_routing() {
+    return resolve_capture_routing(false, true, false, 2, "hw-default", "", test_null_sinks());
+  }
+
+  /**
+   * @brief Build a swap routing with nothing to restore.
+   * @return Startup plan targeting the host sink it already points at.
+   */
+  capture_routing_t make_swap_without_restore_routing() {
+    return resolve_capture_routing(false, true, false, 2, "hw-default", "", std::nullopt);
+  }
+
+  /**
+   * @brief Build microphone parameters matching the stereo test layout.
+   * @return Capture parameters for a 5 ms stereo frame at 48 kHz.
+   */
+  platf::microphone_params_t make_mic_params() {
+    platf::microphone_params_t params {};
+    params.mapping = nullptr;
+    params.channels = 2;
+    params.sample_rate = 48000;
+    params.frame_size = 240;
+    params.continuous_audio = false;
+    params.host_audio_enabled = false;
+    return params;
+  }
+}  // namespace
+
+/**
+ * @brief The capture-only path must capture without swapping the host default.
+ *
+ * Fail-without-fix: if the dispatch branches swap, a keep-default session
+ * calls set_sink() and steals the host default it promised to leave alone;
+ * the missing capture_sink() call below is that regression.
+ */
+TEST(CaptureSinkDispatchTest, CapturePathUsesCaptureSink) {
+  recording_audio_control_t control;
+  const auto routing = make_capture_routing();
+  ASSERT_FALSE(routing.swap_at_startup);
+
+  EXPECT_TRUE(select_audio_capture_sink(control, routing));
+  EXPECT_EQ(control.call_index("capture_sink:hw-default"), 0U);
+  EXPECT_EQ(control.call_index("set_sink"), control.calls.size());
+}
+
+/**
+ * @brief A failed capture-only selection must abort before any refresh.
+ *
+ * Fail-without-fix: if select_audio_capture_sink() returns true on a
+ * capture_sink() failure, capture() proceeds to refresh and microphone
+ * creation against a sink that was never selected, capturing silence (or the
+ * wrong endpoint) instead of aborting startup.
+ */
+TEST(CaptureSinkDispatchTest, CaptureFailureAbortsStartup) {
+  recording_audio_control_t control;
+  control.capture_sink_status = -1;
+
+  EXPECT_FALSE(select_audio_capture_sink(control, make_capture_routing()));
+  EXPECT_EQ(control.call_index("set_sink"), control.calls.size());
+  EXPECT_EQ(control.call_index("set_capture_target"), control.calls.size());
+}
+
+/**
+ * @brief The swap path must swap the host default instead of capturing.
+ *
+ * Fail-without-fix: if the dispatch branches swap, a quiet-streaming session
+ * calls capture_sink() and never moves applications onto the virtual sink, so
+ * the host keeps playing aloud while the client captures the wrong endpoint.
+ */
+TEST(CaptureSinkDispatchTest, SwapPathUsesSetSink) {
+  recording_audio_control_t control;
+  const auto routing = make_swap_routing();
+  ASSERT_TRUE(routing.swap_at_startup);
+  ASSERT_TRUE(routing.restore_at_teardown);
+
+  EXPECT_TRUE(select_audio_capture_sink(control, routing));
+  EXPECT_EQ(control.call_index("set_sink:" + routing.target), 0U);
+  EXPECT_EQ(control.call_index("capture_sink"), control.calls.size());
+}
+
+/**
+ * @brief A failed swap must abort before any refresh.
+ *
+ * Fail-without-fix: if select_audio_capture_sink() returns true on a
+ * set_sink() failure, capture() records a restore flag for a swap that never
+ * happened and then captures the unswapped default, stranding teardown
+ * symmetry and streaming the wrong source.
+ */
+TEST(CaptureSinkDispatchTest, SwapFailureAbortsStartup) {
+  recording_audio_control_t control;
+  control.set_sink_status = -1;
+
+  EXPECT_FALSE(select_audio_capture_sink(control, make_swap_routing()));
+  EXPECT_EQ(control.call_index("capture_sink"), control.calls.size());
+  EXPECT_EQ(control.call_index("set_capture_target"), control.calls.size());
+}
+
+/**
+ * @brief A swap with nothing to restore must skip the sink call entirely.
+ *
+ * Fail-without-fix: if the no-restore skip is dropped, startup reasserts the
+ * host default as a swap even though the target already is the host sink,
+ * needlessly disturbing routing (and any default-device watchers) for a no-op.
+ */
+TEST(CaptureSinkDispatchTest, SwapWithoutRestoreSkipsSinkCall) {
+  recording_audio_control_t control;
+  const auto routing = make_swap_without_restore_routing();
+  ASSERT_TRUE(routing.swap_at_startup);
+  ASSERT_FALSE(routing.restore_at_teardown);
+
+  EXPECT_TRUE(select_audio_capture_sink(control, routing));
+  EXPECT_TRUE(control.calls.empty());
+}
+
+/**
+ * @brief The endpoint target must be recorded ahead of microphone creation.
+ *
+ * Fail-without-fix: if the guard skips the refresh (or creates the microphone
+ * first), the backend captures a stale target from a previous session instead
+ * of this session's intent, and the set-before-microphone ordering below breaks.
+ */
+TEST(CaptureRefreshTest, EndpointTargetIsRecordedBeforeMicrophone) {
+  recording_audio_control_t control;
+  std::mutex mutex;
+  session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+
+  auto mic = target.create_microphone(make_mic_params());
+
+  EXPECT_TRUE(static_cast<bool>(mic));
+  EXPECT_TRUE(target.recorded());
+  EXPECT_EQ(control.set_intent, platf::audio_capture_intent_e::host_and_client);
+  EXPECT_EQ(control.set_process_id, 0u);
+  EXPECT_LT(control.call_index("set_capture_target"), control.call_index("microphone"));
+}
+
+/**
+ * @brief Endpoint capture must record PID 0 for every intent.
+ *
+ * Fail-without-fix: if the guard records anything but the endpoint target,
+ * a session captures a process it never selected instead of the endpoint,
+ * defeating silence or the configured sink pin.
+ */
+TEST(CaptureRefreshTest, EndpointCasesRecordZeroPid) {
+  using intent = platf::audio_capture_intent_e;
+
+  for (const auto case_intent : {intent::host_and_client, intent::client_only, intent::pinned_sink}) {
+    recording_audio_control_t control;
+    std::mutex mutex;
+    session_capture_target_t target {control, case_intent, mutex};
+
+    auto mic = target.create_microphone(make_mic_params());
+
+    EXPECT_TRUE(static_cast<bool>(mic));
+    EXPECT_TRUE(target.recorded());
+    EXPECT_EQ(control.set_process_id, 0u);
+    EXPECT_EQ(control.set_intent, case_intent);
+    EXPECT_LT(control.call_index("set_capture_target"), control.call_index("microphone"));
+  }
+}
+
+/**
+ * @brief A microphone failure must still leave the refreshed target behind for teardown.
+ *
+ * Fail-without-fix: if the guard only records the target on microphone
+ * success, a failed creation leaks the shared target (no teardown release
+ * ever runs for it) and the next session inherits a target this session
+ * recorded but never owned.
+ */
+TEST(CaptureRefreshTest, MicrophoneFailureStillRecordsTarget) {
+  recording_audio_control_t control;
+  control.fail_microphone = true;
+  std::mutex mutex;
+
+  {
+    session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+
+    EXPECT_FALSE(static_cast<bool>(target.create_microphone(make_mic_params())));
+    EXPECT_TRUE(target.recorded());
+    EXPECT_EQ(control.set_process_id, 0u);
+  }
+
+  // The failed refresh still owns a target, so scope exit must release it.
+  EXPECT_EQ(control.clear_intent, platf::audio_capture_intent_e::host_and_client);
+  EXPECT_EQ(control.clear_process_id, 0u);
+}
+
+/**
+ * @brief The restore flag must follow the routing decision in both modes.
+ *
+ * capture() assigns routing.restore_at_teardown directly, so this pins the
+ * decision values that flow into that assignment, including the
+ * swap-without-restore edge.
+ *
+ * Fail-without-fix: if the capture-only routing ever reports restore=true,
+ * teardown restores a sink that was never swapped, yanking the user's live
+ * default; if the swap routing reports restore=false, teardown strands the
+ * virtual sink as the host default after the stream ends.
+ */
+TEST(CaptureRestoreTest, RecordsRoutingRestoreDecision) {
+  audio_ctx_t ctx {};
+  ctx.restore_sink = true;
+  ctx.restore_sink = make_capture_routing().restore_at_teardown;
+  EXPECT_FALSE(ctx.restore_sink);
+
+  ctx.restore_sink = make_swap_routing().restore_at_teardown;
+  EXPECT_TRUE(ctx.restore_sink);
+
+  ctx.restore_sink = make_swap_without_restore_routing().restore_at_teardown;
+  EXPECT_FALSE(ctx.restore_sink);
+}
+
+/**
+ * @brief Teardown without a refresh must leave the shared target untouched.
+ *
+ * Fail-without-fix: if the guard clears unconditionally, a session that
+ * aborted before any refresh (for example a failed sink selection) wipes a
+ * survivor session's live target on its way out.
+ */
+TEST(CaptureReleaseTest, SkipsClearWhenNothingRecorded) {
+  recording_audio_control_t control;
+  std::mutex mutex;
+
+  {
+    session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+    EXPECT_FALSE(target.recorded());
+  }
+
+  EXPECT_TRUE(control.calls.empty());
+}
+
+/**
+ * @brief Teardown after a refresh must release exactly the recorded target.
+ *
+ * Fail-without-fix: if the guard releases a stale target instead of the last
+ * recorded one, the backend keeps the dead session's target (leaking capture
+ * state) or wipes a survivor's newer target.
+ */
+TEST(CaptureReleaseTest, ClearsRecordedTarget) {
+  recording_audio_control_t control;
+  std::mutex mutex;
+
+  {
+    session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+    auto mic = target.create_microphone(make_mic_params());
+    ASSERT_TRUE(static_cast<bool>(mic));
+    // Release lands on scope exit, so only the refresh and creation run here.
+    ASSERT_EQ(control.calls.size(), 2U);
+  }
+
+  ASSERT_EQ(control.calls.size(), 3U);
+  EXPECT_EQ(control.calls[2], "clear_capture_target");
+  EXPECT_EQ(control.clear_intent, platf::audio_capture_intent_e::host_and_client);
+  EXPECT_EQ(control.clear_process_id, 0u);
+}
+
+/**
+ * @brief The startup sequence must dispatch, refresh, create, and release in order.
+ *
+ * Fail-without-fix: a dispatch-branch swap shows up as the wrong sink call
+ * here, a dropped refresh as a missing set_capture_target before microphone(),
+ * and a leaked guard as a missing trailing clear_capture_target.
+ */
+TEST(CaptureOrchestrationTest, StartupSequenceRunsDispatchRefreshCreateAndRelease) {
+  for (const auto &routing : {make_capture_routing(), make_swap_routing()}) {
+    recording_audio_control_t control;
+    std::mutex mutex;
+    audio_ctx_t ctx {};
+
+    {
+      session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+
+      ctx.restore_sink = routing.restore_at_teardown;
+      EXPECT_EQ(ctx.restore_sink, routing.restore_at_teardown);
+      ASSERT_TRUE(select_audio_capture_sink(control, routing));
+      auto mic = target.create_microphone(make_mic_params());
+      ASSERT_TRUE(static_cast<bool>(mic));
+      ASSERT_EQ(control.calls.size(), 3U);
+    }
+
+    const std::string expected_sink_call = routing.swap_at_startup ? "set_sink:" + routing.target : "capture_sink:" + routing.target;
+    ASSERT_EQ(control.calls.size(), 4U);
+    EXPECT_EQ(control.calls[0], expected_sink_call);
+    EXPECT_EQ(control.calls[1], "set_capture_target");
+    EXPECT_EQ(control.calls[2], "microphone");
+    EXPECT_EQ(control.calls[3], "clear_capture_target");
+    EXPECT_EQ(control.clear_process_id, 0u);
+  }
+}
+
+/**
+ * @brief The parameter-bundle microphone() must forward every field to the positional override.
+ *
+ * Fail-without-fix: if the forwarding overload drops, reorders, or mistypes a
+ * field, backends capture the wrong layout (channels, rate, frame size) or the
+ * wrong mode (continuous, host audio) while the call still succeeds.
+ */
+TEST(AudioControlAdapterTest, StructMicrophoneForwardsEveryField) {
+  recording_audio_control_t control;
+  platf::audio_control_t &base = control;
+  const std::uint8_t mapping[] = {0, 1, 4, 5, 2, 3};
+  const platf::microphone_params_t params {mapping, 6, 48000, 480, true, true};
+
+  auto mic = base.microphone(params);
+
+  EXPECT_TRUE(static_cast<bool>(mic));
+  ASSERT_EQ(control.calls.size(), 1U);
+  EXPECT_EQ(control.calls[0], "microphone");
+  EXPECT_EQ(control.mic_mapping, mapping);
+  EXPECT_EQ(control.mic_channels, 6);
+  EXPECT_EQ(control.mic_sample_rate, 48000u);
+  EXPECT_EQ(control.mic_frame_size, 480u);
+  EXPECT_TRUE(control.mic_continuous_audio);
+  EXPECT_TRUE(control.mic_host_audio_enabled);
 }
