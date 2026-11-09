@@ -878,19 +878,17 @@ namespace platf::audio {
     std::optional<sink_t> sink_info() override {
       sink_t sink;
 
-      if (config::audio.external_audio) {
-        if (config::audio.sink.empty()) {
-          BOOST_LOG(error) << "external_audio requires an explicit audio_sink";
-          return std::nullopt;
-        }
-        sink.host = config::audio.sink;
-        return sink;
-      }
-
       // Fill host sink name with the device_id of the current default audio device.
       {
         auto device = default_device(device_enum);
         if (!device) {
+          // Keep-default with a configured sink does not need a default: capture that
+          // endpoint directly, but only when it resolves to an active device right now.
+          if (config::audio.keep_default_sink && !config::audio.sink.empty() && get_sink_device(config::audio.sink)) {
+            BOOST_LOG(warning) << "No default audio device available; capturing configured sink ["sv << config::audio.sink << ']';
+            sink.host = config::audio.sink;
+            return sink;
+          }
           return std::nullopt;
         }
 
@@ -898,6 +896,11 @@ namespace platf::audio {
         device->GetId(&id);
 
         sink.host = utf_utils::to_utf8(id.get());
+      }
+
+      // Keep-default routing never selects the virtual sink, so skip its discovery.
+      if (config::audio.keep_default_sink) {
+        return sink;
       }
 
       // Prepare to search for the device_id of the virtual audio sink device,
@@ -1001,14 +1004,11 @@ namespace platf::audio {
      */
     std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, [[maybe_unused]] bool host_audio_enabled) override {
       auto mic = std::make_unique<mic_wasapi_t>();
+        }
 
-      // External routing pins capture to the configured sink; otherwise prefer the session's assigned sink.
-      const auto &requested_sink = config::audio.external_audio || assigned_sink.empty() ? config::audio.sink : assigned_sink;
 
-      if (config::audio.external_audio && requested_sink.empty()) {
-        BOOST_LOG(error) << "external_audio requires an explicit audio_sink";
-        return nullptr;
-      }
+      // Prefer the session's assigned sink; otherwise use the configured sink.
+      const auto &requested_sink = assigned_sink.empty() ? config::audio.sink : assigned_sink;
 
       // Capture the requested sink directly instead of relying on it being the default
       // render device, so that capture keeps working when the default device differs
@@ -1117,7 +1117,9 @@ namespace platf::audio {
      * @return Status from updating sink.
      */
     int set_sink(const std::string &sink) override {
-      if (config::audio.external_audio) {
+      if (config::audio.keep_default_sink) {
+        // Keep-default never swaps the host default; capture follows the recorded endpoint.
+        assigned_sink = sink;
         return 0;
       }
 
@@ -1185,8 +1187,7 @@ namespace platf::audio {
      * @return True when the reassertion callback may be installed.
      */
     bool should_install_default_callback(const std::string &sink) {
-      return static_cast<bool>(extract_virtual_sink_info(sink)) && !config::audio.external_audio &&
-             !config::audio.keep_default_sink;
+      return static_cast<bool>(extract_virtual_sink_info(sink)) && !config::audio.keep_default_sink;
     }
 
     /**
@@ -1195,7 +1196,7 @@ namespace platf::audio {
      * @return False in hands-off modes that never touch the host default.
      */
     bool should_reset_default_device() {
-      return !config::audio.external_audio && !config::audio.keep_default_sink;
+      return !config::audio.keep_default_sink;
     }
 
     /**
@@ -1207,7 +1208,7 @@ namespace platf::audio {
      * @return False in hands-off modes that never touch the host audio graph.
      */
     bool should_install_steam_drivers() {
-      return !config::audio.external_audio && !config::audio.keep_default_sink && config::audio.install_steam_drivers;
+      return !config::audio.keep_default_sink && config::audio.install_steam_drivers;
     }
 
     /**
@@ -1476,7 +1477,7 @@ namespace platf::audio {
      */
     template<typename CreateInstance = decltype(&CoCreateInstance)>
     int init(const CreateInstance &create_instance = &CoCreateInstance) {
-      if (!config::audio.external_audio) {
+      if (!config::audio.keep_default_sink) {
         auto status = create_instance(
           CLSID_CPolicyConfigClient,
           nullptr,
@@ -1550,20 +1551,11 @@ namespace platf::audio {
     }
 
     /**
-     * @brief Exercise sink discovery without initializing Windows policy interfaces.
-     * @return Sinks reported by the production controller for the current configuration.
-     */
-    std::optional<sink_t> configured_sink_info() {
-      audio_control_t control;
-      return control.sink_info();
-    }
-
-    /**
-     * @brief Exercise the external-routing sink-change guard without policy interfaces.
+     * @brief Exercise the keep-default sink-change guard without policy interfaces.
      * @param sink Sink a caller attempts to select.
      * @return Status from the production sink setter.
      */
-    int set_external_sink(const std::string &sink) {
+    int set_keep_default_sink(const std::string &sink) {
       audio_control_t control;
       control.reset_default_device();
       return control.set_sink(sink);
@@ -1593,53 +1585,44 @@ namespace platf::audio {
     }
 
     /**
-     * @brief Exercise the default-callback guard with controlled hands-off modes.
+     * @brief Exercise the default-callback guard with a controlled keep-default mode.
      * @param sink Assigned sink name that would be reinstalled.
      * @param keep_default keep_default_sink value to test with.
-     * @param external_audio external_audio value to test with.
      * @return True when the production guard installs the reassertion callback.
      */
-    bool installs_default_callback(const std::string &sink, bool keep_default, bool external_audio) {
+    bool installs_default_callback(const std::string &sink, bool keep_default) {
       audio_control_t control;
       auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
-      auto previous_external = std::exchange(config::audio.external_audio, external_audio);
       bool installed = control.should_install_default_callback(sink);
       config::audio.keep_default_sink = previous_keep;
-      config::audio.external_audio = previous_external;
       return installed;
     }
 
     /**
-     * @brief Exercise the startup-reset guard with controlled hands-off modes.
+     * @brief Exercise the startup-reset guard with a controlled keep-default mode.
      * @param keep_default keep_default_sink value to test with.
-     * @param external_audio external_audio value to test with.
      * @return True when the production guard permits resetting the default device.
      */
-    bool resets_default_device(bool keep_default, bool external_audio) {
+    bool resets_default_device(bool keep_default) {
       audio_control_t control;
       auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
-      auto previous_external = std::exchange(config::audio.external_audio, external_audio);
       bool resets = control.should_reset_default_device();
       config::audio.keep_default_sink = previous_keep;
-      config::audio.external_audio = previous_external;
       return resets;
     }
 
     /**
-     * @brief Exercise the driver-install guard with controlled hands-off modes.
+     * @brief Exercise the driver-install guard with a controlled keep-default mode.
      * @param keep_default keep_default_sink value to test with.
-     * @param external_audio external_audio value to test with.
      * @param install_requested install_steam_drivers value to test with.
      * @return True when the production guard permits installing the Steam drivers.
      */
-    bool installs_steam_drivers(bool keep_default, bool external_audio, bool install_requested) {
+    bool installs_steam_drivers(bool keep_default, bool install_requested) {
       audio_control_t control;
       auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
-      auto previous_external = std::exchange(config::audio.external_audio, external_audio);
       auto previous_install = std::exchange(config::audio.install_steam_drivers, install_requested);
       bool installs = control.should_install_steam_drivers();
       config::audio.keep_default_sink = previous_keep;
-      config::audio.external_audio = previous_external;
       config::audio.install_steam_drivers = previous_install;
       return installs;
     }
@@ -1668,6 +1651,19 @@ namespace platf::audio {
       device_enum->AddRef();
       control.device_enum.reset(device_enum);
       return static_cast<bool>(control.get_sink_device(sink));
+    }
+
+    /**
+     * @brief Report host and virtual sinks through the production discovery path.
+     *
+     * @param device_enum Device enumerator supplied by the test.
+     * @return Sinks reported for the current configuration, when any.
+     */
+    std::optional<sink_t> reported_sinks(IMMDeviceEnumerator *device_enum) {
+      audio_control_t control;
+      device_enum->AddRef();
+      control.device_enum.reset(device_enum);
+      return control.sink_info();
     }
 
     /**

@@ -8,6 +8,7 @@
 
 // local includes
 #include <src/audio.h>
+#include <src/config.h>
 #include <src/rtsp.h>
 #include <src/stream.h>
 
@@ -199,6 +200,12 @@ TEST(CaptureRoutingTest, SwapPathKeepsVirtualSinkSelection) {
   EXPECT_TRUE(configured.restore_at_teardown);
   EXPECT_EQ(configured.target, "eq-sink");
 
+  // An explicit audio_sink pin beats the virtual sink even when host playback is off.
+  const auto configured_muted = resolve_capture_routing(false, true, false, 2, "hw-default", "eq-sink", test_null_sinks());
+  EXPECT_TRUE(configured_muted.swap_at_startup);
+  EXPECT_TRUE(configured_muted.restore_at_teardown);
+  EXPECT_EQ(configured_muted.target, "eq-sink");
+
   // Legacy backends take the swap path even when keep-default is requested.
   const auto legacy = resolve_capture_routing(true, false, false, 2, "hw-default", "", test_null_sinks());
   EXPECT_TRUE(legacy.swap_at_startup);
@@ -220,6 +227,27 @@ TEST(CaptureRoutingTest, FallsBackToHostWithoutVirtualSinks) {
   EXPECT_TRUE(swap.swap_at_startup);
   EXPECT_FALSE(swap.restore_at_teardown);
   EXPECT_EQ(swap.target, "hw-default");
+}
+
+/**
+ * @brief The shared intent must map the three UI choices onto config state.
+ */
+TEST(AudioCaptureIntentTest, ResolvesIntentFromConfig) {
+  using intent = platf::audio_capture_intent_e;
+  EXPECT_EQ(resolve_audio_capture_intent(false, ""), intent::client_only);
+  EXPECT_EQ(resolve_audio_capture_intent(true, ""), intent::host_and_client);
+  EXPECT_EQ(resolve_audio_capture_intent(false, "eq-sink"), intent::pinned_sink);
+  EXPECT_EQ(resolve_audio_capture_intent(true, "eq-sink"), intent::pinned_sink);
+}
+
+/**
+ * @brief Intent names must stay stable for the capture-mode log line.
+ */
+TEST(AudioCaptureIntentTest, NamesEveryIntent) {
+  using intent = platf::audio_capture_intent_e;
+  EXPECT_EQ(audio_capture_intent_name(intent::client_only), "client_only");
+  EXPECT_EQ(audio_capture_intent_name(intent::host_and_client), "host_and_client");
+  EXPECT_EQ(audio_capture_intent_name(intent::pinned_sink), "pinned_sink");
 }
 
 namespace {
@@ -254,4 +282,130 @@ TEST(AudioControlAdapterTest, LegacyBackendKeepsSwapBehavior) {
   EXPECT_FALSE(control.supports_keep_default_sink());
   EXPECT_EQ(control.capture_sink("any-sink"), 0);
   EXPECT_TRUE(control.set_sink_called);
+}
+
+TEST(AudioControlAdapterTest, DefaultCaptureTargetSetterIsNoOp) {
+  legacy_audio_control_t control;
+  // Recording a capture target must be a safe no-op on legacy backends.
+  control.set_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
+  control.set_capture_target(platf::audio_capture_intent_e::client_only, 0);
+  EXPECT_FALSE(control.set_sink_called);
+}
+
+namespace {
+  /**
+   * @brief Backend that records which sink the availability probe checks.
+   */
+  class probe_audio_control_t: public platf::audio_control_t {
+  public:
+    /**
+     * @brief Create a probe backend with a controlled keep-default capability.
+     * @param supports_keep Whether capture_sink() is supported without swapping.
+     */
+    explicit probe_audio_control_t(bool supports_keep):
+        supports_keep {supports_keep} {
+    }
+
+    int set_sink(const std::string &) override {
+      return 0;
+    }
+
+    std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
+      return nullptr;
+    }
+
+    bool is_sink_available(const std::string &sink) override {
+      probed_sink = sink;
+      return true;
+    }
+
+    std::optional<platf::sink_t> sink_info() override {
+      return std::nullopt;
+    }
+
+    bool supports_keep_default_sink() const override {
+      return supports_keep;
+    }
+
+    bool supports_keep;  ///< Whether this backend supports keep-default capture.
+    std::string probed_sink;  ///< Sink most recently passed to is_sink_available().
+  };
+
+  /**
+   * @brief Build an audio context whose host sink differs from the configured sink.
+   * @param supports_keep Whether the fake backend supports keep-default capture.
+   * @param probed Receives the fake backend so tests can inspect the probed sink.
+   * @return Audio context with host sink "hw-default".
+   */
+  audio_ctx_t make_probe_ctx(bool supports_keep, probe_audio_control_t *&probed) {
+    auto control = std::make_unique<probe_audio_control_t>(supports_keep);
+    probed = control.get();
+
+    audio_ctx_t ctx {};
+    ctx.control = std::move(control);
+    ctx.restore_sink = false;
+    ctx.sink.host = "hw-default";
+    return ctx;
+  }
+
+  /**
+   * @brief Preserve the global audio config while a probe test rewrites it.
+   */
+  struct audio_config_guard_t {
+    bool keep_default_sink = config::audio.keep_default_sink;  ///< Saved keep_default_sink value.
+    std::string sink = config::audio.sink;  ///< Saved audio_sink value.
+
+    ~audio_config_guard_t() {
+      config::audio.keep_default_sink = keep_default_sink;
+      config::audio.sink = sink;
+    }
+  };
+}  // namespace
+
+TEST(SinkAvailabilityProbeTest, KeepDefaultProbesConfiguredSink) {
+  const audio_config_guard_t guard;
+  config::audio.keep_default_sink = true;
+  config::audio.sink = "configured-sink";
+
+  probe_audio_control_t *probed = nullptr;
+  auto ctx = make_probe_ctx(true, probed);
+
+  EXPECT_TRUE(is_audio_ctx_sink_available(ctx));
+  EXPECT_EQ(probed->probed_sink, "configured-sink");
+}
+
+TEST(SinkAvailabilityProbeTest, KeepDefaultWithoutConfiguredSinkProbesHostSink) {
+  const audio_config_guard_t guard;
+  config::audio.keep_default_sink = true;
+  config::audio.sink.clear();
+
+  probe_audio_control_t *probed = nullptr;
+  auto ctx = make_probe_ctx(true, probed);
+
+  EXPECT_TRUE(is_audio_ctx_sink_available(ctx));
+  EXPECT_EQ(probed->probed_sink, "hw-default");
+}
+
+TEST(SinkAvailabilityProbeTest, SwapModeProbesHostSink) {
+  const audio_config_guard_t guard;
+  config::audio.keep_default_sink = false;
+  config::audio.sink = "configured-sink";
+
+  probe_audio_control_t *probed = nullptr;
+  auto ctx = make_probe_ctx(true, probed);
+
+  EXPECT_TRUE(is_audio_ctx_sink_available(ctx));
+  EXPECT_EQ(probed->probed_sink, "hw-default");
+}
+
+TEST(SinkAvailabilityProbeTest, UnsupportedBackendProbesHostSink) {
+  const audio_config_guard_t guard;
+  config::audio.keep_default_sink = true;
+  config::audio.sink = "configured-sink";
+
+  probe_audio_control_t *probed = nullptr;
+  auto ctx = make_probe_ctx(false, probed);
+
+  EXPECT_TRUE(is_audio_ctx_sink_available(ctx));
+  EXPECT_EQ(probed->probed_sink, "hw-default");
 }

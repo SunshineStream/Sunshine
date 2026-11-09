@@ -803,7 +803,6 @@ namespace config {
     {},  // virtual_sink
     true,  // stream audio
     true,  // install_steam_drivers
-    false,  // external_audio
     false,  // keep_default_sink
   };
 
@@ -1811,7 +1810,14 @@ namespace config {
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
-    bool_f(vars, "external_audio", audio.external_audio);
+    // One-time upgrade migration, not a supported option: parse the legacy key
+    // before keep_default_sink so an explicit new key below always wins.
+    bool legacy_external_audio = false;
+    bool_f(vars, "external_audio", legacy_external_audio);
+    if (legacy_external_audio) {
+      audio.keep_default_sink = true;
+      BOOST_LOG(warning) << "external_audio is deprecated; use keep_default_sink instead"sv;
+    }
     bool_f(vars, "keep_default_sink", audio.keep_default_sink);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});

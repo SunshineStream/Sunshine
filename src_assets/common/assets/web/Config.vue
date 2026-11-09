@@ -142,6 +142,7 @@
   import { computed, toRaw } from 'vue'
   import Navbar from './Navbar.vue'
   import { apiFetch } from './fetch_utils'
+  import { isConfigBoolEnabled } from './config_bool'
   import configTabs from './configs/config_tabs.json'
   import General from './configs/tabs/General.vue'
   import Inputs from './configs/tabs/Inputs.vue'
@@ -189,6 +190,25 @@
     return valueKeys.length === defaultKeys.length && valueKeys.every(key =>
       Object.hasOwn(defaultValue, key) && configValuesEqual(value[key], defaultValue[key])
     );
+  }
+
+  /**
+   * Migrate the legacy external_audio option into keep_default_sink.
+   *
+   * An explicit keep_default_sink value wins; the legacy key is always dropped so
+   * the next save persists only the unified key.
+   *
+   * @param {Object} config Configuration object to migrate in place.
+   */
+  function migrateExternalAudioConfig(config) {
+    if (!Object.hasOwn(config, 'external_audio')) {
+      return;
+    }
+    const keepDefaultSink = config.keep_default_sink;
+    if ((keepDefaultSink === undefined || keepDefaultSink === '') && isConfigBoolEnabled(config.external_audio)) {
+      config.keep_default_sink = 'enabled';
+    }
+    delete config.external_audio;
   }
 
   export default {
@@ -291,6 +311,8 @@
           delete this.config.platform;
           delete this.config.status;
           delete this.config.version;
+
+          migrateExternalAudioConfig(this.config);
 
           // Parse the special options before population if available
           const specialOptions = ["dd_mode_remapping", "global_prep_cmd"]

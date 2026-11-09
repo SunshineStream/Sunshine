@@ -11,8 +11,11 @@
 
 #include <array>
 #include <bitset>
+#include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace stream {
   struct session_t;
@@ -140,8 +143,8 @@ namespace audio {
    * @brief Resolve the capture startup plan from session inputs.
    *
    * Pure function: no I/O, no global state. Encodes the historical sink
-   * selection (virtual sink when host playback is muted or nothing else is
-   * selected) together with the swap-vs-capture policy. The capture-only path
+   * selection (virtual sink when host playback is muted and no sink is
+   * configured) together with the swap-vs-capture policy. The capture-only path
    * targets the configured sink, or the saved host sink when nothing is
    * configured: without a swap, applications stay on the host default, so
    * capturing the virtual sink's monitor would yield silence.
@@ -164,14 +167,15 @@ namespace audio {
     const std::string &config_sink,
     const std::optional<platf::sink_t::null_t> &null_sinks
   ) {
-    // Order of priority: virtual sink, audio sink, host.
+    // Order of priority: explicit audio sink, virtual sink, host.
     std::string selected = host_sink;
     if (!config_sink.empty()) {
       selected = config_sink;
     }
 
     // Prefer the virtual sink if host playback is disabled or there's no other sink.
-    if (null_sinks && (!host_audio_enabled || selected.empty())) {
+    // An explicit audio_sink pin always wins: the user chose that target on purpose.
+    if (config_sink.empty() && null_sinks && (!host_audio_enabled || selected.empty())) {
       switch (channel_count) {
         case 2:
           selected = null_sinks->stereo;
@@ -199,6 +203,40 @@ namespace audio {
     }
 
     return routing;
+  }
+
+  /**
+   * @brief Resolve the user-level capture intent from the audio configuration.
+   *
+   * @param keep_default_requested Value of config::audio.keep_default_sink.
+   * @param config_sink Value of config::audio.sink.
+   * @return Pinned intent when a sink is configured, host-and-client for
+   *         keep-default (Play on this PC too), and client-only otherwise
+   *         (Quiet streaming).
+   */
+  [[nodiscard]] inline platf::audio_capture_intent_e resolve_audio_capture_intent(bool keep_default_requested, const std::string &config_sink) {
+    if (!config_sink.empty()) {
+      return platf::audio_capture_intent_e::pinned_sink;
+    }
+    return keep_default_requested ? platf::audio_capture_intent_e::host_and_client : platf::audio_capture_intent_e::client_only;
+  }
+
+  /**
+   * @brief Stable name of a capture intent, for logging.
+   *
+   * @param intent Capture intent to name.
+   * @return Intent name without the enum prefix.
+   */
+  [[nodiscard]] inline std::string_view audio_capture_intent_name(platf::audio_capture_intent_e intent) {
+    switch (intent) {
+      case platf::audio_capture_intent_e::client_only:
+        return "client_only";
+      case platf::audio_capture_intent_e::host_and_client:
+        return "host_and_client";
+      case platf::audio_capture_intent_e::pinned_sink:
+        return "pinned_sink";
+    }
+    return "unknown";
   }
 
   /**

@@ -184,6 +184,8 @@ namespace audio {
       return;
     }
 
+    const auto capture_intent = resolve_audio_capture_intent(config::audio.keep_default_sink, config::audio.sink);
+
     // Only the first to start a session may change the default sink
     if (!ref->sink_flag->exchange(true, std::memory_order_acquire)) {
       // One decision point for swap-vs-capture: the recorded restore flag keeps
@@ -199,6 +201,12 @@ namespace audio {
         ref->sink.null
       );
       ref->restore_sink = routing.restore_at_teardown;
+      BOOST_LOG(info) << "Audio capture mode ["sv << (routing.swap_at_startup ? "swap-and-restore"sv : "capture-keep-default"sv)
+                      << "], target ["sv << routing.target
+                      << "], restore_at_teardown ["sv << routing.restore_at_teardown
+                      << "], keep_default_sink requested ["sv << config::audio.keep_default_sink
+                      << "], keep_default_sink supported ["sv << control->supports_keep_default_sink()
+                      << "], capture intent ["sv << audio_capture_intent_name(capture_intent) << ']';
       if (routing.swap_at_startup) {
         // If the selected sink is different than the current one, change sinks.
         if (ref->restore_sink && control->set_sink(routing.target)) {
@@ -271,6 +279,12 @@ namespace audio {
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx) {
     if (!ctx.control) {
       return false;
+    }
+
+    // Keep-default captures the configured sink, so probe that endpoint rather
+    // than the host default recorded at startup.
+    if (config::audio.keep_default_sink && !config::audio.sink.empty() && ctx.control->supports_keep_default_sink()) {
+      return ctx.control->is_sink_available(config::audio.sink);
     }
 
     const std::string &sink = ctx.sink.host.empty() ? config::audio.sink : ctx.sink.host;

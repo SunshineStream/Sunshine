@@ -6,6 +6,7 @@
 
 // standard includes
 #include <bitset>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -881,6 +882,15 @@ namespace platf {
   };
 
   /**
+   * @brief User-level audio capture intent, independent of platform mechanism.
+   */
+  enum class audio_capture_intent_e {
+    client_only,  ///< Client hears the audio; the host should stay silent.
+    host_and_client,  ///< Audio plays on the host and is also streamed.
+    pinned_sink,  ///< Capture one explicitly configured sink, device, or input.
+  };
+
+  /**
    * @brief Platform audio controller that manages sinks and microphone capture.
    */
   class audio_control_t {
@@ -916,6 +926,20 @@ namespace platf {
      */
     virtual int capture_sink(const std::string &sink) {
       return set_sink(sink);
+    }
+
+    /**
+     * @brief Record the capture target for the next microphone() call.
+     *
+     * The default implementation is a no-op so backends without per-process
+     * capture are unchanged. Backends that support process loopback override
+     * this to store the intent and PID together, so microphone() never sees
+     * a mismatched pair. A PID of 0 selects ordinary endpoint or sink capture.
+     *
+     * @param intent Capture intent resolved from the audio configuration.
+     * @param process_id Operating-system PID to capture, or 0 for endpoint capture.
+     */
+    virtual void set_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
     }
 
     /**
