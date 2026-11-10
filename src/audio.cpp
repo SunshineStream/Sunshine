@@ -171,10 +171,6 @@ namespace audio {
 
   /**
    * @brief Select the capture sink for startup without touching the capture target.
-   *
-   * @param control Platform audio controller used for sink selection.
-   * @param routing Startup plan resolved by resolve_capture_routing().
-   * @return True when capture may proceed; false when sink selection failed and the caller must abort.
    */
   bool select_audio_capture_sink(platf::audio_control_t &control, const capture_routing_t &routing) {
     if (routing.swap_at_startup) {
