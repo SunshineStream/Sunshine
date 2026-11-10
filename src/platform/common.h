@@ -956,6 +956,7 @@ namespace platf {
      * @param process_id Operating-system PID to capture, or 0 for endpoint capture.
      */
     virtual void set_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
+      // Intentionally empty: backends without per-process capture inherit this no-op.
     }
 
     /**
@@ -971,6 +972,7 @@ namespace platf {
      * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
      */
     virtual void clear_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
+      // Intentionally empty: backends without per-process capture inherit this no-op.
     }
 
     /**

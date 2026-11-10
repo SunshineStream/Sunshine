@@ -42,8 +42,13 @@ namespace audio {
    * refresh/microphone pair (and across the exit clear), which keeps one
    * session from resetting the shared target between another session's
    * refresh and microphone creation.
+   *
+   * @return Reference to the process-lifetime capture-target mutex.
    */
-  static std::mutex capture_target_mutex;
+  std::mutex &capture_target_mutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
 
   /**
    * @brief Select the Opus stream configuration for a channel count and quality tier.
@@ -262,7 +267,7 @@ namespace audio {
     // One RAII owner for the session's shared capture target. Destruction
     // releases exactly the last recorded target, or nothing when no refresh
     // ran, so one session cannot wipe another session's recorded target.
-    session_capture_target_t capture_target {*control, capture_intent, capture_target_mutex};
+    session_capture_target_t capture_target {*control, capture_intent, capture_target_mutex()};
 
     // Only the first to start a session may change the default sink
     if (!ref->sink_flag->exchange(true, std::memory_order_acquire)) {

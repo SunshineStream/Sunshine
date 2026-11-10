@@ -168,14 +168,14 @@ namespace audio {
     bool platform_supports_keep_default,
     bool host_audio_enabled,
     int channel_count,
-    const std::string &host_sink,
-    const std::string &config_sink,
+    std::string_view host_sink,
+    std::string_view config_sink,
     const std::optional<platf::sink_t::null_t> &null_sinks
   ) {
     // Order of priority: explicit audio sink, virtual sink, host.
-    std::string selected = host_sink;
+    std::string selected {host_sink};
     if (!config_sink.empty()) {
-      selected = config_sink;
+      selected = std::string {config_sink};
     }
 
     // Prefer the virtual sink if host playback is disabled or there's no other sink.
@@ -204,7 +204,7 @@ namespace audio {
       routing.target = selected;
     } else {
       routing.restore_at_teardown = false;
-      routing.target = config_sink.empty() ? host_sink : config_sink;
+      routing.target = config_sink.empty() ? std::string {host_sink} : std::string {config_sink};
     }
 
     return routing;
@@ -219,11 +219,12 @@ namespace audio {
    *         keep-default (Play on this PC too), and client-only otherwise
    *         (Quiet streaming).
    */
-  [[nodiscard]] inline platf::audio_capture_intent_e resolve_audio_capture_intent(bool keep_default_requested, const std::string &config_sink) {
+  [[nodiscard]] constexpr platf::audio_capture_intent_e resolve_audio_capture_intent(bool keep_default_requested, std::string_view config_sink) noexcept {
+    using enum platf::audio_capture_intent_e;
     if (!config_sink.empty()) {
-      return platf::audio_capture_intent_e::pinned_sink;
+      return pinned_sink;
     }
-    return keep_default_requested ? platf::audio_capture_intent_e::host_and_client : platf::audio_capture_intent_e::client_only;
+    return keep_default_requested ? host_and_client : client_only;
   }
 
   /**
@@ -232,13 +233,14 @@ namespace audio {
    * @param intent Capture intent to name.
    * @return Intent name without the enum prefix.
    */
-  [[nodiscard]] inline std::string_view audio_capture_intent_name(platf::audio_capture_intent_e intent) {
+  [[nodiscard]] constexpr std::string_view audio_capture_intent_name(platf::audio_capture_intent_e intent) noexcept {
+    using enum platf::audio_capture_intent_e;
     switch (intent) {
-      case platf::audio_capture_intent_e::client_only:
+      case client_only:
         return "client_only";
-      case platf::audio_capture_intent_e::host_and_client:
+      case host_and_client:
         return "host_and_client";
-      case platf::audio_capture_intent_e::pinned_sink:
+      case pinned_sink:
         return "pinned_sink";
     }
     return "unknown";
@@ -322,9 +324,9 @@ namespace audio {
     }
 
   private:
-    platf::audio_control_t *control_;  ///< Controller holding the shared capture target.
+    platf::audio_control_t *control_;  ///< Non-owning controller holding the shared capture target; must outlive the guard.
     platf::audio_capture_intent_e intent_;  ///< Capture intent recorded by this session.
-    std::mutex *mutex_;  ///< Mutex serializing refresh, creation, and release.
+    std::mutex *mutex_;  ///< Non-owning mutex serializing refresh, creation, and release; typically audio::capture_target_mutex().
     bool recorded_ = false;  ///< Whether this session called set_capture_target().
   };
 

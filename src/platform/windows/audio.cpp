@@ -8,6 +8,7 @@
 #include <array>
 #include <format>
 #include <functional>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -944,17 +945,17 @@ namespace platf::audio {
      * @return A pair of device_id and format reference if the sink name matches
      *         our naming scheme for virtual audio sinks, `std::nullopt` otherwise.
      */
-    std::optional<std::pair<std::wstring, std::reference_wrapper<const format_t>>> extract_virtual_sink_info(const std::string &sink) {
+    std::optional<std::pair<std::wstring, std::reference_wrapper<const format_t>>> extract_virtual_sink_info(std::string_view sink) const {
       // Encoding format:
       // [virtual-(format name)]device_id
-      std::string current = sink;
+      std::string_view current = sink;
       if (auto prefix = "virtual-"sv; current.find(prefix) == 0) {
         current = current.substr(prefix.size(), current.size() - prefix.size());
 
         for (const auto &format : formats) {
           auto &name = format.name;
           if (current.find(name) == 0) {
-            auto device_id = utf_utils::from_utf8(current.substr(name.size(), current.size() - name.size()));
+            auto device_id = utf_utils::from_utf8(std::string {current.substr(name.size(), current.size() - name.size())});
             return std::make_pair(device_id, std::reference_wrapper(format));
           }
         }
@@ -1186,7 +1187,7 @@ namespace platf::audio {
      * @param sink Assigned sink name that would be reinstalled.
      * @return True when the reassertion callback may be installed.
      */
-    bool should_install_default_callback(const std::string &sink) {
+    [[nodiscard]] bool should_install_default_callback(std::string_view sink) const {
       return static_cast<bool>(extract_virtual_sink_info(sink)) && !config::audio.keep_default_sink;
     }
 
@@ -1195,7 +1196,7 @@ namespace platf::audio {
      *
      * @return False in hands-off modes that never touch the host default.
      */
-    bool should_reset_default_device() {
+    [[nodiscard]] bool should_reset_default_device() const noexcept {
       return !config::audio.keep_default_sink;
     }
 
@@ -1207,7 +1208,7 @@ namespace platf::audio {
      *
      * @return False in hands-off modes that never touch the host audio graph.
      */
-    bool should_install_steam_drivers() {
+    [[nodiscard]] bool should_install_steam_drivers() const noexcept {
       return !config::audio.keep_default_sink && config::audio.install_steam_drivers;
     }
 
@@ -1247,13 +1248,13 @@ namespace platf::audio {
      * @param name Endpoint name or identifier to match across all fields.
      * @return Field list requiring every supported endpoint field to match the name.
      */
-    audio_control_t::match_fields_list_t match_all_fields(const std::wstring &name) {
+    audio_control_t::match_fields_list_t match_all_fields(std::wstring_view name) {
       using enum match_field_e;
       return {
-        {device_id, name},  // {0.0.0.00000000}.{29dd7668-45b2-4846-882d-950f55bf7eb8}
-        {device_friendly_name, name},  // Digital Audio (S/PDIF) (High Definition Audio Device)
-        {device_description, name},  // Digital Audio (S/PDIF)
-        {adapter_friendly_name, name},  // High Definition Audio Device
+        {device_id, std::wstring {name}},  // {0.0.0.00000000}.{29dd7668-45b2-4846-882d-950f55bf7eb8}
+        {device_friendly_name, std::wstring {name}},  // Digital Audio (S/PDIF) (High Definition Audio Device)
+        {device_description, std::wstring {name}},  // Digital Audio (S/PDIF)
+        {adapter_friendly_name, std::wstring {name}},  // High Definition Audio Device
       };
     }
 
@@ -1300,6 +1301,8 @@ namespace platf::audio {
         for (size_t i = 0; i < match_list.size(); i++) {
           if (matched[i].empty()) {
             const wchar_t *match_value = nullptr;
+            // Note: no using-enum here; the enumerator names would shadow the
+            // device_id/device_friendly_name/adapter_friendly_name locals below.
             switch (match_list[i].first) {
               case match_field_e::device_id:
                 match_value = device_id.c_str();

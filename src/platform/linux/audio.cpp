@@ -329,6 +329,9 @@ namespace platf {
       };
 
     public:
+      // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+      using audio_control_t::microphone;
+
       loop_t loop;  ///< PulseAudio threaded mainloop instance.
       ctx_t ctx;  ///< PulseAudio threaded mainloop context.
       std::string requested_sink;  ///< Requested sink.
