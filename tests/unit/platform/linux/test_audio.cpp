@@ -16,14 +16,9 @@
   #include <pulse/pulseaudio.h>
 
   // local includes
+  #include "src/config.h"
   #include "src/platform/common.h"
   #include "src/thread_safe.h"
-
-  // test includes
-  #include "../../../tests_common.h"
-
-  // local includes
-  #include "src/config.h"
 
 namespace platf {
   bool fill_canonical_channel_map(int channels, pa_channel_map &pa_map);
