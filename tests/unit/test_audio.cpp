@@ -8,6 +8,7 @@
 
 // standard includes
 #include <array>
+#include <cstdio>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -406,7 +407,9 @@ namespace {
         config::audio.keep_default_sink = keep_default_sink;
         config::audio.sink = sink;
       } catch (...) {
-        // Teardown restore must not throw during stack unwinding.
+        // Teardown restore must not throw during stack unwinding: report via noexcept fputs
+        // (Boost.Log allocates/may throw, so it cannot be used in this noexcept destructor).
+        std::fputs("audio_config_guard_t: failed to restore audio config\n", stderr);
       }
     }
   };
