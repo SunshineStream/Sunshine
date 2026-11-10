@@ -334,7 +334,6 @@ namespace platf {
 
       loop_t loop;  ///< PulseAudio threaded mainloop instance.
       ctx_t ctx;  ///< PulseAudio threaded mainloop context.
-      std::string requested_sink;  ///< Requested sink.
 
       static constexpr const char *stereo_name = "sink-sunshine-stereo";  ///< Persistent stereo null sink name.
       static constexpr const char *surround51_name = "sink-sunshine-surround51";  ///< Persistent 5.1 null sink name.
@@ -670,7 +669,7 @@ namespace platf {
         // the new one just set!
         auto sink_name = config::audio.sink;
         if (sink_name.empty()) {
-          sink_name = requested_sink;
+          sink_name = snapshot_recorded_sink();
         }
         if (sink_name.empty()) {
           sink_name = get_default_sink_name();
@@ -696,12 +695,16 @@ namespace platf {
       /**
        * @brief Capture the given sink without changing the host default.
        *
+       * Records the target under the base capture mutex for the monitor
+       * lookup in microphone(); this locking is new versus the previously
+       * unlocked store, but unobservable on the single-threaded capture path.
+       *
        * @param sink Audio sink name to capture.
        * @return Always 0: selecting a capture target cannot fail here.
        */
       int capture_sink(const std::string &sink) override {
         BOOST_LOG(info) << "Keeping host default sink; capturing ["sv << sink << "] without swapping"sv;
-        requested_sink = sink;
+        record_capture_sink(sink);
 
         return 0;
       }
@@ -737,7 +740,7 @@ namespace platf {
           return -1;
         }
 
-        requested_sink = sink;
+        record_capture_sink(sink);
 
         return 0;
       }

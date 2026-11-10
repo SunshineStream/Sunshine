@@ -1022,6 +1022,35 @@ namespace platf {
      * @brief Destroy the audio control.
      */
     virtual ~audio_control_t() = default;
+
+  protected:
+    mutable std::mutex capture_state_mutex_;  ///< Guards `recorded_sink_` against concurrent sessions.
+    std::string recorded_sink_;  ///< Sink recorded for later consumption in microphone(), possibly empty.
+
+    /**
+     * @brief Record a capture sink for later consumption in microphone().
+     *
+     * Thread-safe: the store runs under `capture_state_mutex_`, so concurrent
+     * sessions cannot tear the recorded sink mid-write. Opt-in helper only:
+     * the `capture_sink()` virtual keeps its legacy delegation so backends
+     * without keep-default capture are unchanged.
+     *
+     * @param sink Audio sink name to capture.
+     */
+    void record_capture_sink(const std::string &sink) {
+      std::lock_guard lock {capture_state_mutex_};
+      recorded_sink_ = sink;
+    }
+
+    /**
+     * @brief Copy the recorded sink name under `capture_state_mutex_`.
+     *
+     * @return Recorded sink name, possibly empty when nothing was recorded.
+     */
+    [[nodiscard]] std::string snapshot_recorded_sink() const {
+      std::lock_guard lock {capture_state_mutex_};
+      return recorded_sink_;
+    }
   };
 
   /**

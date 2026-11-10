@@ -8,10 +8,13 @@
 
 // standard includes
 #include <array>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 // local includes
@@ -902,4 +905,179 @@ TEST(AudioControlAdapterTest, StructMicrophoneForwardsEveryField) {
   EXPECT_EQ(control.mic_frame_size, 480u);
   EXPECT_TRUE(control.mic_continuous_audio);
   EXPECT_TRUE(control.mic_host_audio_enabled);
+}
+
+namespace {
+  /**
+   * @brief Minimal backend that stores through the shared base record.
+   *
+   * Drives the protected opt-in helpers through the production virtuals so
+   * the centralized sink storage is pinned without platform hardware. Models
+   * the Linux call pattern (record-only `capture_sink()`, record-on-success
+   * `set_sink()`).
+   */
+  class recorded_audio_control_t: public platf::audio_control_t {
+  public:
+    int set_sink(const std::string &sink) override {
+      record_capture_sink(sink);
+      return 0;
+    }
+
+    bool supports_keep_default_sink() const override {
+      return true;
+    }
+
+    int capture_sink(const std::string &sink) override {
+      record_capture_sink(sink);
+      return 0;
+    }
+
+    // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+    using platf::audio_control_t::microphone;
+
+    std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
+      return std::make_unique<stub_mic_t>();
+    }
+
+    bool is_sink_available(const std::string &) override {
+      return true;
+    }
+
+    std::optional<platf::sink_t> sink_info() override {
+      return std::nullopt;
+    }
+
+    using platf::audio_control_t::snapshot_recorded_sink;
+  };
+
+  /**
+   * @brief Backend modeling the macOS no-op capture contract.
+   *
+   * Mirrors `macos_audio_control_t`: `capture_sink()` never records, and the
+   * inherited `set_capture_target()`/`clear_capture_target()` no-ops leave
+   * the shared sink record alone.
+   */
+  class macos_like_audio_control_t: public platf::audio_control_t {
+  public:
+    int set_sink(const std::string &) override {
+      return 0;
+    }
+
+    bool supports_keep_default_sink() const override {
+      return true;
+    }
+
+    int capture_sink(const std::string &) override {
+      return 0;
+    }
+
+    // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+    using platf::audio_control_t::microphone;
+
+    std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
+      return nullptr;
+    }
+
+    bool is_sink_available(const std::string &) override {
+      return true;
+    }
+
+    std::optional<platf::sink_t> sink_info() override {
+      return std::nullopt;
+    }
+
+    using platf::audio_control_t::snapshot_recorded_sink;
+  };
+}  // namespace
+
+/**
+ * @brief The shared sink record must start empty before any session records.
+ *
+ * Fail-without-fix: if the base record is not value-initialized, the first
+ * microphone() consumes a garbage sink instead of falling back to the
+ * configured or default sink.
+ */
+TEST(BaseRecordTest, RecordedSinkStartsEmpty) {
+  recorded_audio_control_t control;
+  EXPECT_TRUE(control.snapshot_recorded_sink().empty());
+}
+
+/**
+ * @brief A recorded sink snapshot must stay stable while the shared value changes.
+ *
+ * Fail-without-fix: if snapshots alias the shared string, the
+ * default-endpoint callback reasserts a sink another session rewrote
+ * concurrently instead of the copy taken at install time.
+ */
+TEST(BaseRecordTest, CaptureSinkRecordIsStableAcrossRewrite) {
+  recorded_audio_control_t control;
+  EXPECT_EQ(control.capture_sink("sink-a"), 0);
+  const auto snapshot = control.snapshot_recorded_sink();
+  EXPECT_EQ(control.capture_sink("sink-b"), 0);
+  EXPECT_EQ(snapshot, "sink-a");
+  EXPECT_EQ(control.snapshot_recorded_sink(), "sink-b");
+}
+
+/**
+ * @brief The swap path must overwrite the same shared record the capture path reads.
+ *
+ * Fail-without-fix: if `set_sink()` keeps a separate store, a swap session
+ * captures the previously recorded sink instead of the swapped one.
+ */
+TEST(BaseRecordTest, SetSinkOverwritesRecordedSink) {
+  recorded_audio_control_t control;
+  EXPECT_EQ(control.capture_sink("capture-sink"), 0);
+  EXPECT_EQ(control.set_sink("swapped-sink"), 0);
+  EXPECT_EQ(control.snapshot_recorded_sink(), "swapped-sink");
+}
+
+/**
+ * @brief Concurrent sessions must always snapshot a consistent record.
+ *
+ * Fail-without-fix: without the base mutex, concurrent record and snapshot
+ * calls tear the sink string. Completing with every snapshot reading a
+ * written value is the regression pin. The loop also writes through
+ * `set_sink()`, the exact production call the default-endpoint callback
+ * makes, so the callback-to-record path is pinned under the same lock.
+ */
+TEST(BaseRecordTest, ConcurrentControlAccessStaysConsistent) {
+  recorded_audio_control_t control;
+  std::atomic consistent {true};
+  const auto worker = [&](std::uint32_t pid) {
+    for (int i = 0; i < 50 && consistent.load(std::memory_order_relaxed); ++i) {
+      control.capture_sink("sink-" + std::to_string(pid));
+      if (control.snapshot_recorded_sink().compare(0, 5, "sink-") != 0) {
+        consistent.store(false, std::memory_order_relaxed);
+      }
+      if (control.set_sink("sink-" + std::to_string(pid)) != 0) {
+        consistent.store(false, std::memory_order_relaxed);
+      }
+      if (control.snapshot_recorded_sink().compare(0, 5, "sink-") != 0) {
+        consistent.store(false, std::memory_order_relaxed);
+      }
+    }
+  };
+  {
+    std::vector<std::jthread> threads;
+    threads.reserve(4);
+    for (std::uint32_t pid = 1; pid <= 4; ++pid) {
+      threads.emplace_back(worker, pid);
+    }
+  }
+  EXPECT_TRUE(consistent.load(std::memory_order_relaxed));
+}
+
+/**
+ * @brief A macOS-style no-op backend must leave the shared record untouched.
+ *
+ * Fail-without-fix: if the base virtual defaults gain behavior, the by-design
+ * macOS no-op (which never calls the opt-in helpers) starts recording a sink
+ * that microphone() never consumes, stranding state for the next session.
+ */
+TEST(BaseRecordTest, MacOsLikeNoOpLeavesRecordUntouched) {
+  macos_like_audio_control_t control;
+  EXPECT_EQ(control.capture_sink("any-sink"), 0);
+  control.set_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
+  control.clear_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
+  EXPECT_TRUE(control.snapshot_recorded_sink().empty());
 }
