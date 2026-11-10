@@ -70,6 +70,9 @@ namespace platf {
     AVCaptureDevice *audio_capture_device {};  ///< Audio capture device.
 
   public:
+    // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+    using audio_control_t::microphone;
+
     /**
      * @brief Update the sink value on the backend.
      *

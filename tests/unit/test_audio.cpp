@@ -7,8 +7,10 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <array>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 // local includes
@@ -266,6 +268,9 @@ namespace {
       return 0;
     }
 
+    // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+    using platf::audio_control_t::microphone;
+
     std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
       return nullptr;
     }
@@ -342,6 +347,9 @@ namespace {
       return 0;
     }
 
+    // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+    using platf::audio_control_t::microphone;
+
     std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
       return nullptr;
     }
@@ -384,12 +392,22 @@ namespace {
    * @brief Preserve the global audio config while a probe test rewrites it.
    */
   struct audio_config_guard_t {
+    audio_config_guard_t() = default;
+    audio_config_guard_t(const audio_config_guard_t &) = delete;
+    audio_config_guard_t &operator=(const audio_config_guard_t &) = delete;
+    audio_config_guard_t(audio_config_guard_t &&) = delete;
+    audio_config_guard_t &operator=(audio_config_guard_t &&) = delete;
+
     bool keep_default_sink = config::audio.keep_default_sink;  ///< Saved keep_default_sink value.
     std::string sink = config::audio.sink;  ///< Saved audio_sink value.
 
-    ~audio_config_guard_t() {
-      config::audio.keep_default_sink = keep_default_sink;
-      config::audio.sink = sink;
+    ~audio_config_guard_t() noexcept {
+      try {
+        config::audio.keep_default_sink = keep_default_sink;
+        config::audio.sink = sink;
+      } catch (...) {
+        // Teardown restore must not throw during stack unwinding.
+      }
     }
   };
 }  // namespace
@@ -500,6 +518,9 @@ namespace {
       clear_process_id = process_id;
     }
 
+    // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
+    using platf::audio_control_t::microphone;
+
     std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, bool host_audio_enabled) override {
       calls.emplace_back("microphone");
       mic_mapping = mapping;
@@ -527,7 +548,7 @@ namespace {
      * @param prefix Call name prefix to search for.
      * @return Index of the first matching call, or calls.size() when absent.
      */
-    std::size_t call_index(const std::string &prefix) const {
+    std::size_t call_index(std::string_view prefix) const {
       for (std::size_t i = 0; i < calls.size(); ++i) {
         if (calls[i].compare(0, prefix.size(), prefix) == 0) {
           return i;
@@ -864,15 +885,15 @@ TEST(CaptureOrchestrationTest, StartupSequenceRunsDispatchRefreshCreateAndReleas
 TEST(AudioControlAdapterTest, StructMicrophoneForwardsEveryField) {
   recording_audio_control_t control;
   platf::audio_control_t &base = control;
-  const std::uint8_t mapping[] = {0, 1, 4, 5, 2, 3};
-  const platf::microphone_params_t params {mapping, 6, 48000, 480, true, true};
+  const std::array<std::uint8_t, 6> mapping {0, 1, 4, 5, 2, 3};
+  const platf::microphone_params_t params {mapping.data(), 6, 48000, 480, true, true};
 
   auto mic = base.microphone(params);
 
   EXPECT_TRUE(static_cast<bool>(mic));
   ASSERT_EQ(control.calls.size(), 1U);
   EXPECT_EQ(control.calls[0], "microphone");
-  EXPECT_EQ(control.mic_mapping, mapping);
+  EXPECT_EQ(control.mic_mapping, mapping.data());
   EXPECT_EQ(control.mic_channels, 6);
   EXPECT_EQ(control.mic_sample_rate, 48000u);
   EXPECT_EQ(control.mic_frame_size, 480u);
