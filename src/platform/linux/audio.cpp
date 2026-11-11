@@ -703,10 +703,7 @@ namespace platf {
        * @return Always 0: selecting a capture target cannot fail here.
        */
       int capture_sink(const std::string &sink) override {
-        BOOST_LOG(info) << "Keeping host default sink; capturing ["sv << sink << "] without swapping"sv;
-        record_capture_sink(sink);
-
-        return 0;
+        return record_keep_default_capture_sink(sink);
       }
 
       /**

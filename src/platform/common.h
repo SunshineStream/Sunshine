@@ -1043,6 +1043,23 @@ namespace platf {
     }
 
     /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * Shared keep-default body for backends whose capture path only records
+     * the target for `microphone()`: logs the decision, stores the sink under
+     * `capture_state_mutex_` via `record_capture_sink()`, and reports success.
+     * Backends that only observe the sink (macOS) keep their own override.
+     *
+     * @param sink Audio sink name to capture.
+     * @return Always 0: recording a capture target cannot fail here.
+     */
+    int record_keep_default_capture_sink(const std::string &sink) {
+      BOOST_LOG(info) << "Keeping host default sink; capturing ["sv << sink << "] without swapping"sv;
+      record_capture_sink(sink);
+      return 0;
+    }
+
+    /**
      * @brief Copy the recorded sink name under `capture_state_mutex_`.
      *
      * @return Recorded sink name, possibly empty when nothing was recorded.

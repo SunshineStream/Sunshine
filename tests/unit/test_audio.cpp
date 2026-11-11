@@ -928,8 +928,7 @@ namespace {
     }
 
     int capture_sink(const std::string &sink) override {
-      record_capture_sink(sink);
-      return 0;
+      return record_keep_default_capture_sink(sink);
     }
 
     // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
@@ -1081,3 +1080,17 @@ TEST(BaseRecordTest, MacOsLikeNoOpLeavesRecordUntouched) {
   control.clear_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
   EXPECT_TRUE(control.snapshot_recorded_sink().empty());
 }
+
+/**
+ * @brief The shared keep-default helper must record the sink and report success.
+ *
+ * Fail-without-fix: if `capture_sink()` stops routing through the shared
+ * helper, backend copies drift and one backend records a sink another path
+ * cannot see.
+ */
+TEST(BaseRecordTest, KeepDefaultHelperRecordsAndReturnsZero) {
+  recorded_audio_control_t control;
+  EXPECT_EQ(control.capture_sink("keep-default-sink"), 0);
+  EXPECT_EQ(control.snapshot_recorded_sink(), "keep-default-sink");
+}
+
