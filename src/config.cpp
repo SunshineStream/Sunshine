@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -1594,18 +1595,20 @@ namespace config {
   }
 
   bool cap_stream_resolution(int &width, int &height) {
-    if (video.max_stream_width <= 0 || video.max_stream_height <= 0 || width <= 0 || height <= 0 ||
-        (width <= video.max_stream_width && height <= video.max_stream_height)) {
+    if (video.max_stream_width <= 0 || video.max_stream_height <= 0 || width <= 0 || height <= 0 || (width <= video.max_stream_width && height <= video.max_stream_height)) {
       return false;
     }
 
-    const double scale = std::min(
-      (double) video.max_stream_width / width,
-      (double) video.max_stream_height / height
-    );
+    // Scale by whichever dimension is further over its limit, in integer math so that dimension
+    // lands exactly on the cap.
+    const std::int64_t w = width;
+    const std::int64_t h = height;
+    const bool width_limited = w * video.max_stream_height >= h * video.max_stream_width;
+    const auto scaled_width = width_limited ? video.max_stream_width : static_cast<int>(w * video.max_stream_height / h);
+    const auto scaled_height = width_limited ? static_cast<int>(h * video.max_stream_width / w) : video.max_stream_height;
     // Encoders and decoders expect even dimensions
-    const int capped_width = ((int) (width * scale)) & ~1;
-    const int capped_height = ((int) (height * scale)) & ~1;
+    const int capped_width = std::max(2, scaled_width & ~1);
+    const int capped_height = std::max(2, scaled_height & ~1);
     BOOST_LOG(info) << "Capping stream resolution: "sv << width << 'x' << height
                     << " -> "sv << capped_width << 'x' << capped_height;
     width = capped_width;
