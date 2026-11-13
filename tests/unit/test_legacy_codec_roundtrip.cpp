@@ -8,6 +8,7 @@
 // standard includes
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -169,7 +170,7 @@ TEST_P(LegacyCodecRoundTripTest, DecodesProductionPacketsForTheNegotiatedCodec) 
 
   auto mailbox = std::make_shared<safe::mail_raw_t>();
   auto packets = mailbox->queue<video::packet_t>("video");
-  std::vector<uint8_t> pixels(config.width * config.height * 4, 64);
+  std::vector<uint8_t> pixels(static_cast<std::size_t>(config.width) * config.height * 4, 64);
   platf::img_t image;
   image.data = pixels.data();
   image.width = config.width;
