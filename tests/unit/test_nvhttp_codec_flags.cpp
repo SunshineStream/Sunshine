@@ -50,6 +50,9 @@ protected:
    * @brief Save the global probe state.
    */
   void SetUp() override {
+    h264_ = video::last_encoder_probe_supported_h264;
+    mpeg2_mode_ = video::active_mpeg2_mode;
+    h263p_mode_ = video::active_h263p_mode;
     hevc_mode_ = video::active_hevc_mode;
     av1_mode_ = video::active_av1_mode;
     yuv444_ = video::last_encoder_probe_supported_yuv444_for_codec;
@@ -61,6 +64,9 @@ protected:
    * @brief Restore the global probe state.
    */
   void TearDown() override {
+    video::last_encoder_probe_supported_h264 = h264_;
+    video::active_mpeg2_mode = mpeg2_mode_;
+    video::active_h263p_mode = h263p_mode_;
     video::active_hevc_mode = hevc_mode_;
     video::active_av1_mode = av1_mode_;
     video::last_encoder_probe_supported_yuv444_for_codec = yuv444_;
@@ -69,6 +75,9 @@ protected:
   }
 
 private:
+  bool h264_ = false;  ///< Saved baseline H.264 availability.
+  int mpeg2_mode_ = 0;  ///< Saved MPEG-2 advertisement mode.
+  int h263p_mode_ = 0;  ///< Saved H.263+ advertisement mode.
   int hevc_mode_ = 0;  ///< Saved HEVC mode.
   int av1_mode_ = 0;  ///< Saved AV1 mode.
   std::array<bool, 3> yuv444_ {};  ///< Saved 8-bit 4:4:4 results.
@@ -146,3 +155,15 @@ INSTANTIATE_TEST_SUITE_P(
     flags_case_t {codec_e::av1, 3, true, true, true, SCM_AV1_MAIN8 | SCM_AV1_MAIN10 | SCM_AV1_HIGH8_444}
   )
 );
+
+/**
+ * @brief A legacy-only host advertises available codecs without inventing H.264 support.
+ */
+TEST_F(CodecProbeAdvertisementTest, LegacyOnlyHostDoesNotAdvertiseH264) {
+  video::reset_encoder_probe_results();
+  video::active_hevc_mode = 1;
+  video::active_av1_mode = 1;
+  video::active_mpeg2_mode = 2;
+  video::active_h263p_mode = 2;
+  EXPECT_EQ(nvhttp::get_codec_mode_flags(), static_cast<uint32_t>(SCM_MPEG2 | SCM_H263P));
+}

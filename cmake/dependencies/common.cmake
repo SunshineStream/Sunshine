@@ -29,7 +29,7 @@ function(sunshine_forward_dependency_headers source_dir include_prefix)
 endfunction()
 
 sunshine_forward_dependency_headers("${moonlight-common-c_SOURCE_DIR}/src" "moonlight-common-c/src"
-        Input.h Limelight.h Limelight-internal.h Rtsp.h)
+        Input.h Limelight.h Limelight-internal.h Rtsp.h VideoFormats.h)
 sunshine_forward_dependency_headers("${simple_web_server_SOURCE_DIR}" "Simple-Web-Server"
         client_http.hpp client_https.hpp crypto.hpp server_http.hpp server_https.hpp)
 

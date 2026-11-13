@@ -485,32 +485,42 @@ INSTANTIATE_TEST_SUITE_P(
 );
 
 /**
- * @brief The software backend supports explicitly enabled MPEG-2 encoding.
+ * @brief The software backend probes MPEG-2 even when its H.264 encoder is unavailable.
  */
 TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedMpeg2) {
   ActiveVideoModeGuard guard;
+  const auto h264_name = video::software.h264.name;
+  auto restore = util::fail_guard([&] {
+    video::software.h264.name = h264_name;
+  });
+  video::software.h264.name = "unavailable_h264_encoder";
 
   video::active_hevc_mode = 1;
   video::active_av1_mode = 1;
   video::active_mpeg2_mode = 2;
   video::active_h263p_mode = 1;
 
-  ASSERT_TRUE(video::validate_encoder(video::software, false));
+  ASSERT_TRUE(video::validate_legacy_codec(video::software, video::format_mpeg2));
   EXPECT_TRUE(video::software.mpeg2[video::encoder_t::PASSED]);
 }
 
 /**
- * @brief The software backend supports explicitly enabled H.263+ encoding.
+ * @brief The software backend probes H.263+ even when its H.264 encoder is unavailable.
  */
 TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedH263Plus) {
   ActiveVideoModeGuard guard;
+  const auto h264_name = video::software.h264.name;
+  auto restore = util::fail_guard([&] {
+    video::software.h264.name = h264_name;
+  });
+  video::software.h264.name = "unavailable_h264_encoder";
 
   video::active_hevc_mode = 1;
   video::active_av1_mode = 1;
   video::active_mpeg2_mode = 1;
   video::active_h263p_mode = 2;
 
-  ASSERT_TRUE(video::validate_encoder(video::software, false));
+  ASSERT_TRUE(video::validate_legacy_codec(video::software, video::format_h263p));
   EXPECT_TRUE(video::software.h263p[video::encoder_t::PASSED]);
 }
 

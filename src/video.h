@@ -7,7 +7,9 @@
 // standard includes
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -44,6 +46,8 @@ namespace video {
     format_mpeg2 = 3,  ///< MPEG-2/H.262 video.
     format_h263p = 4,  ///< H.263+ video.
   };
+
+  constexpr int VIDEO_FORMAT_COUNT = format_h263p + 1;  ///< Number of supported wire codec identifiers.
 
   /**
    * @brief Encoding configuration requested by a remote client.
@@ -454,7 +458,7 @@ namespace video {
     const std::unique_ptr<const encoder_platform_formats_t> platform_formats;  ///< Platform-specific memory and pixel formats accepted by the encoder.
 
     /**
-     * @brief Codec capabilities for AV1, HEVC, or H.264.
+     * @brief Codec capabilities for a modern or legacy video format.
      */
     struct codec_t {
       std::vector<option_t> common_options;  ///< Options applied to every encode mode for this codec.
@@ -781,6 +785,31 @@ namespace video {
    */
   using hdr_info_t = std::unique_ptr<hdr_info_raw_t>;
 
+  /**
+   * @brief Callback used to probe one encoder for one requested legacy codec.
+   */
+  using codec_probe_t = std::function<bool(encoder_t &, int)>;
+
+  /**
+   * @brief Probe MPEG-2 or H.263+ independently of H.264 support.
+   *
+   * @param encoder Backend whose requested codec should be validated.
+   * @param video_format MPEG-2 or H.263+ wire codec identifier.
+   * @return Whether the backend successfully encoded the requested legacy codec.
+   */
+  bool validate_legacy_codec(encoder_t &encoder, int video_format);
+
+  /**
+   * @brief Choose the first backend that passes a codec-specific probe.
+   *
+   * @param candidates Backend preference order, including software fallbacks.
+   * @param video_format Requested legacy codec identifier.
+   * @param probe Callback validating only the requested codec.
+   * @return Selected backend, or nullptr when no candidate passes.
+   */
+  encoder_t *select_legacy_encoder(std::span<encoder_t *const> candidates, int video_format, const codec_probe_t &probe);
+
+  extern bool last_encoder_probe_supported_h264;  ///< Whether baseline H.264 is available.
   extern int active_hevc_mode;  ///< Active HEVC codec advertisement mode.
   extern int active_av1_mode;  ///< Active AV1 codec advertisement mode.
   extern int active_mpeg2_mode;  ///< Active MPEG-2 codec advertisement mode.

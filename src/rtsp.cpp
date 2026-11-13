@@ -28,6 +28,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "network.h"
+#include "nvhttp.h"
 #include "rtsp.h"
 #include "stream.h"
 #include "sync.h"
@@ -41,6 +42,23 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace rtsp_stream {
+  std::string describe_video_codecs(uint32_t codec_modes) {
+    std::string result;
+    if (codec_modes & SCM_MASK_HEVC) {
+      result += "sprop-parameter-sets=AAAAAU\r\n";
+    }
+    if (codec_modes & SCM_MASK_AV1) {
+      result += "a=rtpmap:98 AV1/90000\r\n";
+    }
+    if (codec_modes & SCM_MPEG2) {
+      result += "a=rtpmap:98 MPV/90000\r\n";
+    }
+    if (codec_modes & SCM_H263P) {
+      result += "a=rtpmap:98 H263-1998/90000\r\n";
+    }
+    return result;
+  }
+
   /**
    * @brief Release msg resources.
    *
@@ -902,21 +920,7 @@ namespace rtsp_stream {
       ss << "a=x-nv-video[0].refPicInvalidation:1"sv << std::endl;
     }
 
-    if (video::active_hevc_mode != 1) {
-      ss << "sprop-parameter-sets=AAAAAU"sv << std::endl;
-    }
-
-    if (video::active_av1_mode != 1) {
-      ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
-    }
-
-    if (video::active_mpeg2_mode >= 2) {
-      ss << "a=rtpmap:98 MPV/90000"sv << std::endl;
-    }
-
-    if (video::active_h263p_mode == 2) {
-      ss << "a=rtpmap:98 H263-1998/90000"sv << std::endl;
-    }
+    ss << describe_video_codecs(nvhttp::get_codec_mode_flags());
 
     if (!session.surround_params.empty()) {
       // If we have our own surround parameters, advertise them twice first

@@ -1205,8 +1205,8 @@ namespace nvhttp {
   }
 
   uint32_t get_codec_mode_flags() {
-    uint32_t codec_mode_flags = SCM_H264;
-    if (video::last_encoder_probe_supported_yuv444_for_codec[0]) {
+    uint32_t codec_mode_flags = video::last_encoder_probe_supported_h264 ? SCM_H264 : 0;
+    if (video::last_encoder_probe_supported_h264 && video::last_encoder_probe_supported_yuv444_for_codec[0]) {
       codec_mode_flags |= SCM_H264_HIGH8_444;
     }
     if (video::active_hevc_mode >= 2) {

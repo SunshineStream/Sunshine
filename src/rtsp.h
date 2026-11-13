@@ -9,12 +9,21 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // local includes
 #include "crypto.h"
 #include "thread_safe.h"
 
 namespace rtsp_stream {
+  /**
+   * @brief Describe the codecs advertised by a host, independently of client identity.
+   *
+   * @param codec_modes Validated ServerCodecModeSupport capability bits.
+   * @return GameStream DESCRIBE codec attributes; these do not change RTP packetization.
+   */
+  std::string describe_video_codecs(uint32_t codec_modes);
+
   constexpr auto RTSP_SETUP_PORT = 21;  ///< GameStream base-port offset used for the RTSP setup listener.
 
 #pragma pack(push, 1)
