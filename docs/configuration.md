@@ -2369,10 +2369,10 @@ MPEG-2 and H.263+ are opt-in Sunshine protocol extensions available to any imple
 not guarantee that the codec is available on the host. Client automatic selection prefers AV1, HEVC, then H.264
 before the legacy codecs. A client requesting only one codec fails negotiation if that codec is unavailable.
 
-| Codec | `ServerCodecModeSupport` flag | RTSP DESCRIBE marker | `x-nv-vqos[0].bitStreamFormat` |
-|-------|-------------------------------|----------------------|--------------------------------|
-| MPEG-2/H.262 | `0x00800000` | `MPV/90000` | `3` |
-| H.263+ | `0x02000000` | `H263-1998/90000` | `4` |
+| Codec        | `ServerCodecModeSupport` flag | RTSP DESCRIBE marker | `x-nv-vqos[0].bitStreamFormat` |
+|--------------|-------------------------------|----------------------|--------------------------------|
+| MPEG-2/H.262 | `0x00800000`                  | `MPV/90000`          | `3`                            |
+| H.263+       | `0x02000000`                  | `H263-1998/90000`    | `4`                            |
 
 The streams retain GameStream video framing, frame headers, recovery requests, and FEC. The SDP codec names do
 not imply RFC 2250 or RFC 4629 RTP payload packetization. Clients must implement the extension's negotiation,
