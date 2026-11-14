@@ -2595,6 +2595,13 @@ namespace video {
   }
 
   void fill_blank_image(platf::img_t &img) {
+    // GPU-backed images expose an opaque resource through `data` (on Windows VRAM it
+    // is an ID3D11Texture2D pointer), so writing pixels here would corrupt it. Those
+    // backends convert their blank/dummy images to black through the encoder path.
+    if (!img.is_cpu_buffer()) {
+      return;
+    }
+
     if (img.data == nullptr || img.width <= 0 || img.height <= 0 || img.row_pitch <= 0) {
       return;
     }

@@ -258,6 +258,10 @@ namespace video {
    * Any other layout, or a descriptor that is unusable (no buffer, degenerate dimensions, or a
    * row pitch too small to hold a row of pixels), is left untouched.
    *
+   * Images whose `data` is not a CPU-writable buffer (`img_t::is_cpu_buffer()` returns false)
+   * are skipped, because writing through an opaque GPU resource would corrupt it. Those
+   * backends render blank frames as black in their own conversion path.
+   *
    * @param img Image to fill in place.
    */
   void fill_blank_image(platf::img_t &img);

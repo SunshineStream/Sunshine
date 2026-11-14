@@ -189,6 +189,15 @@ namespace platf::dxgi {
     // DXGI format of this image texture
     DXGI_FORMAT format;  ///< DXGI format of the captured texture.
 
+    /**
+     * @brief Report that `data` is an opaque D3D11 texture rather than CPU pixels.
+     *
+     * @return Always false; blank frames are produced by the conversion path.
+     */
+    bool is_cpu_buffer() const override {
+      return false;
+    }
+
     virtual ~img_d3d_t() override {
       if (encoder_texture_handle) {
         CloseHandle(encoder_texture_handle);

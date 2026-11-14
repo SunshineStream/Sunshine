@@ -88,6 +88,26 @@ namespace nvhttp {
   void setup(const std::string &pkey, const std::string &cert);
 
   /**
+   * @brief Snapshot of the host app state used to handle a resume request.
+   */
+  struct resume_state_t {
+    int app_id {};  ///< Running app id, or 0 when no app is running.
+    bool input_only {};  ///< Whether the running app is the input-only placeholder.
+    bool no_active_sessions {};  ///< Whether no streaming sessions were active after cleanup.
+  };
+
+  /**
+   * @brief Resolve the app state for a resume request.
+   *
+   * Stopping sessions are joined first, because the last input-only session's teardown
+   * can terminate the placeholder. The snapshots must be taken afterwards so a reconnect
+   * cannot resume an app that no longer exists and fall back to desktop capture.
+   *
+   * @return Resolved app id, input-only mode, and active session state.
+   */
+  resume_state_t resolve_resume_state();
+
+  /**
    * @brief Simple-Web-Server HTTPS backend configured for Sunshine certificate handling.
    */
   class SunshineHTTPS: public SimpleWeb::HTTPS {

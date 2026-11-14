@@ -28,6 +28,7 @@
 
 // local includes
 #include <src/config.h>
+#include <src/nvhttp.h>
 #include <src/process.h>
 #include <src/utility.h>
 
@@ -1033,4 +1034,27 @@ TEST_F(ProcessInputOnlyTest, ExecuteRealAppOverPlaceholderClearsInputOnlyState) 
 
   process.terminate();
   EXPECT_FALSE(process.is_input_only_running());
+}
+
+TEST_F(ProcessInputOnlyTest, ResolveResumeState_SnapshotsAfterPlaceholderCleanup) {
+  auto saved_global_proc = std::move(proc::proc);
+  auto restore_global_proc = util::fail_guard([&saved_global_proc]() {
+    proc::proc = std::move(saved_global_proc);
+  });
+
+  auto process = make_process({make_placeholder_ctx("901")});
+  ASSERT_EQ(process.execute(901, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  proc::proc = std::move(process);
+
+  auto state = nvhttp::resolve_resume_state();
+  EXPECT_EQ(state.app_id, 901);
+  EXPECT_TRUE(state.input_only);
+
+  // The last input-only session's teardown terminates the placeholder. A resume taken
+  // before that cleanup would still see it and fall back to desktop capture.
+  proc::proc.terminate();
+
+  state = nvhttp::resolve_resume_state();
+  EXPECT_EQ(state.app_id, 0);
+  EXPECT_FALSE(state.input_only);
 }

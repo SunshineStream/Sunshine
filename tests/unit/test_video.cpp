@@ -674,6 +674,20 @@ namespace {
     img.pixel_pitch = pixel_pitch;
     img.row_pitch = row_pitch;
   }
+
+  /**
+   * @brief Image descriptor that exposes an opaque GPU resource through `data`.
+   */
+  struct gpu_backed_img_t: platf::img_t {
+    /**
+     * @brief Report that `data` is not a CPU-writable buffer.
+     *
+     * @return Always false.
+     */
+    bool is_cpu_buffer() const override {
+      return false;
+    }
+  };
 }  // namespace
 
 TEST(FillBlankImageTest, PacksOpaqueBlackForBgra) {
@@ -791,5 +805,21 @@ TEST(FillBlankImageTest, LeavesUnusableDescriptorsAndUnknownLayoutsAlone) {
 
   for (const auto byte : tight) {
     EXPECT_EQ(byte, 0x42);
+  }
+}
+
+TEST(FillBlankImageTest, SkipsOpaqueGpuBackedImages) {
+  // On the Windows VRAM path `data` is an ID3D11Texture2D pointer, so writing pixels
+  // through it would corrupt the texture object instead of filling the frame.
+  std::array<std::uint8_t, 2 * 2 * 4> buffer;
+  buffer.fill(0x3C);
+
+  gpu_backed_img_t img;
+  bind_image(img, buffer.data(), 2, 2, 4, 2 * 4);
+
+  video::fill_blank_image(img);
+
+  for (const auto byte : buffer) {
+    EXPECT_EQ(byte, 0x3C);
   }
 }

@@ -1539,15 +1539,6 @@ namespace nvhttp {
       response->close_connection_after_response = true;
     });
 
-    auto current_appid = proc::proc.running();
-    if (current_appid == 0) {
-      tree.put("root.resume", 0);
-      tree.put("root.<xmlattr>.status_code", 503);
-      tree.put("root.<xmlattr>.status_message", "No running app to resume");
-
-      return;
-    }
-
     auto args = request->parse_query_string();
     if (
       args.find("rikey"s) == std::end(args) ||
@@ -1560,10 +1551,24 @@ namespace nvhttp {
       return;
     }
 
+    // Clean up stopping sessions before taking the app and mode snapshots. The cleanup
+    // joins them synchronously, and the last input-only session's teardown terminates the
+    // placeholder. Reading the state afterwards keeps a reconnect from resuming an app
+    // that no longer exists and silently falling back to desktop capture.
+    const auto resume_state = resolve_resume_state();
+
+    if (resume_state.app_id == 0) {
+      tree.put("root.resume", 0);
+      tree.put("root.<xmlattr>.status_code", 503);
+      tree.put("root.<xmlattr>.status_message", "No running app to resume");
+
+      return;
+    }
+
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_sessions {resume_state.no_active_sessions};
     if (no_active_sessions && args.find("localAudioPlayMode"s) != std::end(args)) {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
@@ -1572,7 +1577,7 @@ namespace nvhttp {
     // If only the synthetic "Input Only" placeholder is running, a resume must not
     // silently upgrade into a full desktop-capture session. The placeholder is recognized
     // even if input-only mode was turned off after it started.
-    launch_session->input_only = proc::proc.is_input_only_running();
+    launch_session->input_only = resume_state.input_only;
 
     if (no_active_sessions) {
       // We want to prepare display only if there are no active sessions at
@@ -1675,6 +1680,14 @@ namespace nvhttp {
   void setup(const std::string &pkey, const std::string &cert) {
     conf_intern.pkey = pkey;
     conf_intern.servercert = cert;
+  }
+
+  resume_state_t resolve_resume_state() {
+    // Joining stopping sessions can terminate the last input-only placeholder, so the
+    // app and mode snapshots must be taken after the cleanup.
+    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+
+    return {proc::proc.running(), proc::proc.is_input_only_running(), no_active_sessions};
   }
 
   /**

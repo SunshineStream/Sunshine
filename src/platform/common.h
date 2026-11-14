@@ -548,6 +548,20 @@ namespace platf {
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
 
     /**
+     * @brief Report whether `data` points to a CPU-writable image buffer.
+     *
+     * Backends that expose an opaque GPU resource through `data` (for example the
+     * D3D11 VRAM capture path, where `data` is an `ID3D11Texture2D *`) return false
+     * so CPU-side pixel writes are skipped. Such backends produce blank frames
+     * through their own conversion path instead.
+     *
+     * @return True when pixels can be written directly through `data`.
+     */
+    virtual bool is_cpu_buffer() const {
+      return true;
+    }
+
+    /**
      * @brief Destroy the image.
      */
     virtual ~img_t() = default;
