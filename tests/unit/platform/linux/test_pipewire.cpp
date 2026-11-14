@@ -1,6 +1,6 @@
 /**
  * @file tests/unit/platform/linux/test_pipewire.cpp
- * @brief Test the teardown of the shared PipeWire capture display.
+ * @brief Test PipeWire stream lifecycle handling and capture display teardown.
  */
 #if defined(SUNSHINE_BUILD_KWIN) || defined(SUNSHINE_BUILD_PORTAL)
   // test includes
@@ -18,6 +18,7 @@
   #include <optional>
   #include <string>
   #include <thread>
+  #include <utility>
 
   // lib includes
   #include <fcntl.h>
@@ -30,6 +31,12 @@
   #include "src/platform/linux/pipewire.cpp"
 
 using namespace std::literals;
+
+  #ifdef SUNSHINE_BUILD_PORTAL
+namespace portal {
+  bool check_stream_dead_for_testing(std::shared_ptr<pipewire::shared_state_t> shared_state, bool &negotiate_maxframerate, platf::capture_e &out_status);
+}  // namespace portal
+  #endif
 
 namespace {
   /**
@@ -47,10 +54,11 @@ namespace {
      * @brief Connect the display's PipeWire core to a socket, as for a stream from the portal.
      *
      * @param fd Connected socket. The display owns it afterwards.
+     * @param state Callback state for the new connection.
      * @return Result of pipewire_t::init(): 0 on success.
      */
-    int connect(int fd) {
-      return pipewire.init(fd, PW_ID_ANY, SPA_ID_INVALID, std::make_shared<pipewire::shared_state_t>());
+    int connect(int fd, std::shared_ptr<pipewire::shared_state_t> state = std::make_shared<pipewire::shared_state_t>()) {
+      return pipewire.init(fd, PW_ID_ANY, SPA_ID_INVALID, std::move(state));
     }
   };
 
@@ -206,6 +214,100 @@ namespace {
     }
   };
 }  // namespace
+
+TEST(PipeWireStreamStateTest, RecordsStartupUntilTheStreamIsReplaced) {
+  pipewire::stream_data_t data {};
+  data.shared = std::make_shared<pipewire::shared_state_t>();
+  EXPECT_FALSE(data.shared->has_streamed.load());
+
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_CONNECTING, PW_STREAM_STATE_PAUSED, nullptr);
+  EXPECT_FALSE(data.shared->has_streamed.load());
+  EXPECT_FALSE(data.shared->stream_dead.load());
+
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_PAUSED, PW_STREAM_STATE_STREAMING, nullptr);
+  EXPECT_TRUE(data.shared->has_streamed.load());
+  EXPECT_FALSE(data.shared->stream_dead.load());
+
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_STREAMING, PW_STREAM_STATE_ERROR, "no more input formats");
+  EXPECT_TRUE(data.shared->has_streamed.load());
+  EXPECT_TRUE(data.shared->stream_dead.exchange(false));
+
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_ERROR, PW_STREAM_STATE_UNCONNECTED, nullptr);
+  EXPECT_TRUE(data.shared->has_streamed.load());
+  EXPECT_TRUE(data.shared->stream_dead.load());
+}
+
+TEST(PipeWireStreamStateTest, StreamingWithoutSharedStateIsIgnored) {
+  pipewire::stream_data_t data {};
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_PAUSED, PW_STREAM_STATE_STREAMING, nullptr);
+  EXPECT_FALSE(data.shared);
+}
+
+  #ifdef SUNSHINE_BUILD_PORTAL
+TEST_F(PipeWireDisplayTest, PortalRetainsMaxFramerateAfterAnEstablishedStreamFails) {
+  for (const bool handle_pause_first : {false, true}) {
+    SCOPED_TRACE(handle_pause_first);
+    pipewire::stream_data_t data {};
+    data.shared = std::make_shared<pipewire::shared_state_t>();
+    bool negotiate_maxframerate = true;
+    auto status = platf::capture_e::ok;
+
+    pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_PAUSED, PW_STREAM_STATE_STREAMING, nullptr);
+    pw_buffer buffer {};
+    data.current_buffer = &buffer;
+    data.frame_ready = true;
+    pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_STREAMING, PW_STREAM_STATE_PAUSED, nullptr);
+    EXPECT_FALSE(data.frame_ready);
+    EXPECT_EQ(data.current_buffer, nullptr);
+    ASSERT_TRUE(data.shared->stream_dead.load());
+
+    // The capture thread may handle the pause before or after PipeWire reports the later error.
+    if (handle_pause_first) {
+      EXPECT_TRUE(data.shared->stream_dead.exchange(false));
+      EXPECT_FALSE(portal::check_stream_dead_for_testing(data.shared, negotiate_maxframerate, status));
+      EXPECT_TRUE(negotiate_maxframerate);
+      EXPECT_EQ(status, platf::capture_e::ok);
+    }
+
+    pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_PAUSED, PW_STREAM_STATE_ERROR, "no more input formats");
+    ASSERT_TRUE(data.shared->stream_dead.exchange(false));
+    EXPECT_FALSE(portal::check_stream_dead_for_testing(data.shared, negotiate_maxframerate, status));
+    EXPECT_TRUE(negotiate_maxframerate);
+    EXPECT_EQ(status, platf::capture_e::ok);
+  }
+}
+
+TEST_F(PipeWireDisplayTest, PortalRetriesWithoutMaxFramerateOnlyIfTheStreamNeverStarted) {
+  pipewire::stream_data_t data {};
+  data.shared = std::make_shared<pipewire::shared_state_t>();
+  bool negotiate_maxframerate = true;
+  auto status = platf::capture_e::ok;
+
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_CONNECTING, PW_STREAM_STATE_PAUSED, nullptr);
+  pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_PAUSED, PW_STREAM_STATE_ERROR, "no more input formats");
+  ASSERT_TRUE(data.shared->stream_dead.exchange(false));
+  EXPECT_TRUE(portal::check_stream_dead_for_testing(data.shared, negotiate_maxframerate, status));
+  EXPECT_FALSE(negotiate_maxframerate);
+  EXPECT_EQ(status, platf::capture_e::reinit);
+
+  status = platf::capture_e::ok;
+  EXPECT_FALSE(portal::check_stream_dead_for_testing(data.shared, negotiate_maxframerate, status));
+  EXPECT_FALSE(negotiate_maxframerate);
+  EXPECT_EQ(status, platf::capture_e::ok);
+}
+  #endif
+
+TEST_F(PipeWireDisplayTest, NewConnectionResetsStartupHistory) {
+  std::array<int, 2> sockets {};
+  ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets.data()), 0);
+  auto state = std::make_shared<pipewire::shared_state_t>();
+  state->has_streamed.store(true);
+  auto display = std::make_shared<test_display_t>();
+  display->connect(sockets[0], state);
+  EXPECT_FALSE(state->has_streamed.load());
+  display.reset();
+  close(sockets[1]);
+}
 
 TEST_F(PipeWireDisplayTest, DisplayDestroyedBeforeInitKeepsStandardInput) {
   // Make sure fd 0 is open, so that closing it is visible even when the runner closed standard input.

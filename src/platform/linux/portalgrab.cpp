@@ -1095,10 +1095,10 @@ namespace portal {
     }
 
     /**
-     * @brief Check stream dead.
+     * @brief Handle portal closure or retry failed startup negotiation without maxFramerate.
      *
-     * @param out_status Out status.
-     * @return True when the PipeWire stream can no longer produce frames.
+     * @param out_status Capture status selected when portal-specific handling is needed.
+     * @return True when portal-specific handling selected a capture status; false to use the default stream reset.
      */
     bool check_stream_dead(platf::capture_e &out_status) override {
       // If the pipewire stream stopped due to closed portal session stop the capture with an error
@@ -1109,7 +1109,7 @@ namespace portal {
         return true;  // Stop capture with error (due to out_status)
       }
       // Disable maxframerate negotiation if the stream died without having ever started (e.g. GNOME mutter does not support it)
-      if (shared_state->previous_state != PW_STREAM_STATE_STREAMING && negotiate_maxframerate.load()) {
+      if (!shared_state->has_streamed.load() && negotiate_maxframerate.load()) {
         BOOST_LOG(warning) << "[portalgrab] Negotiation failed, will retry without maxFramerate"sv;
         negotiate_maxframerate.store(false);
         pipewire.set_negotiate_maxframerate(false);
@@ -1125,6 +1125,42 @@ namespace portal {
     // Class variable to store runtime state of maxFramerate negotiation
     static inline std::atomic negotiate_maxframerate {true};  ///< Whether portal negotiation should request the maximum frame rate.
   };
+
+#ifdef SUNSHINE_TESTS
+  /**
+   * @brief Exercise the portal's dead-stream handling without opening a real portal session.
+   *
+   * @param shared_state Stream state populated by PipeWire callbacks.
+   * @param negotiate_maxframerate Negotiation setting before and after handling the dead stream.
+   * @param out_status Capture status selected by the handler.
+   * @return True when portal-specific handling selected a capture status.
+   */
+  bool check_stream_dead_for_testing(std::shared_ptr<pipewire::shared_state_t> shared_state, bool &negotiate_maxframerate, platf::capture_e &out_status) {
+    /**
+     * @brief Portal display with injected callback state and no D-Bus session.
+     */
+    class test_portal_t: public portal_t {
+    public:
+      /**
+       * @brief Install the stream state to be examined by the portal handler.
+       * @param state Stream state populated by PipeWire callbacks.
+       */
+      explicit test_portal_t(std::shared_ptr<pipewire::shared_state_t> state):
+          portal_t {} {
+        this->shared_state = std::move(state);
+        dbus.pipewire_fd = -1;
+      }
+    } display {std::move(shared_state)};
+
+    const bool saved = portal_t::negotiate_maxframerate.exchange(negotiate_maxframerate);
+    auto restore = util::fail_guard([saved]() {
+      portal_t::negotiate_maxframerate.store(saved);
+    });
+    const bool handled = display.check_stream_dead(out_status);
+    negotiate_maxframerate = portal_t::negotiate_maxframerate.load();
+    return handled;
+  }
+#endif
 }  // namespace portal
 
 namespace platf {
