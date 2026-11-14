@@ -1622,7 +1622,7 @@ namespace config {
    * @param value Resolution text such as `2560x1440`.
    * @param width Parsed width, written only on success.
    * @param height Parsed height, written only on success.
-   * @return `true` when the string is a valid positive resolution.
+   * @return `true` when both dimensions are at least 2, the smallest even size the cap can produce.
    */
   bool parse_stream_resolution(const std::string_view &value, int &width, int &height) {
     const auto separator = value.find('x');
@@ -1635,13 +1635,13 @@ namespace config {
 
     int parsed_width = 0;
     const auto [width_end, width_ec] = std::from_chars(begin, begin + separator, parsed_width);
-    if (width_ec != std::errc {} || width_end != begin + separator || parsed_width <= 0) {
+    if (width_ec != std::errc {} || width_end != begin + separator || parsed_width < 2) {
       return false;
     }
 
     int parsed_height = 0;
     const auto [height_end, height_ec] = std::from_chars(begin + separator + 1, end, parsed_height);
-    if (height_ec != std::errc {} || height_end != end || parsed_height <= 0) {
+    if (height_ec != std::errc {} || height_end != end || parsed_height < 2) {
       return false;
     }
 

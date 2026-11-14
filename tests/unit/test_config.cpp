@@ -325,6 +325,9 @@ TEST_F(ConfigPersistenceTest, ParsesNvencTwoPassModesAndDefaultsUnknownValues) {
   }
 }
 
+/**
+ * @brief Verify resolution-cap parsing rejects malformed values without changing the configured dimensions.
+ */
 TEST_F(ConfigPersistenceTest, ParsesMaxStreamResolutionAndRejectsMalformedValues) {
   const auto original_video = config::video;
   const auto restore_video = util::fail_guard([original_video]() {
@@ -346,6 +349,8 @@ TEST_F(ConfigPersistenceTest, ParsesMaxStreamResolutionAndRejectsMalformedValues
     "x1440"sv,
     "0x1440"sv,
     "2560x0"sv,
+    "1x1440"sv,
+    "2560x1"sv,
     "-2560x1440"sv,
     "2560x1440x"sv,
     "2560 x 1440"sv,
@@ -378,6 +383,9 @@ struct StreamResolutionCapCase {
  */
 struct StreamResolutionCapTest: testing::TestWithParam<StreamResolutionCapCase> {};
 
+/**
+ * @brief Verify resolution caps preserve aspect ratio and produce even dimensions while leaving uncapped requests unchanged.
+ */
 TEST_P(StreamResolutionCapTest, CapsPreservingAspectRatioWithEvenDimensions) {
   const auto original_video = config::video;
   const auto restore_video = util::fail_guard([original_video]() {
