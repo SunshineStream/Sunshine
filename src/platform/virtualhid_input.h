@@ -356,4 +356,20 @@ namespace platf::virtualhid {
    */
   bool configured_gamepad_supports_controller_extensions();
 
+  /**
+   * @brief Determine the logind seat targeted by this Sunshine instance.
+   *
+   * @return Value of `XDG_SEAT`, or an empty string when it is unset.
+   */
+  std::string target_seat();
+
+  /**
+   * @brief Append a seat suffix to a virtual device name for multi-seat udev rules.
+   *
+   * @param base_name Device name advertised by the libvirtualhid profile.
+   * @param seat Target logind seat.
+   * @return `base_name` unchanged for an empty seat or `seat0`, otherwise `"<base_name> (<seat>)"`.
+   */
+  std::string device_name_for_seat(std::string_view base_name, std::string_view seat);
+
 }  // namespace platf::virtualhid
