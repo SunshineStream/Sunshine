@@ -810,8 +810,11 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             **FreeBSD/Linux + pipewire:**
             <br>
             @code{}
-            pactl get-default-sink
+            pactl list short sinks
             @endcode
+            <br>
+            <br>
+            Copy the sink name (second column) into `audio_sink`.
             <br>
             <br>
             **macOS:**
