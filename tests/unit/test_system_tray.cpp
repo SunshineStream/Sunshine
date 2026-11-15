@@ -351,6 +351,22 @@ TEST_F(SystemTrayTest, LeftClickUsesNativeMacOSMenu) {
   EXPECT_STREQ(tray_data.menu[0].text, "Open Sunshine");
   EXPECT_FALSE(system_tray::tray_initialized_for_testing());
 }
+
+TEST_F(SystemTrayTest, UsesMonochromeMacOSMenuBarIconsForEveryState) {
+  const auto &tray_data = system_tray::tray_data_for_testing();
+  ASSERT_EQ(tray_data.iconPathCount, 5);
+  for (const auto *name : {"sunshine", "playing", "pausing", "locked"}) {
+    const std::string suffix = std::format("images/macos-tray-{}.svg", name);
+    bool found = false;
+    for (int index = 0; index < 4; ++index) {
+      if (std::string_view {tray_data.allIconPaths[index]}.ends_with(suffix)) {
+        found = true;
+        break;
+      }
+    }
+    EXPECT_TRUE(found) << "Missing macOS menu bar icon: " << suffix;
+  }
+}
   #endif
 
   #ifdef _WIN32

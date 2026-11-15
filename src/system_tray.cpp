@@ -9,22 +9,38 @@
    * @def TRAY_ICON
    * @brief Path to the default system tray icon.
    */
-  #define TRAY_ICON WEB_DIR "images/logo-sunshine.svg"
+  #ifdef __APPLE__
+    #define TRAY_ICON WEB_DIR "images/macos-tray-sunshine.svg"
+  #else
+    #define TRAY_ICON WEB_DIR "images/logo-sunshine.svg"
+  #endif
   /**
    * @def TRAY_ICON_PLAYING
    * @brief Path to the system tray icon used while streaming.
    */
-  #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.svg"
+  #ifdef __APPLE__
+    #define TRAY_ICON_PLAYING WEB_DIR "images/macos-tray-playing.svg"
+  #else
+    #define TRAY_ICON_PLAYING WEB_DIR "images/sunshine-playing.svg"
+  #endif
   /**
    * @def TRAY_ICON_PAUSING
    * @brief Path to the system tray icon used while streaming is paused.
    */
-  #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.svg"
+  #ifdef __APPLE__
+    #define TRAY_ICON_PAUSING WEB_DIR "images/macos-tray-pausing.svg"
+  #else
+    #define TRAY_ICON_PAUSING WEB_DIR "images/sunshine-pausing.svg"
+  #endif
   /**
    * @def TRAY_ICON_LOCKED
    * @brief Path to the system tray icon used for pairing requests.
    */
-  #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
+  #ifdef __APPLE__
+    #define TRAY_ICON_LOCKED WEB_DIR "images/macos-tray-locked.svg"
+  #else
+    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
+  #endif
   /**
    * @def TRAY_ICON_VIRTUALHID
    * @brief Path to the Virtual HID Broker notification icon.
