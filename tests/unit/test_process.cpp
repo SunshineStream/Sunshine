@@ -1049,12 +1049,22 @@ TEST_F(ProcessInputOnlyTest, ResolveResumeState_SnapshotsAfterPlaceholderCleanup
   auto state = nvhttp::resolve_resume_state();
   EXPECT_EQ(state.app_id, 901);
   EXPECT_TRUE(state.input_only);
+  EXPECT_TRUE(state.can_resume());
+  EXPECT_FALSE(state.should_configure_display());
 
-  // The last input-only session's teardown terminates the placeholder. A resume taken
-  // before that cleanup would still see it and fall back to desktop capture.
-  proc::proc.terminate();
+  // Model a stopping session whose teardown terminates the placeholder while the state is
+  // being resolved. A snapshot taken before the cleanup would still report app 901 here
+  // and let /resume fall back to desktop capture.
+  state = nvhttp::resolve_resume_state([]() {
+    EXPECT_EQ(proc::proc.running(), 901);
+    EXPECT_TRUE(proc::proc.is_input_only_running());
+    proc::proc.terminate();
+    return true;
+  });
 
-  state = nvhttp::resolve_resume_state();
   EXPECT_EQ(state.app_id, 0);
   EXPECT_FALSE(state.input_only);
+  EXPECT_TRUE(state.no_active_sessions);
+  EXPECT_FALSE(state.can_resume());
+  EXPECT_FALSE(state.should_configure_display());
 }

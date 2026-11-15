@@ -168,4 +168,103 @@ INSTANTIATE_TEST_SUITE_P(
     Fp16TransferParam {DXGI_FORMAT_Y410, true, true, fp16_transfer_e::perceptual_quantizer}
   )
 );
+
+TEST(WindowsRtvClearTest, ClassifiesImmediateAndDeferredClearFormats) {
+  // NV12 and P010 render target views support ClearRenderTargetView(), so the padding is
+  // cleared when the conversion resources are initialized.
+  EXPECT_FALSE(platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_NV12));
+  EXPECT_FALSE(platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_P010));
+
+  // Integer 4:4:4 render target views cannot be cleared with ClearRenderTargetView(), so
+  // they must be initialized by drawing the black texture. This has to happen before the
+  // first frame, even when that frame is blank (input-only sessions never capture content).
+  EXPECT_TRUE(platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_AYUV));
+  EXPECT_TRUE(platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_R16_UINT));
+  EXPECT_TRUE(platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_Y410));
+}
+
+TEST(WindowsRtvClearTest, FirstFrameBlankConversionInImmediateClearFormatFamily) {
+  // Immediate-clear formats are already cleared when the conversion resources are
+  // initialized, so a blank first frame must not trigger a drawn clear or a frame draw.
+  for (const auto format : {DXGI_FORMAT_NV12, DXGI_FORMAT_P010}) {
+    bool rtvs_cleared = !platf::dxgi::requires_drawn_rtv_clear(format);
+    EXPECT_TRUE(rtvs_cleared);
+
+    int drawn_clear_calls = 0;
+    int frame_draw_calls = 0;
+    const auto result = platf::dxgi::convert_d3d_frame(
+      rtvs_cleared,
+      true,
+      [&]() -> bool {
+        ++drawn_clear_calls;
+        return true;
+      },
+      [&]() -> int {
+        ++frame_draw_calls;
+        return 0;
+      }
+    );
+
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(rtvs_cleared);
+    EXPECT_EQ(drawn_clear_calls, 0);
+    EXPECT_EQ(frame_draw_calls, 0);
+  }
+}
+
+TEST(WindowsRtvClearTest, FirstFrameBlankConversionInDeferredClearFormatFamily) {
+  for (const auto format : {DXGI_FORMAT_AYUV, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_Y410}) {
+    bool rtvs_cleared = !platf::dxgi::requires_drawn_rtv_clear(format);
+    EXPECT_FALSE(rtvs_cleared);
+
+    int drawn_clear_calls = 0;
+    int frame_draw_calls = 0;
+    auto draw_black_rtv_clear = [&]() -> bool {
+      ++drawn_clear_calls;
+      return true;
+    };
+    auto draw_captured_frame = [&]() -> int {
+      ++frame_draw_calls;
+      return 0;
+    };
+
+    // The first blank frame initializes the render targets by drawing the black clear.
+    EXPECT_EQ(platf::dxgi::convert_d3d_frame(rtvs_cleared, true, draw_black_rtv_clear, draw_captured_frame), 0);
+    EXPECT_TRUE(rtvs_cleared);
+    EXPECT_EQ(drawn_clear_calls, 1);
+    EXPECT_EQ(frame_draw_calls, 0);
+
+    // A second blank frame must not re-run the drawn clear.
+    EXPECT_EQ(platf::dxgi::convert_d3d_frame(rtvs_cleared, true, draw_black_rtv_clear, draw_captured_frame), 0);
+    EXPECT_EQ(drawn_clear_calls, 1);
+    EXPECT_EQ(frame_draw_calls, 0);
+
+    // A subsequent non-blank frame draws the captured frame without re-clearing.
+    EXPECT_EQ(platf::dxgi::convert_d3d_frame(rtvs_cleared, false, draw_black_rtv_clear, draw_captured_frame), 0);
+    EXPECT_EQ(drawn_clear_calls, 1);
+    EXPECT_EQ(frame_draw_calls, 1);
+  }
+}
+
+TEST(WindowsRtvClearTest, DeferredClearFailureOnBlankFirstFrameFailsConversion) {
+  bool rtvs_cleared = !platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_AYUV);
+  EXPECT_FALSE(rtvs_cleared);
+
+  bool frame_drawn = false;
+  const auto result = platf::dxgi::convert_d3d_frame(
+    rtvs_cleared,
+    true,
+    []() -> bool {
+      return false;
+    },
+    [&]() -> int {
+      frame_drawn = true;
+      return 0;
+    }
+  );
+
+  EXPECT_EQ(result, -1);
+  EXPECT_FALSE(rtvs_cleared);
+  EXPECT_FALSE(frame_drawn);
+}
 #endif

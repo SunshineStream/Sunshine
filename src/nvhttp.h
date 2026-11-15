@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -94,6 +95,27 @@ namespace nvhttp {
     int app_id {};  ///< Running app id, or 0 when no app is running.
     bool input_only {};  ///< Whether the running app is the input-only placeholder.
     bool no_active_sessions {};  ///< Whether no streaming sessions were active after cleanup.
+
+    /**
+     * @brief Report whether a running app can be resumed.
+     *
+     * @return True when an app is running.
+     */
+    constexpr bool can_resume() const noexcept {
+      return app_id > 0;
+    }
+
+    /**
+     * @brief Report whether a resume should reconfigure the display.
+     *
+     * The display is only configured for a resumable app when no session is active and
+     * the app is not the input-only placeholder, which shows no video.
+     *
+     * @return True when the display should be configured for the resumed app.
+     */
+    constexpr bool should_configure_display() const noexcept {
+      return can_resume() && no_active_sessions && !input_only;
+    }
   };
 
   /**
@@ -106,6 +128,18 @@ namespace nvhttp {
    * @return Resolved app id, input-only mode, and active session state.
    */
   resume_state_t resolve_resume_state();
+
+  /**
+   * @brief Resolve the app state for a resume request using a supplied session cleanup.
+   *
+   * The cleanup callback runs before the app and mode snapshots are taken. Tests use this
+   * seam to model a stopping session whose teardown terminates the placeholder.
+   *
+   * @param cleanup_stopping_sessions Callback that joins stopping sessions and reports
+   *        whether no active session remains.
+   * @return Resolved app id, input-only mode, and active session state.
+   */
+  resume_state_t resolve_resume_state(const std::function<bool()> &cleanup_stopping_sessions);
 
   /**
    * @brief Simple-Web-Server HTTPS backend configured for Sunshine certificate handling.

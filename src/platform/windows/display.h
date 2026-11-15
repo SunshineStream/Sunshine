@@ -210,6 +210,55 @@ namespace platf::dxgi {
    */
   fp16_transfer_e select_fp16_transfer(DXGI_FORMAT format, bool hdr, bool gamma_encoded_sdr);
 
+  /**
+   * @brief Report whether an output format needs its render targets cleared by drawing.
+   *
+   * NV12 and P010 render target views support ClearRenderTargetView(), so their padding is
+   * cleared when the conversion resources are initialized. Integer 4:4:4 formats (AYUV,
+   * R16_UINT, Y410) can only be cleared by drawing the black texture, which the conversion
+   * path performs before the first frame is encoded.
+   *
+   * @param format Encoder output surface format.
+   * @return True when the render targets must be initialized by a black draw.
+   */
+  constexpr bool requires_drawn_rtv_clear(DXGI_FORMAT format) {
+    return format == DXGI_FORMAT_AYUV || format == DXGI_FORMAT_R16_UINT || format == DXGI_FORMAT_Y410;
+  }
+
+  /**
+   * @brief Initialize the render targets before drawing the first frame.
+   *
+   * When the render targets have not been cleared yet, the black clear is performed first so
+   * that aspect ratio padding is black even if the first frame is blank. The captured frame
+   * is only drawn for non-blank images.
+   *
+   * @param rtvs_cleared Whether the render targets have already been initialized.
+   * @param img_blank Whether the image is blank and must not be drawn.
+   * @param draw_black_rtv_clear Callback that draws the black clear, returning false on failure.
+   * @param draw_captured_frame Callback that draws the captured frame and returns its status.
+   * @return Conversion status, or -1 when the black clear fails.
+   */
+  template<class ClearFn, class DrawFrameFn>
+  int convert_d3d_frame(
+    bool &rtvs_cleared,
+    bool img_blank,
+    ClearFn &&draw_black_rtv_clear,
+    DrawFrameFn &&draw_captured_frame
+  ) {
+    if (!rtvs_cleared) {
+      if (!draw_black_rtv_clear()) {
+        return -1;
+      }
+      rtvs_cleared = true;
+    }
+
+    if (!img_blank) {
+      return draw_captured_frame();
+    }
+
+    return 0;
+  }
+
   class hwdevice_t;
 
   /**

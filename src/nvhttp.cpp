@@ -1557,7 +1557,7 @@ namespace nvhttp {
     // that no longer exists and silently falling back to desktop capture.
     const auto resume_state = resolve_resume_state();
 
-    if (resume_state.app_id == 0) {
+    if (!resume_state.can_resume()) {
       tree.put("root.resume", 0);
       tree.put("root.<xmlattr>.status_code", 503);
       tree.put("root.<xmlattr>.status_message", "No running app to resume");
@@ -1584,7 +1584,7 @@ namespace nvhttp {
       // the moment. This should be done before probing encoders as it could
       // change the active displays. Input-only sessions show no video, so they
       // must not change the physical display configuration.
-      if (!launch_session->input_only) {
+      if (resume_state.should_configure_display()) {
         display_device::configure_display(config::video, *launch_session);
       }
 
@@ -1682,12 +1682,18 @@ namespace nvhttp {
     conf_intern.servercert = cert;
   }
 
-  resume_state_t resolve_resume_state() {
+  resume_state_t resolve_resume_state(const std::function<bool()> &cleanup_stopping_sessions) {
     // Joining stopping sessions can terminate the last input-only placeholder, so the
     // app and mode snapshots must be taken after the cleanup.
-    const bool no_active_sessions {rtsp_stream::session_count() == 0};
+    const bool no_active_sessions {cleanup_stopping_sessions()};
 
     return {proc::proc.running(), proc::proc.is_input_only_running(), no_active_sessions};
+  }
+
+  resume_state_t resolve_resume_state() {
+    return resolve_resume_state([]() {
+      return rtsp_stream::session_count() == 0;
+    });
   }
 
   /**
