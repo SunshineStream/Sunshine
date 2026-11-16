@@ -38,10 +38,10 @@ namespace audio {
    * @brief Serializes capture-target refresh, microphone creation, and target release across concurrent sessions.
    *
    * All capture() threads share one audio control. Each session's
-   * session_capture_target_t guard holds this mutex across every
-   * refresh/microphone pair (and across the exit clear), which keeps one
-   * session from resetting the shared target between another session's
-   * refresh and microphone creation.
+   * session_capture_target_t guard holds this mutex across the refresh
+   * and the exit clear, but never across microphone creation itself,
+   * which can wait on endpoint activation; holding the lock across it
+   * would stall every other session's teardown.
    *
    * Lock order: this outer mutex is always taken before the backend-internal
    * `platf::audio_control_t::capture_state_mutex_`, acquired inside
@@ -214,13 +214,16 @@ namespace audio {
    * @brief Refresh the endpoint capture target, then create the microphone for it.
    */
   std::unique_ptr<platf::mic_t> session_capture_target_t::create_microphone(const platf::microphone_params_t &mic_params) {
-    // Refresh the endpoint target before every microphone creation. The lock
-    // covers the refresh/microphone pair, and the refresh is recorded even
-    // when microphone creation fails so teardown still releases this
-    // session's target.
-    std::lock_guard lock {*mutex_};
-    control_->set_capture_target(intent_, 0);
-    recorded_ = true;
+    // Refresh the endpoint target before every microphone creation. Only the
+    // refresh runs under the lock: microphone creation can wait on endpoint
+    // activation, and holding the lock across it would stall every other
+    // session's teardown. The refresh is recorded even when microphone
+    // creation fails so teardown still releases this session's target.
+    {
+      std::lock_guard lock {*mutex_};
+      control_->set_capture_target(intent_, 0);
+      recorded_ = true;
+    }
     return control_->microphone(mic_params);
   }
 

@@ -264,9 +264,9 @@ namespace audio {
    * @brief RAII owner of one session's shared capture target.
    *
    * Sessions share one audio control. Every create_microphone() call refreshes
-   * the endpoint target (set_capture_target()) and creates the microphone
-   * under one lock acquisition, so a refresh can never be dropped or
-   * interleaved with another session's refresh. Destruction releases exactly
+   * the endpoint target (set_capture_target()) under one lock acquisition,
+   * so a refresh can never be dropped or interleaved with another session's
+   * refresh, then creates the microphone without holding the lock. Destruction releases exactly
    * the last recorded target via clear_capture_target(), or nothing when no
    * refresh ever ran (for example after an aborted sink selection), so one
    * session cannot wipe another session's recorded target on its way out.
@@ -297,10 +297,9 @@ namespace audio {
      *
      * The refresh always runs before microphone creation so a dropped refresh
      * is observable: set_capture_target() is called on every invocation,
-     * including reinitializations and microphone failures. The lock is held
-     * across the refresh/microphone pair so the shared target cannot change
-     * in between. The endpoint form always records PID 0: per-process capture
-     * is not selected here.
+     * including reinitializations and microphone failures. The lock covers
+     * only the refresh, never microphone creation itself. The endpoint form
+     * always records PID 0: per-process capture is not selected here.
      *
      * @param mic_params Microphone capture parameters for the requested layout.
      * @return Microphone capture object, or nullptr when creation failed.

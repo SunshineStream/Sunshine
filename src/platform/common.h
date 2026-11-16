@@ -976,6 +976,15 @@ namespace platf {
     }
 
     /**
+     * @brief Copy the recorded capture sink.
+     *
+     * @return Recorded sink name, possibly empty when nothing was recorded.
+     */
+    [[nodiscard]] std::string snapshot_capture_sink_record() const {
+      return snapshot_recorded_sink();
+    }
+
+    /**
      * @brief Create a microphone capture stream for the requested layout.
      *
      * @param mapping Opus channel mapping table for the requested layout.

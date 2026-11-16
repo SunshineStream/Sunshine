@@ -197,6 +197,8 @@ TEST(KeepDefaultSinkAudioTest, CaptureSinkKeepsHostDefaultSink) {
 
   // A nonexistent sink proves the capture path never swaps: set_sink would fail with -1.
   EXPECT_EQ(control->capture_sink("sunshine-test-nonexistent-sink"), 0);
+  // The sink must be recorded for the monitor lookup in microphone().
+  EXPECT_EQ(control->snapshot_capture_sink_record(), "sunshine-test-nonexistent-sink");
 
   auto after = control->sink_info();
   ASSERT_TRUE(after.has_value());
