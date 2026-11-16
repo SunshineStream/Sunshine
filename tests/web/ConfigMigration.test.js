@@ -7,10 +7,10 @@ vi.mock('../../src_assets/common/assets/web/Navbar.vue', () => ({
 
 import Config from '../../src_assets/common/assets/web/Config.vue'
 
-async function mountConfig(serverConfig) {
+async function mountConfig(serverConfig, platform = 'windows') {
   const fetchMock = vi.fn(async (url, options) => {
     if (url === './api/config' && !options) {
-      return { json: async () => ({ platform: 'windows', version: 'test', status: true, ...serverConfig }) }
+      return { json: async () => ({ platform, version: 'test', status: true, ...serverConfig }) }
     }
     if (url === './api/config' && options?.method === 'POST') {
       return { status: 200, json: async () => ({ status: true }) }
@@ -35,7 +35,7 @@ afterEach(() => {
 
 describe('external_audio upgrade migration', () => {
   it.each(['enabled', 'true', 'on', 'yes', '1', 'TRUE', 'On'])('maps legacy external_audio=%s to keep_default_sink', async legacyValue => {
-    const { wrapper } = await mountConfig({ external_audio: legacyValue })
+    const { wrapper } = await mountConfig({ external_audio: legacyValue, audio_sink: 'pinned-sink' })
 
     expect(wrapper.vm.config.keep_default_sink).toBe('enabled')
     expect(wrapper.vm.config).not.toHaveProperty('external_audio')
@@ -59,15 +59,31 @@ describe('external_audio upgrade migration', () => {
   })
 
   it('migrates when keep_default_sink is present but empty', async () => {
-    const { wrapper } = await mountConfig({ external_audio: 'enabled', keep_default_sink: '' })
+    const { wrapper } = await mountConfig({ external_audio: 'enabled', keep_default_sink: '', audio_sink: 'pinned-sink' })
 
     expect(wrapper.vm.config.keep_default_sink).toBe('enabled')
     expect(wrapper.vm.config).not.toHaveProperty('external_audio')
     wrapper.unmount()
   })
 
+  it('does not migrate on non-Windows platforms', async () => {
+    const { wrapper } = await mountConfig({ external_audio: 'enabled', audio_sink: 'pinned-sink' }, 'linux')
+
+    expect(wrapper.vm.config.keep_default_sink).toBe('disabled')
+    expect(wrapper.vm.config).not.toHaveProperty('external_audio')
+    wrapper.unmount()
+  })
+
+  it('does not migrate without an explicit audio_sink', async () => {
+    const { wrapper } = await mountConfig({ external_audio: 'enabled' })
+
+    expect(wrapper.vm.config.keep_default_sink).toBe('disabled')
+    expect(wrapper.vm.config).not.toHaveProperty('external_audio')
+    wrapper.unmount()
+  })
+
   it('sends neither key when a migrated user unchecks and saves', async () => {
-    const { wrapper, fetchMock } = await mountConfig({ external_audio: 'enabled' })
+    const { wrapper, fetchMock } = await mountConfig({ external_audio: 'enabled', audio_sink: 'pinned-sink' })
 
     wrapper.vm.config.keep_default_sink = 'disabled'
     await wrapper.vm.save()

@@ -196,16 +196,26 @@
    * Migrate the legacy external_audio option into keep_default_sink.
    *
    * An explicit keep_default_sink value wins; the legacy key is always dropped so
-   * the next save persists only the unified key.
+   * the next save persists only the unified key. The legacy key only ever took
+   * effect on Windows with an explicit audio_sink, so the migration keeps that
+   * exact scope instead of changing routing elsewhere.
    *
    * @param {Object} config Configuration object to migrate in place.
+   * @param {string} platform Platform reported by the server.
    */
-  function migrateExternalAudioConfig(config) {
+  function migrateExternalAudioConfig(config, platform) {
     if (!Object.hasOwn(config, 'external_audio')) {
       return;
     }
     const keepDefaultSink = config.keep_default_sink;
-    if ((keepDefaultSink === undefined || keepDefaultSink === '') && isConfigBoolEnabled(config.external_audio)) {
+    const audioSink = config.audio_sink;
+    if (
+      platform === 'windows' &&
+      typeof audioSink === 'string' &&
+      audioSink !== '' &&
+      (keepDefaultSink === undefined || keepDefaultSink === '') &&
+      isConfigBoolEnabled(config.external_audio)
+    ) {
       config.keep_default_sink = 'enabled';
     }
     delete config.external_audio;
@@ -312,7 +322,7 @@
           delete this.config.status;
           delete this.config.version;
 
-          migrateExternalAudioConfig(this.config);
+          migrateExternalAudioConfig(this.config, this.platform);
 
           // Parse the special options before population if available
           const specialOptions = ["dd_mode_remapping", "global_prep_cmd"]
