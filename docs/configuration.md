@@ -1781,9 +1781,11 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
                 proxy_pass https://127.0.0.1:47990;
             }
             @endcode
-            The prefix can be an existing page name, such as `/apps/` with `location /apps/ { ... }`. Every
-            request under the prefix is then a Web UI route under it: `/apps/` opens the home page and the
-            Applications page is at `/apps/apps`, also when accessed directly.
+            The prefix can be an existing page name, such as `/apps/` or `/welcome/`. Every request under the
+            prefix is then routed only by its path after the prefix: `/apps/` opens the home page and the
+            Applications page is at `/apps/apps`, also when accessed directly. With `/welcome/`, the welcome page
+            is at `/welcome/welcome`. A prefix such as `/pin/` also moves the system tray's `/pin` link under the
+            prefix, where it opens the home page.
             <br><br>
             The value must be an absolute path. Each segment may contain only ASCII letters, digits, `-`, `.`,
             `_` and `~`; `.` and `..` segments are not allowed, and the first segment cannot be `api`, `assets`
