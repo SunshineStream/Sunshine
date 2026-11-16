@@ -652,7 +652,10 @@ namespace confighttp {
       }
       escaped += ch;
     }
-    return std::format("^(?:{})?{}", escaped, pattern.substr(1));
+    // Either consume the base path, or require that the request is not under it. A request under the base path is
+    // thus dispatched by its path relative to the base path only, even when that whole path also matches the route
+    // directly, such as "/welcome/" for the "^/welcome/?$" route with the base path "/welcome".
+    return std::format("^(?:{0}|(?!{0}(?:/|$))){1}", escaped, pattern.substr(1));
   }
 
   std::string web_ui_page_content(std::string content, const std::string_view base_path) {
@@ -2615,18 +2618,7 @@ namespace confighttp {
     }
   }
 
-  /**
-   * @brief Start the HTTPS configuration server.
-   */
-  void start() {
-    platf::set_thread_name("confighttp");
-    const auto shutdown_event = mail::man->event<bool>(mail::shutdown);
-
-    const auto port_https = net::map_port(PORT_HTTPS);
-    const auto address_family = net::af_from_enum_string(config::sunshine.address_family);
-
-    https_server_t server {config::nvhttp.cert, config::nvhttp.pkey};
-
+  void register_web_ui_routes(https_server_t &server) {
     // Helper to create SPA entry handlers without repeating the signature
     auto page_handler = [](bool require_auth = true, bool redirect_if_username = false) {
       return [require_auth, redirect_if_username](const resp_https_t &response, const req_https_t &request) {
@@ -2683,6 +2675,21 @@ namespace confighttp {
     server.resource[web_ui_route("^/images/sunshine.ico$")]["GET"] = getFaviconImage;
     server.resource[web_ui_route("^/images/logo-sunshine-45.png$")]["GET"] = getSunshineLogoImage;
     server.resource[web_ui_route("^/assets\\/.+$")]["GET"] = getAsset;
+  }
+
+  /**
+   * @brief Start the HTTPS configuration server.
+   */
+  void start() {
+    platf::set_thread_name("confighttp");
+    const auto shutdown_event = mail::man->event<bool>(mail::shutdown);
+
+    const auto port_https = net::map_port(PORT_HTTPS);
+    const auto address_family = net::af_from_enum_string(config::sunshine.address_family);
+
+    https_server_t server {config::nvhttp.cert, config::nvhttp.pkey};
+
+    register_web_ui_routes(server);
 
     server.config.reuse_address = true;
     server.config.address = net::get_bind_address(address_family);

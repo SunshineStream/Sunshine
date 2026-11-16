@@ -36,6 +36,15 @@ namespace confighttp {
   // Main server start function
   void start();
 
+  /**
+   * @brief Register the Web UI routes of the configuration server.
+   *
+   * Routes are built from the current `web_ui_base_path`, so register them after the configuration is loaded.
+   *
+   * @param server Server to register the routes on.
+   */
+  void register_web_ui_routes(https_server_t &server);
+
   void print_req(const req_https_t &request);
   void send_response(const resp_https_t &response, const nlohmann::json &output_tree);
   void send_unauthorized(const resp_https_t &response, const req_https_t &request);
@@ -60,8 +69,12 @@ namespace confighttp {
   /**
    * @brief Build a server route pattern that also matches under the configured Web UI base path.
    *
+   * A request under the base path, as defined by web_ui_base_path_of(), only matches by its path relative to the base
+   * path, so a base path that equals a route, such as "/welcome", cannot select that route for its own landing page.
+   * Any other request matches the pattern unchanged.
+   *
    * @param pattern Route regular expression anchored with "^/".
-   * @return The route pattern with an optional, escaped base path prefix.
+   * @return The route pattern with an escaped base path prefix that is either consumed or excluded.
    */
   std::string web_ui_route(std::string_view pattern);
   /**
