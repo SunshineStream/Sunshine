@@ -78,6 +78,7 @@ namespace pipewire {
    * @brief PipeWire capture state shared with callback threads.
    */
   struct shared_state_t {
+    std::atomic<uint32_t> buffer_type {SPA_ID_INVALID};  ///< Negotiated buffer type, or unknown until format negotiation finishes.
     std::atomic<int> negotiated_width {0};  ///< Width negotiated with PipeWire for the stream.
     std::atomic<int> negotiated_height {0};  ///< Height negotiated with PipeWire for the stream.
     std::atomic<int> color_primaries {0};  ///< PipeWire color-primaries metadata for the stream.
@@ -273,6 +274,7 @@ namespace pipewire {
       object_serial = stream_object_serial;
       stream_data.shared = std::move(shared_state);
       stream_data.shared->has_streamed.store(false);
+      stream_data.shared->buffer_type.store(SPA_ID_INVALID);
 
       pw_thread_loop_lock(loop);
       BOOST_LOG(debug) << "[pipewire] Setup PW context"sv;
@@ -661,8 +663,10 @@ namespace pipewire {
      * @brief Copy the latest PipeWire frame into Sunshine's image buffer.
      *
      * @param img Image or frame object to read from or populate.
+     * @param buffer_type Buffer type selected for this display and its encoder.
+     * @return Capture status, including reinit if the buffer storage changed.
      */
-    void fill_img(platf::img_t *img) {
+    platf::capture_e fill_img(platf::img_t *img, uint32_t buffer_type) {
       pw_thread_loop_lock(loop);
       std::scoped_lock lock(stream_data.frame_mutex);
 
@@ -670,32 +674,55 @@ namespace pipewire {
         img->data = nullptr;
         close_img_fds(static_cast<egl::img_descriptor_t *>(img));
         pw_thread_loop_unlock(loop);
-        return;
+        return platf::capture_e::timeout;
       }
 
       if (!stream_data.current_buffer) {
         img->data = nullptr;
         pw_thread_loop_unlock(loop);
-        return;
+        return platf::capture_e::timeout;
       }
 
-      struct spa_buffer *buf = stream_data.current_buffer->buffer;
-      if (buf->datas[0].chunk->size != 0) {
+      auto status = copy_frame(img, stream_data, buffer_type);
+      pw_thread_loop_unlock(loop);
+      return status;
+    }
+
+    /**
+     * @brief Copy a frame only if its storage matches the encoder's selected path.
+     * @param img Destination image, reset by the caller before copying.
+     * @param d Frame state, protected by the PipeWire loop and frame locks in production.
+     * @param buffer_type Buffer type selected before encoder creation.
+     * @return Reinit on a storage change, otherwise the frame's capture status.
+     */
+    static platf::capture_e copy_frame(platf::img_t *img, const stream_data_t &d, uint32_t buffer_type) {
+      struct spa_buffer *buf = d.current_buffer->buffer;
+      if (buf->n_datas == 0 || buf->datas[0].chunk->size == 0) {
+        return platf::capture_e::timeout;
+      }
+      const auto actual_type = buf->datas[0].type;
+      if (actual_type != SPA_DATA_DmaBuf && actual_type != SPA_DATA_MemPtr && actual_type != SPA_DATA_MemFd) {
+        return platf::capture_e::capture_error;
+      }
+      if ((actual_type == SPA_DATA_DmaBuf) != (buffer_type == SPA_DATA_DmaBuf)) {
+        return platf::capture_e::reinit;
+      }
+      {
         auto *img_descriptor = static_cast<img_descriptor_t *>(img);
         fill_img_metadata(img_descriptor, buf);
         if (buf->datas[0].type == SPA_DATA_DmaBuf) {
-          fill_img_dmabuf(img_descriptor, buf, stream_data);
+          fill_img_dmabuf(img_descriptor, buf, d);
         } else {
-          img->data = stream_data.front_buffer->data();
+          img->data = d.front_buffer->data();
           img_descriptor->data_owned = false;
-          img->row_pitch = stream_data.local_stride;
+          img->row_pitch = d.local_stride;
           // NV12 is the only 1-byte-per-pixel format delivered on the memory
           // path; every other negotiated format is packed 4 bytes per pixel.
-          img->pixel_pitch = (stream_data.format.info.raw.format == SPA_VIDEO_FORMAT_NV12) ? 1 : 4;
+          img->pixel_pitch = (d.format.info.raw.format == SPA_VIDEO_FORMAT_NV12) ? 1 : 4;
         }
       }
 
-      pw_thread_loop_unlock(loop);
+      return platf::capture_e::ok;
     }
 
     /**
@@ -709,6 +736,19 @@ namespace pipewire {
 
     inline static std::atomic prefer_pipewire_pts {false};  ///< Whether the session should directly passthrough Pipewire pts metadata for client pacing.
     inline static std::atomic negotiate_variable_rate {true};  ///< Whether the session should request variable rate (maxFrameRate = 0/1) capture.
+
+    /**
+     * @brief Determine the buffer storage requested by the negotiated format.
+     * @param param Negotiated SPA format, or null while negotiation is pending.
+     * @param drm_format DRM format corresponding to the negotiated SPA format.
+     * @return DMA-BUF with a modifier and known DRM format, memory otherwise; unknown for null.
+     */
+    static uint32_t negotiated_buffer_type(const spa_pod *param, uint64_t drm_format) {
+      if (!param) {
+        return SPA_ID_INVALID;
+      }
+      return drm_format && spa_pod_find_prop(param, nullptr, SPA_FORMAT_VIDEO_modifier) ? SPA_DATA_DmaBuf : SPA_DATA_MemPtr;
+    }
 
   private:
     struct pw_thread_loop *loop;
@@ -900,7 +940,13 @@ namespace pipewire {
 
       d->current_buffer = nullptr;
 
-      if (param == nullptr || id != SPA_PARAM_Format) {
+      if (id != SPA_PARAM_Format) {
+        return;
+      }
+      if (d->shared) {
+        d->shared->buffer_type.store(SPA_ID_INVALID);
+      }
+      if (param == nullptr) {
         return;
       }
       if (spa_format_parse(param, &d->format.media_type, &d->format.media_subtype) < 0) {
@@ -954,7 +1000,8 @@ namespace pipewire {
       d->drm_format = drm_format;
 
       uint32_t buffer_types = 0;
-      if (spa_pod_find_prop(param, nullptr, SPA_FORMAT_VIDEO_modifier) != nullptr && d->drm_format) {
+      const auto buffer_type = negotiated_buffer_type(param, d->drm_format);
+      if (buffer_type == SPA_DATA_DmaBuf) {
         BOOST_LOG(info) << "[pipewire] using DMA-BUF buffers"sv;
         buffer_types |= 1 << SPA_DATA_DmaBuf;
       } else {
@@ -979,6 +1026,10 @@ namespace pipewire {
       n_params++;
 
       pw_stream_update_params(d->stream, params.data(), n_params);
+      if (d->shared) {
+        // Publish last: dimensions alone do not mean buffer negotiation is complete.
+        d->shared->buffer_type.store(buffer_type);
+      }
     }
 
     constexpr static const struct pw_stream_events stream_events = {
@@ -1123,13 +1174,21 @@ namespace pipewire {
       int negotiated_w = 0;
       int negotiated_h = 0;
       while (timeout_ms > 0) {
+        buffer_type = shared_state->buffer_type.load();
         negotiated_w = shared_state->negotiated_width.load();
         negotiated_h = shared_state->negotiated_height.load();
-        if (negotiated_w > 0 && negotiated_h > 0) {
+        if (negotiated_w > 0 && negotiated_h > 0 && buffer_type != SPA_ID_INVALID) {
           break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
         timeout_ms -= 10;
+      }
+      if (buffer_type == SPA_ID_INVALID) {
+        // Keep capture alive so portal startup-error handling can retry negotiation.
+        // Never assume DMA-BUF before negotiation; copy_frame will request reinit
+        // if a late frame requires a different converter.
+        BOOST_LOG(warning) << "[pipewire] Buffer negotiation pending; using memory conversion until capture restarts"sv;
+        buffer_type = SPA_DATA_MemPtr;
       }
       // Set width and height to the values negotiated by pipewire
       if (negotiated_w > 0 && negotiated_h > 0 && (negotiated_w != width || negotiated_h != height)) {
@@ -1175,10 +1234,13 @@ namespace pipewire {
 
         auto *img_egl = static_cast<egl::img_descriptor_t *>(img_out.get());
         img_egl->reset();
-        pipewire.fill_img(img_egl);
+        const auto status = pipewire.fill_img(img_egl, buffer_type);
+        if (status == platf::capture_e::reinit || status == platf::capture_e::capture_error) {
+          return status;
+        }
 
         // Check if we got valid data (either DMA-BUF fd or memory pointer), then filter duplicates
-        if ((img_egl->sd.fds[0] >= 0 || img_egl->data != nullptr) && !is_buffer_redundant(img_egl)) {
+        if (status == platf::capture_e::ok && (img_egl->sd.fds[0] >= 0 || img_egl->data != nullptr) && !is_buffer_redundant(img_egl)) {
           // Update frame metadata
           update_metadata(img_egl, retries);
           return platf::capture_e::ok;
@@ -1304,24 +1366,27 @@ namespace pipewire {
     std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(platf::pix_fmt_e pix_fmt) override {
 #ifdef SUNSHINE_BUILD_VAAPI
       if (mem_type == platf::mem_type_e::vaapi) {
-        return va::make_avcodec_encode_device(width, height, n_dmabuf_infos > 0);
+        return va::make_avcodec_encode_device(width, height, buffer_type == SPA_DATA_DmaBuf);
       }
 #endif
 
 #ifdef SUNSHINE_BUILD_VULKAN
-      if (mem_type == platf::mem_type_e::vulkan && n_dmabuf_infos > 0) {
+      if (mem_type == platf::mem_type_e::vulkan) {
+        if (buffer_type != SPA_DATA_DmaBuf) {
+          return nullptr;
+        }
         return vk::make_avcodec_encode_device_vram(width, height, 0, 0);
       }
 #endif
 
 #ifdef SUNSHINE_BUILD_CUDA
       if (mem_type == platf::mem_type_e::cuda) {
-        if (display_is_nvidia && n_dmabuf_infos > 0) {
+        if (display_is_nvidia && buffer_type == SPA_DATA_DmaBuf) {
           // Display GPU is NVIDIA - can use DMA-BUF directly
           return cuda::make_avcodec_gl_encode_device(width, height, 0, 0);
         } else {
-          // Hybrid system (Intel display + NVIDIA encode) - use memory buffer path
-          // DMA-BUFs from Intel GPU cannot be imported into CUDA
+          // Use memory buffers for hybrid GPUs and compositor memory fallback.
+          // DMA-BUFs from Intel GPU cannot be imported into CUDA.
           return cuda::make_avcodec_encode_device(width, height, false);
         }
       }
@@ -1540,6 +1605,7 @@ namespace pipewire {
     wl::display_t wl_display;
     std::array<struct dmabuf_format_info_t, MAX_DMABUF_FORMATS> dmabuf_infos;
     int n_dmabuf_infos;
+    uint32_t buffer_type = SPA_ID_INVALID;  ///< Storage selected at initialization; capture restarts if frames change storage.
     bool display_is_nvidia = false;  // Track if display GPU is NVIDIA
     std::chrono::nanoseconds delay;
     std::optional<std::uint64_t> last_pts {};
