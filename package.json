@@ -25,22 +25,22 @@
   "type": "module",
   "dependencies": {
     "@intlify/message-compiler": "11.4.20",
-    "@lucide/vue": "1.72.0",
+    "@lucide/vue": "1.73.0",
     "bootstrap": "5.3.9",
     "date-fns": "4.4.0",
     "marked": "18.0.12",
     "vue": "3.5.45",
     "vue-i18n": "11.4.20",
-    "vue-router": "5.5.0",
+    "vue-router": "5.5.1",
     "vue3-simple-icons": "16.10.0"
   },
   "devDependencies": {
     "@codecov/vite-plugin": "2.0.1",
-    "@vitejs/plugin-vue": "6.0.10",
+    "@vitejs/plugin-vue": "6.0.11",
     "@vitest/coverage-v8": "5.1.0",
-    "@vue/test-utils": "2.5.1",
-    "jsdom": "31.0.0",
-    "serve": "14.2.7",
+    "@vue/test-utils": "2.6.0",
+    "jsdom": "31.0.1",
+    "serve": "14.2.8",
     "vite": "8.3.8",
     "vitest": "5.1.0"
   },

@@ -60,6 +60,7 @@
         "refresh_rate_only": []
       },
       "max_bitrate": 0,
+      "max_stream_resolution": "",
       "minimum_fps_target": 0
     }
   },

@@ -810,10 +810,11 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             **FreeBSD/Linux + pipewire:**
             <br>
             @code{}
-            pactl info | grep Source
-            # in some causes you'd need to use the `Sink` device, if `Source` doesn't work, so try:
-            pactl info | grep Sink
+            pactl list short sinks
             @endcode
+            <br>
+            <br>
+            Copy the sink name (second column) into `audio_sink`.
             <br>
             <br>
             **macOS:**
@@ -1514,6 +1515,31 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
         <td>Example</td>
         <td colspan="2">@code{}
             max_bitrate = 5000
+            @endcode</td>
+    </tr>
+</table>
+
+### max_stream_resolution
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The maximum resolution (formatted as WIDTHxHEIGHT) that Sunshine will stream at. Larger client requests
+            are downscaled, preserving aspect ratio. Lowering this reduces encoding latency on hosts where the
+            encoder cannot keep up with the requested resolution. If empty, the resolution requested by Moonlight
+            is used.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            max_stream_resolution = 2560x1440
             @endcode</td>
     </tr>
 </table>
