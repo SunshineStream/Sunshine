@@ -18,7 +18,9 @@
           segments.pop();
         }
         var base = document.createElement('base');
-        base.href = segments.join('/') + '/';
+        // Keep exactly one leading slash: a path such as //example.com/ would otherwise produce a network-path
+        // reference that resolves against another origin.
+        base.href = ('/' + segments.join('/') + '/').replace(/^\/+/, '/');
         document.head.appendChild(base);
       })();
     </script>

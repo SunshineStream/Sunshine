@@ -59,8 +59,47 @@ describe('web UI base path', () => {
     ['/sunshine/troubleshooting/', '/sunshine/'],
     ['/sunshine/unknown', '/sunshine/'],
     ['/proxy/sunshine/pin', '/proxy/sunshine/'],
+    ['/a/b/sunshine/', '/a/b/sunshine/'],
+    ['/a/b/sunshine/troubleshooting/', '/a/b/sunshine/'],
+    ['/a//b/sunshine/', '/a//b/sunshine/'],
+    ['//', '/'],
+    ['//example.com/', '/example.com/'],
+    ['///example.com/', '/example.com/'],
+    ['//example.com/config', '/example.com/'],
+    ['//example.com/logout/', '/example.com/'],
+    ['', '/'],
+    ['config', '/'],
   ])('resolves %s to base %s', (pathname, expected) => {
     expect(resolveBase(pathname)).toBe(expected)
+  })
+
+  // The browser parses the requested URL before the script reads location.pathname, so feed each request path
+  // through the WHATWG URL parser and check where the resulting base actually points.
+  it.each([
+    '/',
+    '/sunshine/',
+    '/a/b/sunshine/',
+    '//example.com/',
+    '///example.com/',
+    '////example.com/sunshine/config',
+    '//example.com/logout/',
+    '/\\example.com/',
+    '/\\\\example.com/',
+    '/\t/example.com/',
+    '/%2F%2Fexample.com/',
+    '//example.com//pin',
+    '/sunshine//config',
+    '//',
+  ])('keeps the base for request path %j on the document origin', requestPath => {
+    const origin = 'https://sunshine.test:47990'
+    const documentUrl = new URL(origin + requestPath)
+    const base = resolveBase(documentUrl.pathname)
+
+    expect(base).toMatch(/^\/(?!\/)/)
+    const resolved = new URL(base, documentUrl)
+    expect(resolved.origin).toBe(origin)
+    expect(new URL('./assets/index.js', resolved).origin).toBe(origin)
+    expect(new URL('./api/config', resolved).origin).toBe(origin)
   })
 
   it('knows every top-level route defined in the router', () => {
