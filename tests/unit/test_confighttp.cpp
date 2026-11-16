@@ -1385,7 +1385,7 @@ protected:
    *
    * @param base_path Normalized Web UI base path.
    */
-  void start_production_server(const std::string &base_path) {
+  void start_production_server(const std::string_view base_path) {
     stop_production_server();
     config::sunshine.web_ui_base_path = base_path;
 
