@@ -40,6 +40,38 @@ namespace confighttp {
   void send_response(const resp_https_t &response, const nlohmann::json &output_tree);
   void send_unauthorized(const resp_https_t &response, const req_https_t &request);
   void send_redirect(const resp_https_t &response, const req_https_t &request, const char *path);
+  /**
+   * @brief Get the configured Web UI base path when a request path is under it.
+   *
+   * Requests under the configured `web_ui_base_path` come through the external prefix; any other request is direct
+   * access, such as the system tray opening /pin, and keeps the root base path.
+   *
+   * @param request_path Path of the HTTP request.
+   * @return The configured base path without a trailing slash, or an empty view for direct access.
+   */
+  std::string_view web_ui_base_path_of(std::string_view request_path);
+  /**
+   * @brief Remove the configured Web UI base path from a request path.
+   *
+   * @param request_path Path of the HTTP request.
+   * @return The path relative to the Web UI root, starting with '/'.
+   */
+  std::string_view strip_web_ui_base_path(std::string_view request_path);
+  /**
+   * @brief Build a server route pattern that also matches under the configured Web UI base path.
+   *
+   * @param pattern Route regular expression anchored with "^/".
+   * @return The route pattern with an optional, escaped base path prefix.
+   */
+  std::string web_ui_route(std::string_view pattern);
+  /**
+   * @brief Point the SPA entry document at the Web UI base path of the request.
+   *
+   * @param content SPA entry document containing the root base element.
+   * @param base_path Base path from web_ui_base_path_of(); empty keeps the root base element.
+   * @return The document with an HTML-escaped base element for the base path.
+   */
+  std::string web_ui_page_content(std::string content, std::string_view base_path);
   bool authenticate(const resp_https_t &response, const req_https_t &request);
   void not_found(const resp_https_t &response, const std::string &error_message = "Not Found");
   void bad_request(const resp_https_t &response, const std::string &error_message = "Bad Request");

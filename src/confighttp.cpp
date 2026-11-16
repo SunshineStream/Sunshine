@@ -622,6 +622,77 @@ namespace confighttp {
     response->write(code, tree.dump(), headers);
   }
 
+  std::string_view web_ui_base_path_of(const std::string_view request_path) {
+    const std::string_view base_path = config::sunshine.web_ui_base_path;
+    if (base_path.empty() || !request_path.starts_with(base_path)) {
+      return {};
+    }
+    if (request_path.size() == base_path.size() || request_path[base_path.size()] == '/') {
+      return base_path;
+    }
+    return {};
+  }
+
+  std::string_view strip_web_ui_base_path(const std::string_view request_path) {
+    const auto relative_path = request_path.substr(web_ui_base_path_of(request_path).size());
+    return relative_path.empty() ? "/"sv : relative_path;
+  }
+
+  std::string web_ui_route(const std::string_view pattern) {
+    const std::string_view base_path = config::sunshine.web_ui_base_path;
+    if (base_path.empty() || !pattern.starts_with("^/"sv)) {
+      return std::string {pattern};
+    }
+
+    // normalize_web_ui_base_path() only accepts letters, digits and "-._~/", so '.' is the only regex metacharacter
+    std::string escaped;
+    for (const char ch : base_path) {
+      if (ch == '.') {
+        escaped += '\\';
+      }
+      escaped += ch;
+    }
+    return std::format("^(?:{})?{}", escaped, pattern.substr(1));
+  }
+
+  std::string web_ui_page_content(std::string content, const std::string_view base_path) {
+    constexpr auto root_base_element = R"(<base href="/" />)"sv;
+    if (base_path.empty()) {
+      return content;
+    }
+
+    const auto position = content.find(root_base_element);
+    if (position == std::string::npos) {
+      BOOST_LOG(warning) << "Web UI: the entry document has no root base element, so web_ui_base_path cannot be applied"sv;
+      return content;
+    }
+
+    std::string href;
+    for (const char ch : std::format("{}/", base_path)) {
+      switch (ch) {
+        case '&':
+          href += "&amp;";
+          break;
+        case '<':
+          href += "&lt;";
+          break;
+        case '>':
+          href += "&gt;";
+          break;
+        case '"':
+          href += "&quot;";
+          break;
+        case '\'':
+          href += "&#39;";
+          break;
+        default:
+          href += ch;
+      }
+    }
+    content.replace(position, root_base_element.size(), std::format(R"(<base href="{}" />)", href));
+    return content;
+  }
+
   /**
    * @brief Send a redirect response.
    * @param response The HTTP response object.
@@ -631,8 +702,9 @@ namespace confighttp {
   void send_redirect(const resp_https_t &response, const req_https_t &request, const char *path) {
     auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
     BOOST_LOG(info) << "Web UI: ["sv << address << "] -- not authorized"sv;
+    const auto location = std::format("{}{}", web_ui_base_path_of(request->path), path);
     const SimpleWeb::CaseInsensitiveMultimap headers {
-      {"Location", path},
+      {"Location", location},
       {"X-Frame-Options", "DENY"},
       {"Content-Security-Policy", "frame-ancestors 'none';"}
     };
@@ -937,7 +1009,7 @@ namespace confighttp {
 
     print_req(request);
 
-    const std::string content = file_handler::read_file(WEB_DIR "index.html");
+    const std::string content = web_ui_page_content(file_handler::read_file(WEB_DIR "index.html"), web_ui_base_path_of(request->path));
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "text/html; charset=utf-8");
 
@@ -949,7 +1021,7 @@ namespace confighttp {
   }
 
   void getFallbackPage(const resp_https_t &response, const req_https_t &request) {
-    const std::string_view path = request->path;
+    const std::string_view path = strip_web_ui_base_path(request->path);
     const auto has_server_prefix = [path](const std::string_view prefix) {
       return path == prefix || (path.starts_with(prefix) && path.length() > prefix.length() && path[prefix.length()] == '/');
     };
@@ -1020,7 +1092,7 @@ namespace confighttp {
     fs::path nodeModulesPath(webDirPath / "assets");
 
     // .relative_path is needed to shed any leading slash that might exist in the request path
-    auto filePath = fs::weakly_canonical(webDirPath / fs::path(request->path).relative_path());
+    auto filePath = fs::weakly_canonical(webDirPath / fs::path(strip_web_ui_base_path(request->path)).relative_path());
 
     // Don't do anything if the file does not exist or is outside the assets directory
     if (!isChildPath(filePath, nodeModulesPath)) {
@@ -2574,43 +2646,43 @@ namespace confighttp {
     server.default_resource["GET"] = getFallbackPage;
 
     // Public SPA routes with authentication behavior that differs from the default fallback
-    server.resource["^/logout/?$"]["GET"] = page_handler(false);
-    server.resource["^/welcome/?$"]["GET"] = page_handler(false, true);
+    server.resource[web_ui_route("^/logout/?$")]["GET"] = page_handler(false);
+    server.resource[web_ui_route("^/welcome/?$")]["GET"] = page_handler(false, true);
 
     // rest api
-    server.resource["^/api/browse$"]["GET"] = browseDirectory;
-    server.resource["^/api/apps$"]["GET"] = getApps;
-    server.resource["^/api/apps$"]["POST"] = saveApp;
-    server.resource["^/api/apps/([0-9]+)$"]["DELETE"] = deleteApp;
-    server.resource["^/api/apps/close$"]["POST"] = closeApp;
-    server.resource["^/api/clients/list$"]["GET"] = getClients;
-    server.resource["^/api/clients/unpair$"]["POST"] = unpair;
-    server.resource["^/api/clients/unpair-all$"]["POST"] = unpairAll;
-    server.resource["^/api/clients/update$"]["POST"] = updateClient;
-    server.resource["^/api/config$"]["GET"] = getConfig;
-    server.resource["^/api/config$"]["POST"] = saveConfig;
-    server.resource["^/api/configLocale$"]["GET"] = getLocale;
-    server.resource["^/api/covers/([0-9]+)$"]["GET"] = getCover;
-    server.resource["^/api/covers/upload$"]["POST"] = uploadCover;
-    server.resource["^/api/csrf-token$"]["GET"] = getCSRFToken;
-    server.resource["^/api/password$"]["POST"] = savePassword;
-    server.resource["^/api/pin$"]["DELETE"] = cancelPairing;
-    server.resource["^/api/pin$"]["GET"] = getPendingPairings;
-    server.resource["^/api/pin$"]["POST"] = savePin;
-    server.resource["^/api/logs$"]["GET"] = getLogs;
-    server.resource["^/api/reset-display-device-persistence$"]["POST"] = resetDisplayDevicePersistence;
-    server.resource["^/api/reset-portal-token$"]["POST"] = resetPortalToken;
-    server.resource["^/api/restart$"]["POST"] = restart;
-    server.resource["^/api/permissions$"]["GET"] = getPermissions;
-    server.resource["^/api/permissions/request$"]["POST"] = requestPermission;
-    server.resource["^/api/virtual-input/license$"]["GET"] = getVirtualInputLicense;
-    server.resource["^/api/virtual-input/license$"]["POST"] = updateVirtualInputLicense;
-    server.resource["^/api/virtual-input/status$"]["GET"] = getVirtualInputStatus;
+    server.resource[web_ui_route("^/api/browse$")]["GET"] = browseDirectory;
+    server.resource[web_ui_route("^/api/apps$")]["GET"] = getApps;
+    server.resource[web_ui_route("^/api/apps$")]["POST"] = saveApp;
+    server.resource[web_ui_route("^/api/apps/([0-9]+)$")]["DELETE"] = deleteApp;
+    server.resource[web_ui_route("^/api/apps/close$")]["POST"] = closeApp;
+    server.resource[web_ui_route("^/api/clients/list$")]["GET"] = getClients;
+    server.resource[web_ui_route("^/api/clients/unpair$")]["POST"] = unpair;
+    server.resource[web_ui_route("^/api/clients/unpair-all$")]["POST"] = unpairAll;
+    server.resource[web_ui_route("^/api/clients/update$")]["POST"] = updateClient;
+    server.resource[web_ui_route("^/api/config$")]["GET"] = getConfig;
+    server.resource[web_ui_route("^/api/config$")]["POST"] = saveConfig;
+    server.resource[web_ui_route("^/api/configLocale$")]["GET"] = getLocale;
+    server.resource[web_ui_route("^/api/covers/([0-9]+)$")]["GET"] = getCover;
+    server.resource[web_ui_route("^/api/covers/upload$")]["POST"] = uploadCover;
+    server.resource[web_ui_route("^/api/csrf-token$")]["GET"] = getCSRFToken;
+    server.resource[web_ui_route("^/api/password$")]["POST"] = savePassword;
+    server.resource[web_ui_route("^/api/pin$")]["DELETE"] = cancelPairing;
+    server.resource[web_ui_route("^/api/pin$")]["GET"] = getPendingPairings;
+    server.resource[web_ui_route("^/api/pin$")]["POST"] = savePin;
+    server.resource[web_ui_route("^/api/logs$")]["GET"] = getLogs;
+    server.resource[web_ui_route("^/api/reset-display-device-persistence$")]["POST"] = resetDisplayDevicePersistence;
+    server.resource[web_ui_route("^/api/reset-portal-token$")]["POST"] = resetPortalToken;
+    server.resource[web_ui_route("^/api/restart$")]["POST"] = restart;
+    server.resource[web_ui_route("^/api/permissions$")]["GET"] = getPermissions;
+    server.resource[web_ui_route("^/api/permissions/request$")]["POST"] = requestPermission;
+    server.resource[web_ui_route("^/api/virtual-input/license$")]["GET"] = getVirtualInputLicense;
+    server.resource[web_ui_route("^/api/virtual-input/license$")]["POST"] = updateVirtualInputLicense;
+    server.resource[web_ui_route("^/api/virtual-input/status$")]["GET"] = getVirtualInputStatus;
 
     // static/dynamic resources
-    server.resource["^/images/sunshine.ico$"]["GET"] = getFaviconImage;
-    server.resource["^/images/logo-sunshine-45.png$"]["GET"] = getSunshineLogoImage;
-    server.resource["^/assets\\/.+$"]["GET"] = getAsset;
+    server.resource[web_ui_route("^/images/sunshine.ico$")]["GET"] = getFaviconImage;
+    server.resource[web_ui_route("^/images/logo-sunshine-45.png$")]["GET"] = getSunshineLogoImage;
+    server.resource[web_ui_route("^/assets\\/.+$")]["GET"] = getAsset;
 
     server.config.reuse_address = true;
     server.config.address = net::get_bind_address(address_family);

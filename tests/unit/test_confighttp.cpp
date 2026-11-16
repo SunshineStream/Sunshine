@@ -1195,6 +1195,116 @@ TEST_F(ConfigHttpTest, ServerResourcePrefixesDoNotFallBackToSpaEntry) {
   }
 }
 
+/**
+ * @brief Fixture that serves an SPA entry document with a root base element and configures a Web UI base path.
+ */
+class WebUiBasePathTest: public ConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::string saved_web_ui_base_path;
+
+  void SetUp() override {
+    ConfigHttpTest::SetUp();
+    saved_web_ui_base_path = config::sunshine.web_ui_base_path;
+    config::sunshine.web_ui_base_path = "/proxy/config";
+
+    std::ofstream entry(web_dir_test_file);
+    entry << R"(<html><head><base href="/" /></head><body>Test Page Content</body></html>)";
+  }
+
+  void TearDown() override {
+    config::sunshine.web_ui_base_path = saved_web_ui_base_path;
+    ConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Request a page with valid credentials.
+   *
+   * @param path Request path.
+   * @return The response.
+   */
+  std::shared_ptr<SimpleWeb::Client<SimpleWeb::HTTPS>::Response> get_authenticated(const std::string &path) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    return client->request("GET", path, "", headers);
+  }
+};
+
+// Test: requests under the configured base path get it as the document base; direct requests keep the root
+TEST_F(WebUiBasePathTest, SpaEntryUsesBasePathOnlyUnderThePrefix) {
+  for (const std::string_view path : {"/proxy/config", "/proxy/config/", "/proxy/config/apps", "/proxy/config/unknown/deep/link"}) {
+    const auto response = get_authenticated(std::string {path});
+    ASSERT_EQ(response->status_code, "200 OK") << path;
+    const auto body = response->content.string();
+    EXPECT_NE(body.find(R"(<base href="/proxy/config/" />)"), std::string::npos) << path;
+    EXPECT_EQ(body.find(R"(<base href="/" />)"), std::string::npos) << path;
+  }
+
+  // Direct access, such as the system tray opening /pin, is not under the prefix
+  for (const std::string_view path : {"/", "/pin", "/apps/", "/config", "/proxy/configs", "/unknown/deep/link"}) {
+    const auto response = get_authenticated(std::string {path});
+    ASSERT_EQ(response->status_code, "200 OK") << path;
+    EXPECT_NE(response->content.string().find(R"(<base href="/" />)"), std::string::npos) << path;
+  }
+}
+
+// Test: redirects stay under the prefix that the request came through
+TEST_F(WebUiBasePathTest, RedirectsKeepThePrefixOfTheRequest) {
+  const std::string saved = config::sunshine.username;
+  config::sunshine.username = "";
+  const auto restore_username = util::fail_guard([&saved]() {
+    config::sunshine.username = saved;
+  });
+
+  const auto prefixed = client->request("GET", "/proxy/config/apps");
+  ASSERT_EQ(prefixed->status_code, "307 Temporary Redirect");
+  EXPECT_EQ(prefixed->header.find("Location")->second, "/proxy/config/welcome");
+
+  const auto direct = client->request("GET", "/apps");
+  ASSERT_EQ(direct->status_code, "307 Temporary Redirect");
+  EXPECT_EQ(direct->header.find("Location")->second, "/welcome");
+}
+
+// Test: server-owned prefixes under the base path keep their 404 behavior
+TEST_F(WebUiBasePathTest, ServerResourcePrefixesUnderThePrefixDoNotFallBackToSpaEntry) {
+  for (const std::string_view path : {"/proxy/config/api", "/proxy/config/api/unknown", "/proxy/config/assets/missing.js", "/proxy/config/images/missing.png"}) {
+    const auto response = client->request("GET", std::string {path});
+    EXPECT_EQ(response->status_code, "404 Not Found") << path;
+  }
+}
+
+// Test: server routes match with and without the base path, using the regex engine of the server
+TEST_F(WebUiBasePathTest, RoutesMatchDirectAndPrefixedPaths) {
+  const auto matches = [](const std::string_view pattern, const std::string &path) {
+    return SimpleWeb::regex::regex_match(path, SimpleWeb::regex::regex(confighttp::web_ui_route(pattern)));
+  };
+
+  EXPECT_TRUE(matches("^/api/apps$", "/api/apps"));
+  EXPECT_TRUE(matches("^/api/apps$", "/proxy/config/api/apps"));
+  EXPECT_FALSE(matches("^/api/apps$", "/proxy/api/apps"));
+  EXPECT_FALSE(matches("^/api/apps$", "/proxy/configapi/apps"));
+  EXPECT_TRUE(matches("^/assets\\/.+$", "/proxy/config/assets/index.js"));
+  EXPECT_TRUE(matches("^/logout/?$", "/proxy/config/logout/"));
+
+  SimpleWeb::regex::smatch match;
+  const std::string cover = "/proxy/config/api/covers/12";
+  ASSERT_TRUE(SimpleWeb::regex::regex_match(cover, match, SimpleWeb::regex::regex(confighttp::web_ui_route("^/api/covers/([0-9]+)$"))));
+  EXPECT_EQ(match[1].str(), "12");
+
+  config::sunshine.web_ui_base_path = "/my.host";
+  EXPECT_TRUE(matches("^/pin$", "/my.host/pin"));
+  EXPECT_FALSE(matches("^/pin$", "/myxhost/pin"));
+}
+
+// Test: the injected base path is HTML-escaped
+TEST_F(WebUiBasePathTest, PageContentEscapesTheBasePath) {
+  EXPECT_EQ(
+    confighttp::web_ui_page_content(R"(<head><base href="/" /></head>)", "/a\"><x>&'"),
+    R"(<head><base href="/a&quot;&gt;&lt;x&gt;&amp;&#39;/" /></head>)"
+  );
+  EXPECT_EQ(confighttp::web_ui_page_content(R"(<head><base href="/" /></head>)", ""), R"(<head><base href="/" /></head>)");
+  EXPECT_EQ(confighttp::web_ui_page_content("<head></head>", "/sunshine"), "<head></head>");
+}
+
 // Test: confighttp::getLocale() returns locale JSON
 TEST_F(ConfigHttpTest, GetLocaleReturnsJson) {
   const auto response = client->request("GET", "/locale-test");

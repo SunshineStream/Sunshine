@@ -1,35 +1,13 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { createRouter, createWebHistory } from 'vue-router'
 
-import { routes } from '../../src_assets/common/assets/web/router.js'
-
-const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../src_assets/common/assets/web')
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
+const webRoot = join(repoRoot, 'src_assets/common/assets/web')
 const indexHtml = readFileSync(join(webRoot, 'index.html'), 'utf8')
-
-/**
- * @brief Extract the classic inline script that resolves the base path from index.html.
- *
- * @return {string} Inline script source.
- */
-function baseScriptSource() {
-  const match = /<script>([\s\S]*?)<\/script>/.exec(indexHtml)
-  expect(match).not.toBeNull()
-  return match[1]
-}
-
-/**
- * @brief Run the index.html base path script for a URL path in an isolated document.
- *
- * @param {string} pathname Path the browser requested.
- * @return {string|null} The href attribute of the inserted base element.
- */
-function resolveBase(pathname) {
-  const doc = document.implementation.createHTMLDocument('Sunshine')
-  new Function('location', 'document', baseScriptSource())({ pathname }, doc)
-  return doc.querySelector('base')?.getAttribute('href') ?? null
-}
+const rootBaseElement = '<base href="/" />'
 
 /**
  * @brief List web UI source files that are bundled by Vite.
@@ -47,73 +25,42 @@ function sourceFiles(dir) {
   })
 }
 
+/**
+ * @brief Point the test document at a page URL with the base element the server would send.
+ *
+ * @param {string} baseHref The href of the base element.
+ * @param {string} path Path of the page within the document origin.
+ */
+function loadPage(baseHref, path) {
+  document.head.querySelectorAll('base').forEach(element => element.remove())
+  const base = document.createElement('base')
+  base.setAttribute('href', baseHref)
+  document.head.prepend(base)
+  globalThis.history.replaceState({}, '', path)
+}
+
 describe('web UI base path', () => {
-  it.each([
-    ['/', '/'],
-    ['/config', '/'],
-    ['/logout/', '/'],
-    ['/unknown', '/'],
-    ['/apps/unknown', '/'],
-    ['/sunshine/', '/sunshine/'],
-    ['/sunshine/config', '/sunshine/'],
-    ['/sunshine/troubleshooting/', '/sunshine/'],
-    ['/sunshine/unknown', '/sunshine/'],
-    ['/proxy/sunshine/pin', '/proxy/sunshine/'],
-    ['/a/b/sunshine/', '/a/b/sunshine/'],
-    ['/a/b/sunshine/troubleshooting/', '/a/b/sunshine/'],
-    ['/a//b/sunshine/', '/a//b/sunshine/'],
-    ['//', '/'],
-    ['//example.com/', '/example.com/'],
-    ['///example.com/', '/example.com/'],
-    ['//example.com/config', '/example.com/'],
-    ['//example.com/logout/', '/example.com/'],
-    ['', '/'],
-    ['config', '/'],
-  ])('resolves %s to base %s', (pathname, expected) => {
-    expect(resolveBase(pathname)).toBe(expected)
+  afterEach(() => {
+    document.head.querySelectorAll('base').forEach(element => element.remove())
+    globalThis.history.replaceState({}, '', '/')
   })
 
-  // The browser parses the requested URL before the script reads location.pathname, so feed each request path
-  // through the WHATWG URL parser and check where the resulting base actually points.
-  it.each([
-    '/',
-    '/sunshine/',
-    '/a/b/sunshine/',
-    '//example.com/',
-    '///example.com/',
-    '////example.com/sunshine/config',
-    '//example.com/logout/',
-    '/\\example.com/',
-    '/\\\\example.com/',
-    '/\t/example.com/',
-    '/%2F%2Fexample.com/',
-    '//example.com//pin',
-    '/sunshine//config',
-    '//',
-  ])('keeps the base for request path %j on the document origin', requestPath => {
-    const origin = 'https://sunshine.test:47990'
-    const documentUrl = new URL(origin + requestPath)
-    const base = resolveBase(documentUrl.pathname)
-
-    expect(base).toMatch(/^\/(?!\/)/)
-    const resolved = new URL(base, documentUrl)
-    expect(resolved.origin).toBe(origin)
-    expect(new URL('./assets/index.js', resolved).origin).toBe(origin)
-    expect(new URL('./api/config', resolved).origin).toBe(origin)
+  it('ships one root base element for the server to replace', () => {
+    expect(indexHtml.split(rootBaseElement)).toHaveLength(2)
+    expect(indexHtml).not.toMatch(/<script>/)
   })
 
-  it('knows every top-level route defined in the router', () => {
-    const routeNames = routes
-      .map(route => route.path.split('/')[1])
-      .filter(name => name && !name.startsWith(':'))
-    const script = baseScriptSource()
-    const scriptRoutes = JSON.parse(/var routes = (\[[^\]]*\]);/.exec(script)[1].replaceAll("'", '"'))
+  it('uses the same base element marker as the server', () => {
+    const server = readFileSync(join(repoRoot, 'src/confighttp.cpp'), 'utf8')
+    const marker = /root_base_element = R"\((.*?)\)"sv/.exec(server)
 
-    expect(scriptRoutes.toSorted()).toEqual(routeNames.toSorted())
+    expect(marker?.[1]).toBe(rootBaseElement)
   })
 
-  it('does not hard-code a root base element', () => {
-    expect(indexHtml).not.toMatch(/<base\s/)
+  it('builds asset URLs relative to the document base', () => {
+    const viteConfig = readFileSync(join(repoRoot, 'vite.config.js'), 'utf8')
+
+    expect(viteConfig).toMatch(/base: '\.\/'/)
   })
 
   // Vite rewrites public asset URLs such as /images/... relative to the bundle, but not API request URLs.
@@ -126,5 +73,34 @@ describe('web UI base path', () => {
         .map(line => `${file}: ${line.trim()}`))
 
     expect(offenders).toEqual([])
+  })
+
+  it.each([
+    ['/', '/pin', '/pin'],
+    ['/', '/apps/', '/apps/'],
+    ['/', '/logout/', '/logout/'],
+    ['/', '/unknown/deep/link', '/unknown/deep/link'],
+    ['/sunshine/', '/sunshine/', '/'],
+    ['/sunshine/', '/sunshine/troubleshooting', '/troubleshooting'],
+    ['/apps/', '/apps/', '/'],
+    ['/apps/', '/apps/config', '/config'],
+    ['/proxy/config/', '/proxy/config/', '/'],
+    ['/proxy/config/', '/proxy/config/apps', '/apps'],
+    ['/a/b/sunshine/', '/a/b/sunshine/pin', '/pin'],
+  ])('with base %s, routes %s as %s and keeps links, assets and API under the base', (baseHref, path, route) => {
+    loadPage(baseHref, path)
+    const history = createWebHistory()
+    const router = createRouter({ history, routes: [{ path: '/:pathMatch(.*)*', component: {} }] })
+    const origin = globalThis.location.origin
+
+    expect(history.base).toBe(baseHref.replace(/\/$/, ''))
+    expect(history.location.replace(/\/$/, '') || '/').toBe(route.replace(/\/$/, '') || '/')
+    expect(router.resolve('/troubleshooting').href).toBe(`${baseHref}troubleshooting`)
+    for (const relative of ['./assets/index.js', './api/config', './api/covers/0', './images/sunshine.ico', 'logout', './']) {
+      const url = new URL(relative, document.baseURI)
+      expect(url.origin).toBe(origin)
+      expect(url.pathname.startsWith(baseHref)).toBe(true)
+    }
+    history.destroy()
   })
 })

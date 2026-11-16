@@ -6,7 +6,7 @@ import { createRouter, createWebHistory } from 'vue-router'
  * Lazy page imports keep the source split into focused components while the
  * server serves the same index document for every browser route.
  */
-export const routes = [
+const routes = [
   { path: '/', component: () => import('./Home.vue') },
   { path: '/apps', component: () => import('./Apps.vue') },
   { path: '/clients', redirect: '/' },

@@ -4,26 +4,7 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script>
-      // Resolve the web UI's base path from the current URL, so the UI also works when a reverse proxy
-      // serves it under a sub-path (for example https://example.com/sunshine/). Assets, API requests and
-      // vue-router resolve against this <base>. Keep the route names in sync with the routes in router.js.
-      (function () {
-        var routes = ['apps', 'clients', 'config', 'featured', 'logout', 'password', 'pin', 'troubleshooting', 'welcome'];
-        var segments = location.pathname.split('/');
-        // Drop the final path segment; it is empty when the path ends with a slash.
-        segments.pop();
-        // A route visited with a trailing slash (for example /logout/) leaves its name as the last segment.
-        if (segments.length > 1 && routes.indexOf(segments[segments.length - 1]) !== -1) {
-          segments.pop();
-        }
-        var base = document.createElement('base');
-        // Keep exactly one leading slash: a path such as //example.com/ would otherwise produce a network-path
-        // reference that resolves against another origin.
-        base.href = ('/' + segments.join('/') + '/').replace(/^\/+/, '/');
-        document.head.appendChild(base);
-      })();
-    </script>
+    <base href="/" />
     <title>Sunshine</title>
     <link rel="icon" type="image/x-icon" href="/images/sunshine.ico" />
   </head>
