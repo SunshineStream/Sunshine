@@ -142,6 +142,50 @@ namespace nvhttp {
   resume_state_t resolve_resume_state(const std::function<bool()> &cleanup_stopping_sessions);
 
   /**
+   * @brief Snapshot of the host state used to handle a launch request.
+   */
+  struct launch_state_t {
+    int app_id {};  ///< Running app id observed after the stopping-session cleanup, or 0 when no app is running.
+    int active_sessions {};  ///< Streaming sessions still active after the cleanup.
+
+    /**
+     * @brief Report whether an input-only launch must execute the placeholder app.
+     *
+     * An input-only session does not conflict with an already running app, but when nothing
+     * is running the placeholder has to be executed for the session to have a host app.
+     *
+     * @return True when no app is running after the cleanup.
+     */
+    constexpr bool should_execute_placeholder() const noexcept {
+      return app_id == 0;
+    }
+  };
+
+  /**
+   * @brief Resolve the host state for a launch request.
+   *
+   * Stopping sessions are joined first, because the last input-only session's teardown
+   * terminates the placeholder. Taking the running-app snapshot afterwards keeps a launch
+   * from trusting a pre-cleanup snapshot, skipping the placeholder, and leaving the new
+   * input-only session with nothing running.
+   *
+   * @return Running app id and active session count observed after the cleanup.
+   */
+  launch_state_t resolve_launch_state();
+
+  /**
+   * @brief Resolve the host state for a launch request using a supplied session cleanup.
+   *
+   * The cleanup callback runs before the running-app snapshot is taken. Tests use this seam
+   * to model a stopping session whose teardown terminates the placeholder.
+   *
+   * @param cleanup_stopping_sessions Callback that joins stopping sessions and reports the
+   *        number of sessions still active afterwards.
+   * @return Running app id and active session count observed after the cleanup.
+   */
+  launch_state_t resolve_launch_state(const std::function<int()> &cleanup_stopping_sessions);
+
+  /**
    * @brief Simple-Web-Server HTTPS backend configured for Sunshine certificate handling.
    */
   class SunshineHTTPS: public SimpleWeb::HTTPS {

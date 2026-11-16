@@ -441,6 +441,50 @@ namespace cuda {
 
       return planes;
     }
+
+    int upload_bgra(const std::vector<std::uint8_t> &bgra, int width, int height, tex_t &tex) {
+      const int pitch = width * 4;
+      if (!tex.array || width <= 0 || height <= 0 || bgra.size() != static_cast<std::size_t>(pitch) * height) {
+        return -1;
+      }
+
+      return CU_CHECK_IGNORE(cudaMemcpy2DToArray(tex.array, 0, 0, bgra.data(), pitch, pitch, height, cudaMemcpyHostToDevice), "Couldn't copy test frame to cuda array");
+    }
+
+    std::optional<nv12_planes_t> convert_texture_to_nv12(const tex_t &tex, int width, int height, const video::sunshine_colorspace_t &colorspace) {
+      if (!tex.array || width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0) {
+        return std::nullopt;
+      }
+
+      auto sws = sws_t::make(width, height, width, height, width * 4);
+      if (!sws) {
+        return std::nullopt;
+      }
+      sws->apply_colorspace(colorspace);
+
+      nv12_planes_t planes {
+        std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height),
+        std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height / 2),
+      };
+
+      void *luma_dev = nullptr;
+      CU_CHECK_OPT(cudaMalloc(&luma_dev, planes.y.size()), "Couldn't allocate test luma plane");
+      ptr_t luma {luma_dev};
+
+      void *chroma_dev = nullptr;
+      CU_CHECK_OPT(cudaMalloc(&chroma_dev, planes.uv.size()), "Couldn't allocate test chroma plane");
+      ptr_t chroma {chroma_dev};
+
+      if (sws->convert_nv12(static_cast<std::uint8_t *>(luma_dev), static_cast<std::uint8_t *>(chroma_dev), width, width, tex.texture.point, nullptr)) {
+        return std::nullopt;
+      }
+
+      // cudaMemcpy waits for the kernel, which ran on the default stream
+      CU_CHECK_OPT(cudaMemcpy(planes.y.data(), luma_dev, planes.y.size(), cudaMemcpyDeviceToHost), "Couldn't copy test luma plane");
+      CU_CHECK_OPT(cudaMemcpy(planes.uv.data(), chroma_dev, planes.uv.size(), cudaMemcpyDeviceToHost), "Couldn't copy test chroma plane");
+
+      return planes;
+    }
   }  // namespace test
 #endif
 

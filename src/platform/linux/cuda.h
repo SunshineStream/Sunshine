@@ -676,6 +676,21 @@ namespace cuda {
     float scale;
   };
 
+  /**
+   * @brief Upload an opaque black frame into a dummy image's CUDA texture array.
+   *
+   * NvFBC images keep their pixels in a CUDA array instead of a CPU buffer, so
+   * `video::fill_blank_image()` cannot reach them, and `alloc_img()` leaves the array
+   * uninitialized. Build a temporary CPU frame filled with opaque black and upload it
+   * through `sws_t::load_ram()` so blank placeholder frames encode as black instead of
+   * uninitialized GPU memory.
+   *
+   * @param img Image descriptor supplying width, height, pixel_pitch, and row_pitch.
+   * @param array Destination CUDA array, as allocated by `tex_t::make()`.
+   * @return 0 on success, the upload error on upload failure, or -1 on invalid input.
+   */
+  int fill_dummy_img_black(const platf::img_t *img, cudaArray_t array);
+
   #ifdef SUNSHINE_TESTS
   namespace test {
     /**
@@ -701,6 +716,26 @@ namespace cuda {
      * @return The converted planes, or `std::nullopt` when the input is invalid or a CUDA call fails.
      */
     std::optional<nv12_planes_t> convert_to_nv12(const std::vector<std::uint8_t> &bgra, int width, int height, const video::sunshine_colorspace_t &colorspace);
+
+    /**
+     * @brief Upload a CPU BGRA frame into a texture array created by `tex_t::make()`.
+     * @param bgra Frame pixels, 4 bytes per pixel in B, G, R, A order, rows packed.
+     * @param width Frame width in pixels.
+     * @param height Frame height in pixels.
+     * @param tex Destination texture.
+     * @return 0 on success, -1 when the input is invalid or the upload fails.
+     */
+    int upload_bgra(const std::vector<std::uint8_t> &bgra, int width, int height, tex_t &tex);
+
+    /**
+     * @brief Convert a texture to NV12 through the production NV12 kernel, like `cuda_vram_t::convert()`.
+     * @param tex BGRA texture to read.
+     * @param width Frame width in pixels. Must be even.
+     * @param height Frame height in pixels. Must be even.
+     * @param colorspace Colorspace to apply before the conversion.
+     * @return The converted planes, or `std::nullopt` when the input is invalid or a CUDA call fails.
+     */
+    std::optional<nv12_planes_t> convert_texture_to_nv12(const tex_t &tex, int width, int height, const video::sunshine_colorspace_t &colorspace);
   }  // namespace test
   #endif
 }  // namespace cuda

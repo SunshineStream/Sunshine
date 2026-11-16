@@ -907,6 +907,9 @@ protected:
   }
 };
 
+/**
+ * @brief Parsing adds the synthetic placeholder entry and caches its id when input-only mode is enabled.
+ */
 TEST_F(ProcessInputOnlyTest, Parse_AddsInputOnlyEntryWhenEnabled) {
   config::input.enable_input_only_mode = true;
   proc::input_only_app_id.clear();
@@ -934,6 +937,9 @@ TEST_F(ProcessInputOnlyTest, Parse_AddsInputOnlyEntryWhenEnabled) {
   EXPECT_FALSE(apps[1].input_only);
 }
 
+/**
+ * @brief Parsing omits the placeholder entry and clears the cached id when input-only mode is disabled.
+ */
 TEST_F(ProcessInputOnlyTest, Parse_OmitsInputOnlyEntryWhenDisabled) {
   config::input.enable_input_only_mode = false;
   proc::input_only_app_id = "stale-id";
@@ -952,6 +958,9 @@ TEST_F(ProcessInputOnlyTest, Parse_OmitsInputOnlyEntryWhenDisabled) {
   EXPECT_TRUE(proc::input_only_app_id.empty());
 }
 
+/**
+ * @brief Toggling input-only mode does not renumber the ids of the apps parsed before the toggle.
+ */
 TEST_F(ProcessInputOnlyTest, Parse_KeepsExistingAppIdsStableWhenToggled) {
   const auto path = test_dir / "apps_input_only_toggle.json";
   writeAppsJson(path, {"Game One", "Game Two"});
@@ -972,6 +981,9 @@ TEST_F(ProcessInputOnlyTest, Parse_KeepsExistingAppIdsStableWhenToggled) {
   }
 }
 
+/**
+ * @brief The placeholder counts as running from execution until it is terminated.
+ */
 TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_FollowsPlaceholderLifetime) {
   auto process = make_process({make_placeholder_ctx("777")});
 
@@ -990,6 +1002,9 @@ TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_FollowsPlaceholderLifetime) {
   EXPECT_TRUE(process.get_last_run_app_name().empty());
 }
 
+/**
+ * @brief A running regular application is never reported as the input-only placeholder.
+ */
 TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_FalseForRegularApp) {
   auto process = make_process({make_regular_ctx("778")});
 
@@ -1001,6 +1016,9 @@ TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_FalseForRegularApp) {
   EXPECT_FALSE(process.is_input_only_running());
 }
 
+/**
+ * @brief A running placeholder stays recognized when input-only mode is toggled off mid-session.
+ */
 TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_IgnoredWhenModeToggledOffMidSession) {
   auto process = make_process({make_placeholder_ctx("779")});
   ASSERT_EQ(process.execute(779, std::make_shared<rtsp_stream::launch_session_t>()), 0);
@@ -1017,6 +1035,9 @@ TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_IgnoredWhenModeToggledOffMidSess
   EXPECT_FALSE(process.is_input_only_running());
 }
 
+/**
+ * @brief Launching a real app over the placeholder terminates it and clears the input-only state.
+ */
 TEST_F(ProcessInputOnlyTest, ExecuteRealAppOverPlaceholderClearsInputOnlyState) {
   std::vector<proc::ctx_t> apps;
   apps.push_back(make_placeholder_ctx("780"));
@@ -1036,6 +1057,9 @@ TEST_F(ProcessInputOnlyTest, ExecuteRealAppOverPlaceholderClearsInputOnlyState) 
   EXPECT_FALSE(process.is_input_only_running());
 }
 
+/**
+ * @brief Resume resolves the app state only after stopping-session cleanup removed the placeholder.
+ */
 TEST_F(ProcessInputOnlyTest, ResolveResumeState_SnapshotsAfterPlaceholderCleanup) {
   auto saved_global_proc = std::move(proc::proc);
   auto restore_global_proc = util::fail_guard([&saved_global_proc]() {
@@ -1067,4 +1091,49 @@ TEST_F(ProcessInputOnlyTest, ResolveResumeState_SnapshotsAfterPlaceholderCleanup
   EXPECT_TRUE(state.no_active_sessions);
   EXPECT_FALSE(state.can_resume());
   EXPECT_FALSE(state.should_configure_display());
+}
+
+/**
+ * @brief A launch that joins the last stopping input-only session executes a replacement placeholder.
+ */
+TEST_F(ProcessInputOnlyTest, ResolveLaunchState_ReexecutesPlaceholderAfterCleanup) {
+  auto saved_global_proc = std::move(proc::proc);
+  auto restore_global_proc = util::fail_guard([&saved_global_proc]() {
+    proc::proc.terminate();
+    proc::proc = std::move(saved_global_proc);
+  });
+
+  auto process = make_process({make_placeholder_ctx("902")});
+  ASSERT_EQ(process.execute(902, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  proc::proc = std::move(process);
+
+  // Without stopping sessions the running placeholder stays and must not be executed again.
+  const auto kept = nvhttp::resolve_launch_state();
+  EXPECT_EQ(kept.app_id, 902);
+  EXPECT_FALSE(kept.should_execute_placeholder());
+
+  // Model the last input-only session being STOPPING while /launch counts sessions: its
+  // teardown terminates the placeholder. A decision made from the pre-cleanup snapshot
+  // would skip proc::proc.execute() and leave the new input-only session with nothing running.
+  const auto state = nvhttp::resolve_launch_state([]() {
+    EXPECT_EQ(proc::proc.running(), 902);
+    EXPECT_TRUE(proc::proc.is_input_only_running());
+    proc::proc.terminate();
+    return 0;
+  });
+
+  EXPECT_EQ(state.app_id, 0);
+  EXPECT_EQ(state.active_sessions, 0);
+  EXPECT_TRUE(state.should_execute_placeholder());
+
+  // The replacement placeholder /launch now executes runs, and keeps the session resumable as input-only.
+  ASSERT_EQ(proc::proc.execute(902, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  EXPECT_EQ(proc::proc.running(), 902);
+  EXPECT_TRUE(proc::proc.is_input_only_running());
+
+  const auto resume = nvhttp::resolve_resume_state();
+  EXPECT_EQ(resume.app_id, 902);
+  EXPECT_TRUE(resume.input_only);
+  EXPECT_TRUE(resume.can_resume());
+  EXPECT_FALSE(resume.should_configure_display());
 }

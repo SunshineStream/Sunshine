@@ -690,6 +690,9 @@ namespace {
   };
 }  // namespace
 
+/**
+ * @brief A BGRA fill writes zero color with opaque alpha for every pixel.
+ */
 TEST(FillBlankImageTest, PacksOpaqueBlackForBgra) {
   std::array<std::uint8_t, 2 * 2 * 4> buffer;
   buffer.fill(0x11);
@@ -707,6 +710,9 @@ TEST(FillBlankImageTest, PacksOpaqueBlackForBgra) {
   }
 }
 
+/**
+ * @brief A BGRA fill stops at the last pixel of each row and leaves the row padding untouched.
+ */
 TEST(FillBlankImageTest, PreservesPaddingBytesAfterEachBgraRow) {
   // Two rows of two BGRA pixels padded to 12 bytes: the trailing 4 bytes must stay untouched.
   std::array<std::uint8_t, 2 * 12> buffer;
@@ -725,6 +731,9 @@ TEST(FillBlankImageTest, PreservesPaddingBytesAfterEachBgraRow) {
   }
 }
 
+/**
+ * @brief An NV12 fill writes a black luma plane and a neutral-chroma UV plane.
+ */
 TEST(FillBlankImageTest, UsesNeutralChromaForNv12) {
   // 2x2 NV12: a 4-byte Y plane followed by a 2-byte interleaved UV plane.
   std::array<std::uint8_t, 2 * 2 + 2> buffer;
@@ -743,6 +752,9 @@ TEST(FillBlankImageTest, UsesNeutralChromaForNv12) {
   EXPECT_EQ(buffer[5], 0x80);
 }
 
+/**
+ * @brief A zero pixel_pitch falls back to the row pitch so backends that omit it are still filled.
+ */
 TEST(FillBlankImageTest, InfersPixelPitchFromRowPitchWhenBackendOmitsIt) {
   std::array<std::uint8_t, 8> buffer;
   buffer.fill(0x77);
@@ -758,6 +770,9 @@ TEST(FillBlankImageTest, InfersPixelPitchFromRowPitchWhenBackendOmitsIt) {
   EXPECT_EQ(buffer[7], 0xFF);
 }
 
+/**
+ * @brief Unusable descriptors and unknown layouts are left untouched without dereferencing anything.
+ */
 TEST(FillBlankImageTest, LeavesUnusableDescriptorsAndUnknownLayoutsAlone) {
   // An unsupported pixel pitch must not be guessed at.
   std::array<std::uint8_t, 4> packed;
@@ -808,6 +823,9 @@ TEST(FillBlankImageTest, LeavesUnusableDescriptorsAndUnknownLayoutsAlone) {
   }
 }
 
+/**
+ * @brief Images whose data is an opaque GPU resource are skipped instead of written on the CPU.
+ */
 TEST(FillBlankImageTest, SkipsOpaqueGpuBackedImages) {
   // On the Windows VRAM path `data` is an ID3D11Texture2D pointer, so writing pixels
   // through it would corrupt the texture object instead of filling the frame.

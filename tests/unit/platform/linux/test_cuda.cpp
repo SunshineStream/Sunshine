@@ -2483,6 +2483,107 @@ TEST(CudaInitTest, CallersStartingTogetherLoadTheTableOnce) {
   EXPECT_EQ(init_driver().table_loads.load(), 1);
   EXPECT_EQ(init_driver().cu_inits.load(), callers);
 }
+
+namespace {
+  /**
+   * @brief A frame filled with one color, in the B, G, R, A byte order of the CUDA texture.
+   *
+   * @param color The color as B, G, R.
+   * @param width Frame width in pixels.
+   * @param height Frame height in pixels.
+   * @return The frame pixels.
+   */
+  std::vector<std::uint8_t> solid_bgra_frame(std::uint8_t b, std::uint8_t g, std::uint8_t r, int width, int height) {
+    std::vector<std::uint8_t> frame(static_cast<std::size_t>(width) * height * 4, 0xff);
+    for (std::size_t pixel = 0; pixel < static_cast<std::size_t>(width) * height; ++pixel) {
+      frame[pixel * 4 + 0] = b;
+      frame[pixel * 4 + 1] = g;
+      frame[pixel * 4 + 2] = r;
+    }
+    return frame;
+  }
+}  // namespace
+
+/**
+ * @brief The NvFBC dummy image path replaces non-black texture contents with black that converts to neutral NV12.
+ *
+ * This runs the upload and the kernel on the GPU, so it is skipped on hosts without a CUDA device.
+ */
+TEST(CudaNvFbcDummyImgTest, FillReplacesTextureContentsWithBlack) {
+  if (!cuda::test::has_device()) {
+    GTEST_SKIP() << "No CUDA device";
+  }
+
+  constexpr int width = 16;
+  constexpr int height = 8;
+  constexpr int pitch = width * 4;
+
+  auto tex = cuda::tex_t::make(height, pitch);
+  ASSERT_TRUE(tex.has_value());
+
+  // Seed the array with opaque red so the dummy fill has to overwrite previous texture contents.
+  ASSERT_EQ(cuda::test::upload_bgra(solid_bgra_frame(0x00, 0x00, 0xff, width, height), width, height, *tex), 0);
+
+  platf::img_t desc;
+  desc.width = width;
+  desc.height = height;
+  desc.pixel_pitch = 4;
+  desc.row_pitch = pitch;
+  ASSERT_EQ(cuda::fill_dummy_img_black(&desc, tex->array), 0);
+
+  const video::sunshine_colorspace_t colorspace {video::colorspace_e::rec709, true, 8};
+  const auto planes = cuda::test::convert_texture_to_nv12(*tex, width, height, colorspace);
+  ASSERT_TRUE(planes.has_value());
+
+  // Full-range black decodes from the bottom of the luma range with neutral chroma in every block.
+  for (std::size_t pixel = 0; pixel < planes->y.size(); ++pixel) {
+    EXPECT_EQ(static_cast<int>(planes->y[pixel]), 0) << "Y at pixel " << pixel;
+  }
+  for (std::size_t sample = 0; sample < planes->uv.size(); sample += 2) {
+    EXPECT_NEAR(static_cast<int>(planes->uv[sample]), 128, 1) << "U at block " << sample / 2;
+    EXPECT_NEAR(static_cast<int>(planes->uv[sample + 1]), 128, 1) << "V at block " << sample / 2;
+  }
+}
+
+/**
+ * @brief The NvFBC dummy image path reports invalid images and unallocated textures instead of uploading.
+ */
+TEST(CudaNvFbcDummyImgTest, ReportsInvalidImagesAndUnallocatedTextures) {
+  // A texture that was never allocated cannot receive the upload.
+  const cuda::tex_t tex;
+
+  platf::img_t desc;
+  desc.width = 16;
+  desc.height = 8;
+  desc.pixel_pitch = 4;
+  desc.row_pitch = 64;
+  EXPECT_EQ(cuda::fill_dummy_img_black(&desc, tex.array), -1);
+
+  // A descriptor without the image itself cannot be measured.
+  EXPECT_EQ(cuda::fill_dummy_img_black(nullptr, tex.array), -1);
+
+  // Degenerate descriptors must not reach the upload.
+  platf::img_t zero_height;
+  zero_height.width = 16;
+  zero_height.height = 0;
+  zero_height.pixel_pitch = 4;
+  zero_height.row_pitch = 64;
+  EXPECT_EQ(cuda::fill_dummy_img_black(&zero_height, tex.array), -1);
+
+  platf::img_t zero_pitch;
+  zero_pitch.width = 16;
+  zero_pitch.height = 8;
+  zero_pitch.pixel_pitch = 0;
+  zero_pitch.row_pitch = 64;
+  EXPECT_EQ(cuda::fill_dummy_img_black(&zero_pitch, tex.array), -1);
+
+  platf::img_t zero_row_pitch;
+  zero_row_pitch.width = 16;
+  zero_row_pitch.height = 8;
+  zero_row_pitch.pixel_pitch = 4;
+  zero_row_pitch.row_pitch = 0;
+  EXPECT_EQ(cuda::fill_dummy_img_black(&zero_row_pitch, tex.array), -1);
+}
   #endif  // SUNSHINE_BUILD_CUDA
 
 #endif  // __linux__

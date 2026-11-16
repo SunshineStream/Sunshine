@@ -169,6 +169,9 @@ INSTANTIATE_TEST_SUITE_P(
   )
 );
 
+/**
+ * @brief Planar formats support direct RTV clears while integer 4:4:4 formats need a drawn clear.
+ */
 TEST(WindowsRtvClearTest, ClassifiesImmediateAndDeferredClearFormats) {
   // NV12 and P010 render target views support ClearRenderTargetView(), so the padding is
   // cleared when the conversion resources are initialized.
@@ -183,6 +186,9 @@ TEST(WindowsRtvClearTest, ClassifiesImmediateAndDeferredClearFormats) {
   EXPECT_TRUE(platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_Y410));
 }
 
+/**
+ * @brief A blank first frame in an immediate-clear format draws neither a clear nor a frame.
+ */
 TEST(WindowsRtvClearTest, FirstFrameBlankConversionInImmediateClearFormatFamily) {
   // Immediate-clear formats are already cleared when the conversion resources are
   // initialized, so a blank first frame must not trigger a drawn clear or a frame draw.
@@ -212,6 +218,9 @@ TEST(WindowsRtvClearTest, FirstFrameBlankConversionInImmediateClearFormatFamily)
   }
 }
 
+/**
+ * @brief A blank first frame in a deferred-clear format draws the black clear exactly once.
+ */
 TEST(WindowsRtvClearTest, FirstFrameBlankConversionInDeferredClearFormatFamily) {
   for (const auto format : {DXGI_FORMAT_AYUV, DXGI_FORMAT_R16_UINT, DXGI_FORMAT_Y410}) {
     bool rtvs_cleared = !platf::dxgi::requires_drawn_rtv_clear(format);
@@ -246,6 +255,9 @@ TEST(WindowsRtvClearTest, FirstFrameBlankConversionInDeferredClearFormatFamily) 
   }
 }
 
+/**
+ * @brief A failed drawn clear on a blank first frame fails the conversion without drawing the frame.
+ */
 TEST(WindowsRtvClearTest, DeferredClearFailureOnBlankFirstFrameFailsConversion) {
   bool rtvs_cleared = !platf::dxgi::requires_drawn_rtv_clear(DXGI_FORMAT_AYUV);
   EXPECT_FALSE(rtvs_cleared);

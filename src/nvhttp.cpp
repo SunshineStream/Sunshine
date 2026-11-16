@@ -1433,9 +1433,15 @@ namespace nvhttp {
     auto launch_session = make_launch_session(host_audio, args);
     launch_session->input_only = is_input_only;
 
+    // Counting sessions joins stopping sessions synchronously, and the last input-only
+    // session's teardown terminates the placeholder. Snapshot the launch state with that
+    // cleanup so the placeholder decision below is not made from the stale `current_appid`
+    // taken before the cleanup.
+    const auto launch_state = resolve_launch_state();
+
     // A real app launched on top of a running input-only placeholder needs the display
     // prepared, even though other sessions are still active.
-    if (rtsp_stream::session_count() == 0 || (current_is_input_only && !is_input_only)) {
+    if (launch_state.active_sessions == 0 || (current_is_input_only && !is_input_only)) {
       // The display should be restored in case something fails as there are no other sessions
       // that depend on it. An input-only session never changes it, so there is nothing to revert.
       revert_display_configuration = !is_input_only;
@@ -1475,9 +1481,11 @@ namespace nvhttp {
     if (is_input_only) {
       BOOST_LOG(info) << "Launching input only session"sv;
 
-      // An input-only session does not conflict with an already running app. Only
-      // launch the placeholder app when nothing is running yet.
-      if (current_appid == 0) {
+      // An input-only session does not conflict with an already running app. Only launch
+      // the placeholder app when nothing is running after the stopping-session cleanup: if
+      // it joined the last input-only session, its teardown terminated the placeholder and
+      // this session needs a fresh one.
+      if (launch_state.should_execute_placeholder()) {
         auto err = proc::proc.execute((int) appid, launch_session);
         if (err) {
           tree.put("root.<xmlattr>.status_code", err);
@@ -1693,6 +1701,20 @@ namespace nvhttp {
   resume_state_t resolve_resume_state() {
     return resolve_resume_state([]() {
       return rtsp_stream::session_count() == 0;
+    });
+  }
+
+  launch_state_t resolve_launch_state(const std::function<int()> &cleanup_stopping_sessions) {
+    // Joining stopping sessions can terminate the last input-only placeholder, so the
+    // running-app snapshot must be taken after the cleanup.
+    const int active_sessions {cleanup_stopping_sessions()};
+
+    return {proc::proc.running(), active_sessions};
+  }
+
+  launch_state_t resolve_launch_state() {
+    return resolve_launch_state([]() {
+      return rtsp_stream::session_count();
     });
   }
 
