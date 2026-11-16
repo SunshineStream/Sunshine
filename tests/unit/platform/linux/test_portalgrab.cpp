@@ -469,7 +469,13 @@ TEST_F(PortalRequestTest, ReceivesResponseEmittedBeforeMethodReturns) {
   EXPECT_EQ(names, std::vector<std::string> {"position-7x9-resolution-1234x567"});
 }
 
-TEST_F(PortalRequestTest, DiscardsStaleRestoreTokenWhenStartReturnsNoStreams) {
+/**
+ * @brief Parameterized stale-token recovery tests for omitted and empty `streams` responses.
+ */
+class PortalRequestStaleTokenTest: public PortalRequestTest, public testing::WithParamInterface<bool> {};
+
+TEST_P(PortalRequestStaleTokenTest, DiscardsStaleRestoreTokenWhenStartHasNoStreams) {
+  fake_portal().set_emit_empty_streams_array(GetParam());
   ASSERT_NO_FATAL_FAILURE(write_token("stale-token"));
   ASSERT_TRUE(std::filesystem::exists(token_path()));
 
@@ -485,22 +491,14 @@ TEST_F(PortalRequestTest, DiscardsStaleRestoreTokenWhenStartReturnsNoStreams) {
   EXPECT_TRUE(portal::has_saved_token());
 }
 
-TEST_F(PortalRequestTest, DiscardsStaleRestoreTokenWhenStartReturnsEmptyStreamsArray) {
-  fake_portal().set_emit_empty_streams_array(true);
-  ASSERT_NO_FATAL_FAILURE(write_token("stale-token"));
-  ASSERT_TRUE(std::filesystem::exists(token_path()));
-
-  const auto names = platf::portal_display_names(true);
-
-  EXPECT_EQ(names, std::vector<std::string> {"position-7x9-resolution-1234x567"});
-  EXPECT_TRUE(fake_portal().saw_restore_token());
-  ASSERT_TRUE(std::filesystem::exists(token_path()));
-  std::ifstream file(token_path());
-  std::string token;
-  std::getline(file, token);
-  EXPECT_EQ(token, "fresh-token");
-  EXPECT_TRUE(portal::has_saved_token());
-}
+INSTANTIATE_TEST_SUITE_P(
+  EmptyStartResponses,
+  PortalRequestStaleTokenTest,
+  testing::Values(false, true),
+  [](const testing::TestParamInfo<bool> &info) {
+    return info.param ? "EmptyStreamsArray" : "OmittedStreams";
+  }
+);
 
 TEST_F(PortalRequestTest, KeepsRestoreTokenWhenStartReturnsStreams) {
   fake_portal().set_reject_restored_sessions(false);
