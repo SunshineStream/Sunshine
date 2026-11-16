@@ -101,7 +101,9 @@ namespace cuda {
   static cdf_t cdf;
 
   /**
-   * @brief Log a failed call through a CUDA function table.
+   * @brief Log a failed CUDA call with its numeric result and safe fallback error text.
+   *
+   * Error lookups may fail or return null, so only use text from successful, non-null lookups.
    *
    * @param functions CUDA function table.
    * @param result Result of the call.
@@ -110,13 +112,17 @@ namespace cuda {
    */
   inline static int check(const CudaFunctions &functions, CUresult result, const std::string_view &sv) {
     if (result != CUDA_SUCCESS) {
-      const char *name;
-      const char *description;
+      const char *name = nullptr;
+      const char *description = nullptr;
 
-      functions.cuGetErrorName(result, &name);
-      functions.cuGetErrorString(result, &description);
+      if (functions.cuGetErrorName(result, &name) != CUDA_SUCCESS || !name) {
+        name = "Unknown CUDA error";
+      }
+      if (functions.cuGetErrorString(result, &description) != CUDA_SUCCESS || !description) {
+        description = "No error description available";
+      }
 
-      BOOST_LOG(error) << sv << name << ':' << description;
+      BOOST_LOG(error) << sv << name << " (" << static_cast<int>(result) << "): " << description;
       return -1;
     }
 

@@ -2,6 +2,9 @@
  * @file src/platform/windows/display_ram.cpp
  * @brief Definitions for handling ram.
  */
+// standard includes
+#include <cstddef>
+
 // local includes
 #include "display.h"
 #include "misc.h"
@@ -24,6 +27,39 @@ namespace platf::dxgi {
       data = nullptr;
     }
   };
+
+  void copy_mapped_image(const D3D11_MAPPED_SUBRESOURCE &source, ::platf::img_t &destination, DXGI_MODE_ROTATION rotation) {
+    const auto source_data = static_cast<const std::uint8_t *>(source.pData);
+    const auto source_pitch = static_cast<std::ptrdiff_t>(source.RowPitch);
+    const auto pixel_pitch = destination.pixel_pitch;
+
+    for (int y = 0; y < destination.height; ++y) {
+      auto destination_row = destination.data + y * destination.row_pitch;
+      const std::uint8_t *source_row;
+      std::ptrdiff_t source_step;
+      switch (rotation) {
+        case DXGI_MODE_ROTATION_ROTATE90:
+          source_row = source_data + (destination.width - 1) * source_pitch + y * pixel_pitch;
+          source_step = -source_pitch;
+          break;
+        case DXGI_MODE_ROTATION_ROTATE180:
+          source_row = source_data + (destination.height - 1 - y) * source_pitch + (destination.width - 1) * pixel_pitch;
+          source_step = -pixel_pitch;
+          break;
+        case DXGI_MODE_ROTATION_ROTATE270:
+          source_row = source_data + (destination.height - 1 - y) * pixel_pitch;
+          source_step = source_pitch;
+          break;
+        default:
+          std::copy_n(source_data + y * source_pitch, destination.width * pixel_pitch, destination_row);
+          continue;
+      }
+
+      for (int x = 0; x < destination.width; ++x) {
+        std::copy_n(source_row + x * source_step, pixel_pitch, destination_row + x * pixel_pitch);
+      }
+    }
+  }
 
   /**
    * @brief Blend a monochrome cursor shape into a RAM frame.
@@ -270,8 +306,8 @@ namespace platf::dxgi {
           BOOST_LOG(info) << "Capture format ["sv << dxgi_format_to_string(capture_format) << ']';
 
           D3D11_TEXTURE2D_DESC t {};
-          t.Width = width;
-          t.Height = height;
+          t.Width = width_before_rotation;
+          t.Height = height_before_rotation;
           t.MipLevels = 1;
           t.ArraySize = 1;
           t.SampleDesc.Count = 1;
@@ -289,8 +325,8 @@ namespace platf::dxgi {
 
         // It's possible for our display enumeration to race with mode changes and result in
         // mismatched image pool and desktop texture sizes. If this happens, just reinit again.
-        if (desc.Width != width || desc.Height != height) {
-          BOOST_LOG(info) << "Capture size changed ["sv << width << 'x' << height << " -> "sv << desc.Width << 'x' << desc.Height << ']';
+        if (desc.Width != width_before_rotation || desc.Height != height_before_rotation) {
+          BOOST_LOG(info) << "Capture size changed ["sv << width_before_rotation << 'x' << height_before_rotation << " -> "sv << desc.Width << 'x' << desc.Height << ']';
           return capture_e::reinit;
         }
 
@@ -334,7 +370,8 @@ namespace platf::dxgi {
         return capture_e::capture_error;
       }
 
-      std::copy_n((std::uint8_t *) img_info.pData, height * img_info.RowPitch, (std::uint8_t *) img->data);
+      // Rotate before cursor composition so both pixels and pointer use desktop coordinates.
+      copy_mapped_image(img_info, *img, display_rotation);
 
       // Unmap the staging texture to allow GPU access again
       device_ctx->Unmap(texture.get(), 0);
@@ -375,15 +412,11 @@ namespace platf::dxgi {
 
     img->pixel_pitch = get_pixel_pitch();
 
-    if (dummy && !img->row_pitch) {
-      // Assume our dummy image will have no padding
-      img->row_pitch = img->pixel_pitch * img->width;
-    }
-
-    // Reallocate the image buffer if the pitch changes
-    if (!dummy && img->row_pitch != img_info.RowPitch) {
-      img->row_pitch = img_info.RowPitch;
-      delete img->data;
+    // The mapped texture may have different dimensions and padding before rotation.
+    const auto row_pitch = img->pixel_pitch * img->width;
+    if (img->row_pitch != row_pitch) {
+      img->row_pitch = row_pitch;
+      delete[] img->data;
       img->data = nullptr;
     }
 

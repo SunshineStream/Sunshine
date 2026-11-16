@@ -17,6 +17,7 @@
   #include <cstdint>
   #include <cstdlib>
   #include <deque>
+  #include <fstream>
   #include <latch>
   #include <map>
   #include <memory>
@@ -2183,6 +2184,91 @@ TEST_F(CudaGlDriverTest, PlaneTextureRegistration) {
 
   api().fail_at["cuGraphicsGLRegisterImage"] = 2;
   EXPECT_EQ(cuda::register_plane_texture(api().cuda, &resource, 8), -1);
+}
+
+namespace {
+  /**
+   * @brief CUDA error lookup behavior and the text that is safe to log.
+   */
+  struct cuda_error_lookup_case_t {
+    tcuGetErrorName *lookup;  ///< Error name or description lookup with the shared CUDA signature.
+    const char *expected;  ///< Text to log, or nullptr when the appropriate fallback is required.
+  };
+}  // namespace
+
+TEST(CudaErrorLoggingTest, HandlesLookupFailuresAndNullTextIndependently) {
+  const std::array cases {
+    cuda_error_lookup_case_t {[](CUresult, const char **text) {
+                                *text = "resolved";
+                                return CUDA_SUCCESS;
+                              },
+                              "resolved"},
+    cuda_error_lookup_case_t {[](CUresult, const char **) {
+                                return cu_failed;
+                              },
+                              nullptr},
+    cuda_error_lookup_case_t {[](CUresult, const char **text) {
+                                *text = reinterpret_cast<const char *>(std::uintptr_t {1});
+                                return cu_failed;
+                              },
+                              nullptr},
+    cuda_error_lookup_case_t {[](CUresult, const char **text) {
+                                *text = nullptr;
+                                return CUDA_SUCCESS;
+                              },
+                              nullptr},
+  };
+
+  for (std::size_t name_case = 0; name_case < cases.size(); ++name_case) {
+    for (std::size_t description_case = 0; description_case < cases.size(); ++description_case) {
+      SCOPED_TRACE(testing::Message() << "name=" << name_case << ", description=" << description_case);
+      api() = fake_api_t {};
+      auto functions = fake_cuda_functions();
+      functions.cuGetErrorName = cases[name_case].lookup;
+      functions.cuGetErrorString = cases[description_case].lookup;
+      functions.cuGraphicsGLRegisterImage = [](CUgraphicsResource *, GLuint, GLenum, unsigned int) {
+        return static_cast<CUresult>(100);  // CUDA_ERROR_NO_DEVICE is not named in nv-codec-headers.
+      };
+      CUgraphicsResource resource = nullptr;
+      logging::log_flush();
+      std::ifstream log_file {"test_sunshine.log", std::ios::ate};
+      ASSERT_TRUE(log_file);
+      const auto log_position = log_file.tellg();
+
+      EXPECT_EQ(cuda::register_plane_texture(functions, &resource, 7), -1);
+
+      logging::log_flush();
+      log_file.seekg(log_position);
+      std::string line;
+      ASSERT_TRUE(static_cast<bool>(std::getline(log_file, line)));
+      const std::string expected = std::string {"Couldn't register plane texture: "} +
+                                   (cases[name_case].expected ? cases[name_case].expected : "Unknown CUDA error") +
+                                   " (100): " +
+                                   (cases[description_case].expected ? cases[description_case].expected : "No error description available");
+      EXPECT_NE(line.find(expected), std::string::npos) << line;
+    }
+  }
+}
+
+TEST(CudaErrorLoggingTest, SuccessfulCallsDoNotLookUpOrLogErrors) {
+  api() = fake_api_t {};
+  auto functions = fake_cuda_functions();
+  functions.cuGetErrorName = functions.cuGetErrorString = [](CUresult, const char **) {
+    ADD_FAILURE() << "Successful CUDA calls must not look up errors";
+    return cu_failed;
+  };
+  CUgraphicsResource resource = nullptr;
+  logging::log_flush();
+  std::ifstream log_file {"test_sunshine.log", std::ios::ate};
+  ASSERT_TRUE(log_file);
+  const auto log_position = log_file.tellg();
+
+  EXPECT_EQ(cuda::register_plane_texture(functions, &resource, 7), 0);
+
+  logging::log_flush();
+  log_file.seekg(log_position);
+  EXPECT_EQ(log_file.peek(), std::ifstream::traits_type::eof());
+  EXPECT_EQ(resource, &api().resources[0]);
 }
 
 TEST_F(CudaGlDriverTest, GlCommandsWaitDeletesItsFence) {

@@ -336,7 +336,8 @@ namespace platf::dxgi {
       return capture_e::capture_error;
     }
 
-    std::copy_n((std::uint8_t *) img_info.pData, height * img_info.RowPitch, (std::uint8_t *) img->data);
+    // WGC already supplies pixels in desktop orientation.
+    copy_mapped_image(img_info, *img, DXGI_MODE_ROTATION_IDENTITY);
 
     // Unmap the staging texture to allow GPU access again
     device_ctx->Unmap(texture.get(), 0);

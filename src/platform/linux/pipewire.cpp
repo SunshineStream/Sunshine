@@ -83,6 +83,7 @@ namespace pipewire {
     std::atomic<int> color_primaries {0};  ///< PipeWire color-primaries metadata for the stream.
     std::atomic<int> transfer_function {0};  ///< PipeWire transfer-function metadata for the stream.
     std::atomic<bool> stream_dead {false};  ///< Whether the PipeWire stream has been destroyed.
+    std::atomic<bool> has_streamed {false};  ///< Whether this stream has ever reached PW_STREAM_STATE_STREAMING.
     pw_stream_state previous_state;  ///< Previous PipeWire stream state reported by callbacks.
     pw_stream_state current_state;  ///< Current PipeWire stream state reported by callbacks.
     std::string err_msg;  ///< Last PipeWire error message reported by the stream.
@@ -271,6 +272,7 @@ namespace pipewire {
       node = stream_node;
       object_serial = stream_object_serial;
       stream_data.shared = std::move(shared_state);
+      stream_data.shared->has_streamed.store(false);
 
       pw_thread_loop_lock(loop);
       BOOST_LOG(debug) << "[pipewire] Setup PW context"sv;
@@ -781,6 +783,15 @@ namespace pipewire {
       .error = on_core_error_cb,
     };
 
+  public:
+    /**
+     * @brief Record stream transitions, retaining startup success after subsequent pauses or errors.
+     *
+     * @param user_data Stream data registered with the PipeWire listener.
+     * @param old Previous PipeWire stream state.
+     * @param state New PipeWire stream state.
+     * @param err_msg Error description, or nullptr for a normal transition.
+     */
     static void on_stream_state_changed(void *user_data, enum pw_stream_state old, enum pw_stream_state state, const char *err_msg) {  // NOSONAR(cpp:S5008): PipeWire event callbacks require a void pointer for user data.
       if (err_msg != nullptr) {
         BOOST_LOG(info) << "[pipewire] PipeWire stream error '" << err_msg << "' on state: " << pw_stream_state_as_string(old)
@@ -793,6 +804,11 @@ namespace pipewire {
       auto *d = static_cast<stream_data_t *>(user_data);
 
       switch (state) {
+        case PW_STREAM_STATE_STREAMING:
+          if (d->shared) {
+            d->shared->has_streamed.store(true);
+          }
+          break;
         case PW_STREAM_STATE_PAUSED:
           if (d->shared && old == PW_STREAM_STATE_STREAMING) {
             {
@@ -826,6 +842,7 @@ namespace pipewire {
       }
     }
 
+  private:
     static void on_process(void *user_data) {  // NOSONAR(cpp:S5008): PipeWire event callbacks require a void pointer for user data.
       const auto d = static_cast<struct stream_data_t *>(user_data);
       struct pw_buffer *b = nullptr;
