@@ -1,6 +1,6 @@
 /**
  * @file tests/unit/platform/linux/test_pipewire.cpp
- * @brief Test PipeWire stream lifecycle handling and capture display teardown.
+ * @brief Test PipeWire buffer negotiation, stream lifecycle handling, and capture display teardown.
  */
 #if defined(SUNSHINE_BUILD_KWIN) || defined(SUNSHINE_BUILD_PORTAL)
   // test includes
@@ -215,6 +215,91 @@ namespace {
   };
 }  // namespace
 
+TEST(PipeWireBufferTest, NegotiationDistinguishesPendingMemoryAndDmabuf) {
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(nullptr, DRM_FORMAT_XRGB8888), SPA_ID_INVALID);
+  pipewire::shared_state_t shared;
+  EXPECT_EQ(shared.buffer_type.load(), SPA_ID_INVALID);
+
+  std::array<uint8_t, 256> storage {};
+  spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
+  auto *memory = static_cast<spa_pod *>(spa_pod_builder_add_object(
+    &builder,
+    SPA_TYPE_OBJECT_Format,
+    SPA_PARAM_Format,
+    SPA_FORMAT_VIDEO_format,
+    SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx)
+  ));
+  // A locally importable format is not evidence that the compositor supplied DMA-BUF.
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(memory, DRM_FORMAT_XRGB8888), SPA_DATA_MemPtr);
+
+  builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
+  auto *dmabuf = static_cast<spa_pod *>(spa_pod_builder_add_object(
+    &builder,
+    SPA_TYPE_OBJECT_Format,
+    SPA_PARAM_Format,
+    SPA_FORMAT_VIDEO_modifier,
+    SPA_POD_Long(DRM_FORMAT_MOD_LINEAR)
+  ));
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(dmabuf, DRM_FORMAT_XRGB8888), SPA_DATA_DmaBuf);
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(dmabuf, 0), SPA_DATA_MemPtr);
+}
+
+TEST(PipeWireBufferTest, StorageChangesAreRejectedBeforeCopyingFrame) {
+  pipewire::stream_data_t data {};
+  spa_chunk chunk {};
+  chunk.size = 16;
+  chunk.stride = 8;
+  spa_data plane {};
+  plane.chunk = &chunk;
+  plane.fd = -1;
+  spa_buffer buffer {};
+  buffer.n_datas = 1;
+  buffer.datas = &plane;
+  pw_buffer current {};
+  current.buffer = &buffer;
+  data.current_buffer = &current;
+  data.buffer_a.resize(16, 42);
+  data.local_stride = 8;
+  data.format.info.raw.format = SPA_VIDEO_FORMAT_BGRx;
+
+  for (auto type : {SPA_DATA_MemPtr, SPA_DATA_MemFd}) {
+    plane.type = type;
+    pipewire::img_descriptor_t img {};
+    img.sd.fds.fill(-1);
+    EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_DmaBuf), platf::capture_e::reinit);
+    EXPECT_EQ(img.data, nullptr);
+    EXPECT_EQ(img.sd.fds[0], -1);
+    EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::ok);
+    EXPECT_EQ(img.data, data.buffer_a.data());
+    EXPECT_EQ(img.row_pitch, 8);
+    EXPECT_EQ(img.pixel_pitch, 4);
+    EXPECT_FALSE(img.data_owned);
+  }
+
+  plane.type = SPA_DATA_DmaBuf;
+  pipewire::img_descriptor_t img {};
+  img.sd.fds.fill(-1);
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::reinit);
+  EXPECT_EQ(img.data, nullptr);
+  EXPECT_EQ(img.sd.fds[0], -1);
+
+  // A new display may use DMA-BUF again; no process-wide fallback is latched.
+  plane.fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  ASSERT_GE(plane.fd, 0);
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_DmaBuf), platf::capture_e::ok);
+  EXPECT_GE(img.sd.fds[0], 0);
+  EXPECT_NE(img.sd.fds[0], plane.fd);
+  pipewire::pipewire_t::close_img_fds(&img);
+  close(plane.fd);
+
+  plane.type = SPA_DATA_Invalid;
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::capture_error);
+  chunk.size = 0;
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::timeout);
+  buffer.n_datas = 0;
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::timeout);
+}
+
 TEST(PipeWireStreamStateTest, RecordsStartupUntilTheStreamIsReplaced) {
   pipewire::stream_data_t data {};
   data.shared = std::make_shared<pipewire::shared_state_t>();
@@ -302,9 +387,11 @@ TEST_F(PipeWireDisplayTest, NewConnectionResetsStartupHistory) {
   ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets.data()), 0);
   auto state = std::make_shared<pipewire::shared_state_t>();
   state->has_streamed.store(true);
+  state->buffer_type.store(SPA_DATA_DmaBuf);
   auto display = std::make_shared<test_display_t>();
   display->connect(sockets[0], state);
   EXPECT_FALSE(state->has_streamed.load());
+  EXPECT_EQ(state->buffer_type.load(), SPA_ID_INVALID);
   display.reset();
   close(sockets[1]);
 }
