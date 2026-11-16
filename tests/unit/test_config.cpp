@@ -324,3 +324,87 @@ TEST_F(ConfigPersistenceTest, ParsesNvencTwoPassModesAndDefaultsUnknownValues) {
     EXPECT_EQ(config::video.nv.two_pass, expected) << setting;
   }
 }
+
+/**
+ * @brief Verify accepted Web UI base paths are normalized without a trailing slash.
+ */
+TEST(ConfigWebUiBasePathTest, NormalizesAcceptedPaths) {
+  constexpr std::array cases {
+    std::pair {""sv, ""sv},
+    std::pair {"/"sv, ""sv},
+    std::pair {"/sunshine"sv, "/sunshine"sv},
+    std::pair {"/sunshine/"sv, "/sunshine"sv},
+    std::pair {"/apps/"sv, "/apps"sv},
+    std::pair {"/proxy/config/"sv, "/proxy/config"sv},
+    std::pair {"/a/b/sunshine"sv, "/a/b/sunshine"sv},
+    std::pair {"/my-host_1.0~x/"sv, "/my-host_1.0~x"sv},
+    std::pair {"/apis"sv, "/apis"sv},
+    std::pair {"/x/api"sv, "/x/api"sv},
+  };
+  for (const auto &[value, expected] : cases) {
+    const auto normalized = config::normalize_web_ui_base_path(value);
+    ASSERT_TRUE(normalized.has_value()) << value;
+    EXPECT_EQ(*normalized, expected) << value;
+  }
+}
+
+/**
+ * @brief Verify Web UI base paths that are not plain same-origin absolute paths are rejected.
+ */
+TEST(ConfigWebUiBasePathTest, RejectsUnsafePaths) {
+  constexpr std::array values {
+    "sunshine"sv,
+    "https://example.com/sunshine"sv,
+    "//example.com/"sv,
+    "///example.com"sv,
+    "/a//b"sv,
+    "//"sv,
+    "/sunshine?x=1"sv,
+    "/sunshine#fragment"sv,
+    "/sun shine"sv,
+    "/sun\\shine"sv,
+    "/\\example.com"sv,
+    "/sun\tshine"sv,
+    "/sun\nshine"sv,
+    "/\"><script>alert(1)</script>"sv,
+    "/a'b"sv,
+    "/a&b"sv,
+    "/a%2Fb"sv,
+    "/."sv,
+    "/.."sv,
+    "/a/../b"sv,
+    "/a/./b"sv,
+    "/api"sv,
+    "/assets/"sv,
+    "/images/x"sv,
+    "/a:b"sv,
+  };
+  for (const auto value : values) {
+    EXPECT_FALSE(config::normalize_web_ui_base_path(value).has_value()) << value;
+  }
+  EXPECT_FALSE(config::normalize_web_ui_base_path("/" + std::string(256, 'a')).has_value());
+  EXPECT_TRUE(config::normalize_web_ui_base_path("/" + std::string(255, 'a')).has_value());
+}
+
+/**
+ * @brief Verify the configured Web UI base path is applied, and an invalid value falls back to the root.
+ */
+TEST_F(ConfigPersistenceTest, ParsesWebUiBasePathOption) {
+  const auto original_base_path = config::sunshine.web_ui_base_path;
+  const auto restore_base_path = util::fail_guard([original_base_path]() {
+    config::sunshine.web_ui_base_path = original_base_path;
+  });
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  config::apply_config_for_test("web_ui_base_path = /proxy/config/\n");
+  EXPECT_EQ(config::sunshine.web_ui_base_path, "/proxy/config");
+
+  config::apply_config_for_test("web_ui_base_path = //example.com/\n");
+  EXPECT_TRUE(config::sunshine.web_ui_base_path.empty());
+
+  config::sunshine.web_ui_base_path = "/sunshine";
+  config::apply_config_for_test("dscp_tagging = enabled\n");
+  EXPECT_TRUE(config::sunshine.web_ui_base_path.empty());
+}

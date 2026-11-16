@@ -881,6 +881,7 @@ namespace config {
     true,  // system_tray
     {},  // prep commands
     {},  // csrf_allowed_origins
+    {},  // web_ui_base_path
   };
 
   /**
@@ -1589,6 +1590,46 @@ namespace config {
     }
   }
 
+  std::optional<std::string> normalize_web_ui_base_path(const std::string_view value) {
+    constexpr std::size_t max_length = 256;
+    constexpr std::array server_prefixes {"api"sv, "assets"sv, "images"sv};
+
+    if (value.empty() || value == "/"sv) {
+      return std::string {};
+    }
+    if (value.size() > max_length || value.front() != '/') {
+      return std::nullopt;
+    }
+
+    auto path = value.substr(1);
+    if (path.ends_with('/')) {
+      path.remove_suffix(1);
+    }
+
+    const auto is_allowed = [](const char ch) {
+      return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '.' || ch == '_' || ch == '~';
+    };
+
+    std::string normalized;
+    std::size_t start = 0;
+    while (start <= path.size()) {
+      const auto end = std::min(path.find('/', start), path.size());
+      const auto segment = path.substr(start, end - start);
+      if (segment.empty() || segment == "."sv || segment == ".."sv || !std::ranges::all_of(segment, is_allowed)) {
+        return std::nullopt;
+      }
+      if (normalized.empty() && std::ranges::find(server_prefixes, segment) != server_prefixes.end()) {
+        return std::nullopt;
+      }
+
+      normalized += '/';
+      normalized += segment;
+      start = end + 1;
+    }
+
+    return normalized;
+  }
+
   /**
    * @brief Apply parsed configuration entries to the global runtime configuration.
    *
@@ -1769,6 +1810,16 @@ namespace config {
     }
     if (csrf_invalid_config) {
       BOOST_LOG(warning) << "Please refer to: https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#csrf_allowed_origins"sv;
+    }
+
+    std::string web_ui_base_path;
+    string_f(vars, "web_ui_base_path", web_ui_base_path);
+    if (auto normalized = normalize_web_ui_base_path(web_ui_base_path)) {
+      sunshine.web_ui_base_path = std::move(*normalized);
+    } else {
+      sunshine.web_ui_base_path.clear();
+      BOOST_LOG(warning) << "Invalid 'web_ui_base_path' rejected, serving the Web UI from the root: "sv << web_ui_base_path;
+      BOOST_LOG(warning) << "Please refer to: https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2configuration.html#web_ui_base_path"sv;
     }
 
     int to = -1;
