@@ -158,6 +158,15 @@ namespace {
     }
 
     /**
+     * @brief Configure whether rejected restored sessions emit an empty streams array instead of omitting it.
+     *
+     * @param emit_empty True to emit `@a(ua{sv}) []`; false to omit the `streams` entry.
+     */
+    void set_emit_empty_streams_array(bool emit_empty) {
+      emit_empty_streams_array_.store(emit_empty);
+    }
+
+    /**
      * @brief Check whether any request carried a restore token.
      *
      * @return True when a restore token was seen.
@@ -273,6 +282,10 @@ namespace {
             g_variant_builder_init(&streams, G_VARIANT_TYPE("a(ua{sv})"));
             g_variant_builder_add(&streams, "(ua{sv})", 42u, &properties);
             g_variant_builder_add(&results, "{sv}", "streams", g_variant_builder_end(&streams));
+          } else if (portal->emit_empty_streams_array_.load()) {
+            GVariantBuilder streams;
+            g_variant_builder_init(&streams, G_VARIANT_TYPE("a(ua{sv})"));
+            g_variant_builder_add(&results, "{sv}", "streams", g_variant_builder_end(&streams));
           }
           if (!restored_session) {
             g_variant_builder_add(&results, "{sv}", "restore_token", g_variant_new_string("fresh-token"));
@@ -291,6 +304,7 @@ namespace {
     std::map<std::string, bool> session_restore_tokens_;
     std::atomic<bool> saw_restore_token_ {false};
     std::atomic<bool> reject_restored_sessions_ {true};
+    std::atomic<bool> emit_empty_streams_array_ {false};
     std::jthread thread_;
   };
 
@@ -456,6 +470,23 @@ TEST_F(PortalRequestTest, ReceivesResponseEmittedBeforeMethodReturns) {
 }
 
 TEST_F(PortalRequestTest, DiscardsStaleRestoreTokenWhenStartReturnsNoStreams) {
+  ASSERT_NO_FATAL_FAILURE(write_token("stale-token"));
+  ASSERT_TRUE(std::filesystem::exists(token_path()));
+
+  const auto names = platf::portal_display_names(true);
+
+  EXPECT_EQ(names, std::vector<std::string> {"position-7x9-resolution-1234x567"});
+  EXPECT_TRUE(fake_portal().saw_restore_token());
+  ASSERT_TRUE(std::filesystem::exists(token_path()));
+  std::ifstream file(token_path());
+  std::string token;
+  std::getline(file, token);
+  EXPECT_EQ(token, "fresh-token");
+  EXPECT_TRUE(portal::has_saved_token());
+}
+
+TEST_F(PortalRequestTest, DiscardsStaleRestoreTokenWhenStartReturnsEmptyStreamsArray) {
+  fake_portal().set_emit_empty_streams_array(true);
   ASSERT_NO_FATAL_FAILURE(write_token("stale-token"));
   ASSERT_TRUE(std::filesystem::exists(token_path()));
 

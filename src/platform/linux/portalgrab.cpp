@@ -826,7 +826,7 @@ namespace portal {
       }
 
       streams = g_variant_lookup_value(dict, "streams", G_VARIANT_TYPE("a(ua{sv})"));
-      if (!streams) {
+      if (!streams || g_variant_n_children(streams) == 0) {
         BOOST_LOG(error) << "[portalgrab] " << session_type << " Start: no streams in response"sv;
         return portal_start_e::no_streams;
       }
