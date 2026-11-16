@@ -1735,6 +1735,52 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### web_ui_base_path
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Path prefix under which a reverse proxy serves the Web UI, for example `/sunshine/`.
+            <br><br>
+            Requests whose path starts with this prefix are served as the Web UI under that prefix: the prefix is
+            removed before routing, pages, assets and API calls stay under it, and redirects keep it. Any other
+            request is direct access and works as if no prefix were configured, so local links such as the
+            system tray's `https://localhost:47990/pin` keep working.
+            <br><br>
+            The proxy must forward the prefix unchanged instead of stripping it. With nginx, give `proxy_pass` no
+            URI part:
+            @code{}
+            location /sunshine/ {
+                proxy_pass https://127.0.0.1:47990;
+            }
+            @endcode
+            The prefix can be an existing page name, such as `/apps/` with `location /apps/ { ... }`. Every
+            request under the prefix is then a Web UI route under it: `/apps/` opens the home page and the
+            Applications page is at `/apps/apps`, also when accessed directly.
+            <br><br>
+            The value must be an absolute path. Each segment may contain only ASCII letters, digits, `-`, `.`,
+            `_` and `~`; `.` and `..` segments are not allowed, and the first segment cannot be `api`, `assets`
+            or `images`. An invalid value is ignored with a warning in the log and the Web UI is served from the
+            root.
+            <br><br>
+            @note{If the proxy serves the Web UI from another origin, add that origin to
+            [csrf_allowed_origins](#csrf_allowed_origins). [origin_web_ui_allowed](#origin_web_ui_allowed) applies
+            to the address of the proxy.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">Empty, the Web UI is served from the root</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            web_ui_base_path = /sunshine/
+            @endcode</td>
+    </tr>
+</table>
+
 ### external_ip
 
 <table>

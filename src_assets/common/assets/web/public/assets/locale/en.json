@@ -481,7 +481,9 @@
     "wan_encryption_mode": "WAN Encryption Mode",
     "wan_encryption_mode_1": "Enabled for supported clients (default)",
     "wan_encryption_mode_2": "Required for all clients",
-    "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients."
+    "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
+    "web_ui_base_path": "Web UI Base Path",
+    "web_ui_base_path_desc": "Path prefix under which a reverse proxy serves the Web UI, for example /sunshine/. The proxy must forward the prefix unchanged. Direct access without the prefix keeps working. Leave empty to serve the Web UI only from the root."
   },
   "index": {
     "permissions_missing_title": "Sunshine needs permissions",
