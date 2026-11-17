@@ -1005,8 +1005,6 @@ namespace platf::audio {
      */
     std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, [[maybe_unused]] bool host_audio_enabled) override {
       auto mic = std::make_unique<mic_wasapi_t>();
-        }
-
 
       // Prefer the session's assigned sink; otherwise use the configured sink.
       const auto &requested_sink = assigned_sink.empty() ? config::audio.sink : assigned_sink;
