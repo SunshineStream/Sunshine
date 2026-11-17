@@ -79,6 +79,8 @@ namespace platf::audio::tests {
   #endif
   #if defined(SUNSHINE_TEST_HAS_AUDIOCLIENT_ACTIVATION_PARAMS) && defined(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)
   int process_loopback_completion_after_timeout_is_discarded();
+  int collect_reports_failure_combinations();
+  int real_activation_paths_cover_success_failure_and_timeout();
   #endif
 }  // namespace platf::audio::tests
 
@@ -827,6 +829,30 @@ TEST(WindowsAudioTest, MicrophoneAttemptsLoopbackForCurrentProcessTarget) {
   EXPECT_EQ(probe.attempted_process_id, current_process_id);
 }
 
+TEST(WindowsAudioTest, MicrophoneReturnsLoopbackForValidTarget) {
+  fake_device_enumerator_t enumerator {L"endpoint-id"};
+  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
+  ASSERT_NE(current_process_id, 0u);
+  const auto creation_time = current_process_creation_time();
+  ASSERT_NE(creation_time, 0u);
+
+  platf::audio::tests::microphone_loopback_probe_t probe {
+    .assigned_sink = "endpoint-id",
+    .configured_sink = {},
+    .intent = platf::audio_capture_intent_e::host_and_client,
+    .process_id = current_process_id,
+    .creation_time = creation_time,
+    .device_enum = &enumerator,
+    .keep_default = false,
+  };
+  // The endpoint fallback creates no fake clients, so a returned microphone
+  // proves the loopback branch — including post-activation revalidation —
+  // succeeded rather than falling back.
+  EXPECT_TRUE(platf::audio::tests::microphone_returns_loopback_for_valid_target(probe));
+  EXPECT_EQ(probe.attempted_process_id, current_process_id);
+  EXPECT_TRUE(probe.microphone_returned);
+}
+
 TEST(WindowsAudioTest, MicrophoneFallsBackToEndpointWhenActivationFails) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
   const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
@@ -1110,11 +1136,31 @@ TEST(WindowsAudioTest, ProcessLoopbackActivationParamsIncludeProcessTree) {
 TEST(WindowsAudioTest, ProcessLoopbackActivationBlobIsHeapOwnedAndClearable) {
   EXPECT_TRUE(platf::audio::tests::activation_blob_holds_heap_copy(1234));
 }
+  #else
+TEST(WindowsAudioTest, ProcessLoopbackActivationParamsUnavailable) {
+  // Production loopback is compiled out under the same SDK detection, so a
+  // visible skip here is consistent coverage reporting, not a silent gap.
+  GTEST_SKIP() << "Requires Windows SDK with audioclientactivationparams.h";
+}
   #endif
 
   #if defined(SUNSHINE_TEST_HAS_AUDIOCLIENT_ACTIVATION_PARAMS) && defined(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)
 TEST(WindowsAudioTest, ProcessLoopbackCompletionAfterTimeoutIsDiscarded) {
   EXPECT_EQ(platf::audio::tests::process_loopback_completion_after_timeout_is_discarded(), 0);
+}
+
+TEST(WindowsAudioTest, CollectReportsFailureCombinations) {
+  EXPECT_EQ(platf::audio::tests::collect_reports_failure_combinations(), 0);
+}
+
+TEST(WindowsAudioTest, RealActivationPathsCoverSuccessFailureAndTimeout) {
+  EXPECT_EQ(platf::audio::tests::real_activation_paths_cover_success_failure_and_timeout(), 0);
+}
+  #else
+TEST(WindowsAudioTest, ProcessLoopbackActivationUnavailable) {
+  // Production loopback is compiled out under the same SDK detection, so a
+  // visible skip here is consistent coverage reporting, not a silent gap.
+  GTEST_SKIP() << "Requires Windows SDK with process-loopback activation support";
 }
   #endif
 

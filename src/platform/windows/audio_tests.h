@@ -56,4 +56,21 @@ namespace platf::audio::tests {
    * @return True when process-loopback activation was attempted.
    */
   bool microphone_attempts_loopback_for_target(microphone_loopback_probe_t &probe);
+
+  /**
+   * @brief Exercise microphone() end to end through a succeeding loopback activation.
+   *
+   * Records the given capture target through the production setter, installs
+   * an activator that initializes a fake client, and runs the production
+   * microphone(). The endpoint fallback path creates no fake clients, so a
+   * returned microphone paired with exactly one live fake client proves the
+   * loopback branch — including post-activation revalidation — returned it
+   * rather than the fallback. The current process identity is the
+   * deterministic valid target: its PID and creation time are read from the
+   * owned handle.
+   *
+   * @param probe Capture probe: sinks, intent, identity, enumerator, and keep-default flag in; attempt evidence out.
+   * @return True when loopback activation succeeded and its microphone was returned without leaking.
+   */
+  bool microphone_returns_loopback_for_valid_target(microphone_loopback_probe_t &probe);
 }  // namespace platf::audio::tests

@@ -246,11 +246,16 @@ namespace audio {
         return mic;
       }
       std::lock_guard lock {*mutex_};
+      // The re-check detects replacement by another session, not PID reuse:
+      // the handed-off creation marker is the backend's baseline, and the
+      // backend revalidates it again before capturing.
       if (control_->snapshot_capture_target_record().matches(intent_, process_id_)) {
         return mic;
       }
       BOOST_LOG(info) << "Capture target changed during microphone creation; discarding and retrying"sv;
     }
+    // Both attempts observed a replaced target. The last refresh stays
+    // recorded so teardown still releases this session's target.
     return nullptr;
   }
 

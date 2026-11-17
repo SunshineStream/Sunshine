@@ -282,12 +282,14 @@ namespace audio {
    * @brief RAII owner of one session's shared capture target.
    *
    * Sessions share one audio control. Every create_microphone() call refreshes
-   * the target (set_capture_target()) and creates the microphone under one
-   * lock acquisition, so a refresh can never be dropped or interleaved with
-   * another session's refresh. Destruction releases exactly the last recorded
-   * target via clear_capture_target(), or nothing when no refresh ever ran
-   * (for example after an aborted sink selection), so one session cannot wipe
-   * another session's recorded target on its way out.
+   * the target (set_capture_target()) under one lock acquisition, so a refresh
+   * can never be dropped or interleaved with another session's refresh.
+   * Microphone creation itself runs unlocked, followed by a re-check that
+   * discards a microphone built for a superseded target and retries once.
+   * Destruction releases exactly the last recorded target via
+   * clear_capture_target(), or nothing when no refresh ever ran (for example
+   * after an aborted sink selection), so one session cannot wipe another
+   * session's recorded target on its way out.
    *
    * The referenced control and mutex must outlive the guard.
    */
@@ -298,7 +300,7 @@ namespace audio {
      *
      * @param control Platform audio controller holding the shared capture target.
      * @param intent Capture intent resolved from the audio configuration.
-     * @param mutex Serializes refresh, microphone creation, and target release across sessions.
+     * @param mutex Serializes target refresh, post-creation re-check, and target release across sessions. Microphone creation runs unlocked.
      */
     session_capture_target_t(platf::audio_control_t &control, platf::audio_capture_intent_e intent, std::mutex &mutex);
 
@@ -358,7 +360,7 @@ namespace audio {
   private:
     platf::audio_control_t *control_;  ///< Non-owning controller holding the shared capture target; must outlive the guard.
     platf::audio_capture_intent_e intent_;  ///< Capture intent recorded by this session.
-    std::mutex *mutex_;  ///< Non-owning mutex serializing refresh, creation, and release; typically audio::capture_target_mutex().
+    std::mutex *mutex_;  ///< Non-owning mutex serializing refresh, re-check, and release; typically audio::capture_target_mutex().
     std::uint32_t process_id_ = 0;  ///< PID from the last refresh, or 0 for endpoint capture.
     bool recorded_ = false;  ///< Whether this session called set_capture_target().
   };

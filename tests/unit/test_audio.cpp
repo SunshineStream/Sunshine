@@ -901,6 +901,144 @@ TEST(CaptureRefreshTest, RetargetDuringCreationDiscardsAndRetries) {
 }
 
 /**
+ * @brief A provider identity change must be picked up on reinitialization.
+ *
+ * The provider is queried on every create_microphone() call, so an app that
+ * exited and relaunched between reinitializations (same PID slot, new
+ * creation marker, or a different PID entirely) must refresh the recorded
+ * target instead of reusing the stale one.
+ *
+ * Fail-without-fix: if the guard cached the first identity, the backend
+ * would keep capturing the exited process while its PID belongs to another.
+ */
+TEST(CaptureRefreshTest, ProviderIdentityChangeIsPickedUpOnReinitialization) {
+  recording_audio_control_t control;
+  std::mutex mutex;
+  std::atomic<int> provider_calls {0};
+  const std::function<platf::process_identity_t()> provider = [&provider_calls] {
+    return provider_calls.fetch_add(1) == 0 ? platf::process_identity_t {1234u, 91011u} : platf::process_identity_t {5678u, 121314u};
+  };
+  session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+
+  auto first_mic = target.create_microphone(true, provider, make_mic_params());
+  ASSERT_TRUE(static_cast<bool>(first_mic));
+  EXPECT_EQ(control.set_process_id, 1234u);
+  EXPECT_EQ(control.set_creation_time, 91011u);
+
+  auto second_mic = target.create_microphone(true, provider, make_mic_params());
+
+  EXPECT_TRUE(static_cast<bool>(second_mic));
+  EXPECT_EQ(target.process_id(), 5678u);
+  EXPECT_EQ(control.set_process_id, 5678u);
+  EXPECT_EQ(control.set_creation_time, 121314u);
+  EXPECT_EQ(control.snapshot_capture_target_record().process_id, 5678u);
+}
+
+/**
+ * @brief Backend that counts capture-target refreshes and releases atomically.
+ *
+ * Unlike recording_audio_control_t, whose call log is not thread-safe, this
+ * stub is safe for concurrent create_microphone() calls: it records through
+ * the shared base helpers and counts operations with atomics.
+ */
+class counting_audio_control_t: public platf::audio_control_t {
+public:
+  int set_sink(const std::string &) override {
+    return 0;
+  }
+
+  bool supports_keep_default_sink() const override {
+    return true;
+  }
+
+  bool supports_process_capture() const override {
+    return true;
+  }
+
+  int capture_sink(const std::string &) override {
+    return 0;
+  }
+
+  void set_capture_target(platf::audio_capture_intent_e intent, platf::process_identity_t identity) override {
+    set_count.fetch_add(1);
+    record_capture_target(intent, identity.process_id);
+  }
+
+  void clear_capture_target(platf::audio_capture_intent_e intent, std::uint32_t process_id) override {
+    clear_count.fetch_add(1);
+    clear_recorded_capture_target_if_matches(intent, process_id);
+  }
+
+  using platf::audio_control_t::microphone;
+
+  std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
+    return std::make_unique<stub_mic_t>();
+  }
+
+  bool is_sink_available(const std::string &) override {
+    return true;
+  }
+
+  std::optional<platf::sink_t> sink_info() override {
+    return std::nullopt;
+  }
+
+  std::atomic<int> set_count {0};  ///< Refreshes observed across threads.
+  std::atomic<int> clear_count {0};  ///< Releases observed across threads.
+};
+
+/**
+ * @brief Concurrent refreshes and teardowns must stay balanced and consistent.
+ *
+ * Two sessions share one control and mutex while one thread reinitializes and
+ * the other constructs, creates through, and destroys its guard repeatedly.
+ * Fail-without-fix: an unserialized refresh/release pair corrupts the shared
+ * record or skews the counts; the final snapshot must always name one of the
+ * two sessions' targets and every destroyed guard must have released.
+ */
+TEST(CaptureReleaseTest, ConcurrentRefreshAndTeardownStayBalanced) {
+  counting_audio_control_t control;
+  std::mutex mutex;
+  const std::function<platf::process_identity_t()> provider_a = [] {
+    return platf::process_identity_t {1111u, 22222u};
+  };
+  const std::function<platf::process_identity_t()> provider_b = [] {
+    return platf::process_identity_t {3333u, 44444u};
+  };
+  session_capture_target_t target_a {control, platf::audio_capture_intent_e::host_and_client, mutex};
+
+  constexpr int kIterations = 50;
+  std::jthread refresher([&] {
+    for (int i = 0; i < kIterations; ++i) {
+      (void) target_a.create_microphone(true, provider_a, make_mic_params());
+    }
+  });
+  std::jthread churner([&] {
+    for (int i = 0; i < kIterations; ++i) {
+      session_capture_target_t target_b {control, platf::audio_capture_intent_e::host_and_client, mutex};
+      (void) target_b.create_microphone(true, provider_b, make_mic_params());
+    }
+  });
+  refresher.join();
+  churner.join();
+
+  // Each creation refreshes once, plus one retry when it observes a mid-creation
+  // replacement, so the count is bounded rather than exact. Every destroyed
+  // guard released exactly once; target_a outlives these assertions.
+  EXPECT_GE(control.set_count.load(), 2 * kIterations);
+  EXPECT_LE(control.set_count.load(), 4 * kIterations);
+  EXPECT_EQ(control.clear_count.load(), kIterations);
+  const auto snapshot = control.snapshot_capture_target_record();
+  // The final snapshot is always one complete write: either session's triple,
+  // or the cleared record when the last operation was a matching release.
+  // Anything else (a torn intent/PID mix) fails.
+  const bool matches_a = snapshot.intent == platf::audio_capture_intent_e::host_and_client && snapshot.process_id == 1111u;
+  const bool matches_b = snapshot.intent == platf::audio_capture_intent_e::host_and_client && snapshot.process_id == 3333u;
+  const bool matches_cleared = snapshot.intent == platf::audio_capture_intent_e::client_only && snapshot.process_id == 0u;
+  EXPECT_TRUE(matches_a || matches_b || matches_cleared);
+}
+
+/**
  * @brief The restore flag must follow the routing decision in both modes.
  *
  * capture() assigns routing.restore_at_teardown directly, so this pins the
