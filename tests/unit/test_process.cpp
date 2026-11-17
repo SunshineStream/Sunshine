@@ -15,9 +15,13 @@
 #include <fstream>
 #include <future>
 #include <latch>
+#include <memory>
 #include <optional>
+#include <string>
 #include <system_error>
 #include <thread>
+#include <utility>
+#include <vector>
 
 // lib includes
 #include <boost/process/v1.hpp>
@@ -866,6 +870,192 @@ namespace {
     }
     return content;
   }
+
+  /**
+   * @brief Per-app setup for a gated-launch scenario.
+   */
+  struct gated_app_config_t {
+    std::string name;  ///< Application name.
+    std::string id;  ///< Application id.
+    std::string cmd;  ///< Command line to launch.
+    std::string do_marker;  ///< Marker the do script writes to the setting file.
+    bool do_gated = false;  ///< Do script signals start, then waits on the gate.
+    std::string undo_marker;  ///< Marker the undo script writes; empty means no undo script.
+    bool undo_gated = false;  ///< Undo script signals start, then waits on the gate.
+  };
+
+  /**
+   * @brief Owns the files, scripts, and process manager for one gated-launch test.
+   *
+   * The gated lifecycle tests share the same setup: a scratch directory, marker
+   * scripts, app contexts, and a process manager with a launch session. The
+   * fixture also carries the background-launch thread and releases the gate on
+   * destruction, so each test body keeps only its orchestration and assertions.
+   */
+  struct gated_launch_t {
+    gate_dir_t dir;  ///< Scratch root; created first, removed last.
+    fs::path setting_file;  ///< Marker file the scripts write.
+    fs::path gate_file;  ///< Gate file; creating it releases gated scripts.
+    fs::path signal_file;  ///< Signal file gated scripts touch on entry.
+    std::shared_ptr<rtsp_stream::launch_session_t> session;  ///< Session for execute().
+    proc::proc_t target;  ///< Process manager under test.
+    std::atomic<int> exec_result {-999};  ///< Background execute() result.
+    std::jthread exec_thread;  ///< Background execute() thread, joined explicitly.
+
+    /**
+     * @brief Build the scenario: directories, scripts, apps, and process manager.
+     *
+     * @param tag Test-unique directory infix.
+     * @param configs One entry per app under test.
+     */
+    gated_launch_t(const char *tag, std::vector<gated_app_config_t> configs);
+
+    /**
+     * @brief Terminate the target and release the gate unless disarmed.
+     *
+     * Replaces the per-test terminate/release guards: firing here covers both
+     * normal completion and early assertion exits.
+     */
+    ~gated_launch_t();
+
+    /**
+     * @brief Run execute() for one app on the background thread.
+     *
+     * @param id App id to launch; the result lands in exec_result.
+     */
+    void launch_in_background(int id);
+
+    /**
+     * @brief Poll running() with a deadline, releasing the gate on timeout.
+     *
+     * @return Poll result, or nullopt when the deadline expired.
+     */
+    std::optional<int> poll_running_or_release_gate();
+
+    /**
+     * @brief Create the gate file, reporting success for assertion.
+     *
+     * @return True when the file opened for writing.
+     */
+    bool open_gate_file();
+
+    /**
+     * @brief Disarm the destructor's gate release after an explicit release.
+     */
+    void disarm_gate_release();
+
+  private:
+    bool gate_armed_ = true;  ///< Destructor releases the gate unless disarmed.
+
+    /**
+     * @brief Build app contexts with prep commands wired to the scenario scripts.
+     *
+     * @param root Scratch root holding the scripts.
+     * @param configs One entry per app under test.
+     * @return App list for proc_t construction.
+     */
+    static std::vector<proc::ctx_t> build_apps(const fs::path &root, const std::vector<gated_app_config_t> &configs);
+
+    /**
+     * @brief Write each app's marker scripts.
+     *
+     * @param configs One entry per app under test.
+     */
+    void write_scripts(const std::vector<gated_app_config_t> &configs);
+
+    /**
+     * @brief Render one marker-script body.
+     *
+     * @param marker Marker written to the setting file.
+     * @param gated Signal start, then wait on the gate before writing.
+     * @return Script body after the shebang line.
+     */
+    std::string marker_script_body(const std::string &marker, bool gated);
+  };
+
+  gated_launch_t::gated_launch_t(const char *tag, std::vector<gated_app_config_t> configs):
+      dir {tag},
+      setting_file {dir.root / "setting"},
+      gate_file {dir.root / "gate"},
+      signal_file {dir.root / "started"},
+      session {std::make_shared<rtsp_stream::launch_session_t>()},
+      target {boost::this_process::environment(), build_apps(dir.root, configs)} {
+    write_scripts(configs);
+  }
+
+  gated_launch_t::~gated_launch_t() {
+    target.terminate();
+    if (gate_armed_) {
+      std::ofstream {gate_file};
+    }
+  }
+
+  void gated_launch_t::launch_in_background(int id) {
+    exec_thread = std::jthread {[this, id]() {
+      exec_result.store(target.execute(id, session));
+    }};
+  }
+
+  std::optional<int> gated_launch_t::poll_running_or_release_gate() {
+    auto poll = std::async(std::launch::async, [this]() {
+      return target.running();
+    });
+    if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+      std::ofstream {gate_file};
+      gate_armed_ = false;
+      return std::nullopt;
+    }
+    return poll.get();
+  }
+
+  bool gated_launch_t::open_gate_file() {
+    std::ofstream gate {gate_file};
+    return static_cast<bool>(gate);
+  }
+
+  void gated_launch_t::disarm_gate_release() {
+    gate_armed_ = false;
+  }
+
+  std::vector<proc::ctx_t> gated_launch_t::build_apps(const fs::path &root, const std::vector<gated_app_config_t> &configs) {
+    std::vector<proc::ctx_t> apps;
+    for (const auto &config : configs) {
+      proc::ctx_t ctx {};
+      ctx.name = config.name;
+      ctx.id = config.id;
+      ctx.cmd = config.cmd;
+      std::string undo_path;
+      if (!config.undo_marker.empty()) {
+        undo_path = (root / std::format("undo_{}.sh", config.id)).string();
+      }
+      ctx.prep_cmds.emplace_back((root / std::format("do_{}.sh", config.id)).string(), std::move(undo_path), false);
+      apps.push_back(std::move(ctx));
+    }
+    return apps;
+  }
+
+  void gated_launch_t::write_scripts(const std::vector<gated_app_config_t> &configs) {
+    for (const auto &config : configs) {
+      write_gate_script(dir.root / std::format("do_{}.sh", config.id), marker_script_body(config.do_marker, config.do_gated));
+      if (!config.undo_marker.empty()) {
+        write_gate_script(dir.root / std::format("undo_{}.sh", config.id), marker_script_body(config.undo_marker, config.undo_gated));
+      }
+    }
+  }
+
+  std::string gated_launch_t::marker_script_body(const std::string &marker, bool gated) {
+    if (!gated) {
+      return std::format("echo {} > \"{}\"\n", marker, setting_file.string());
+    }
+    return std::format(
+      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho {} > \"{}\"\n",
+      signal_file.string(),
+      gate_file.string(),
+      marker,
+      setting_file.string()
+    );
+  }
+
 }  // namespace
 
 /**
@@ -913,96 +1103,32 @@ TEST(ProcessTest, RunningAfterRelaunchKeepsSuccessorAlive) {
  * catch this: it never overlaps cleanup with the next launch.
  */
 TEST(ProcessTest, OverlappingLaunchWaitsForPriorCleanup) {
-  const auto tmp_root = fs::temp_directory_path() / std::format("sunshine-proc-overlap-{}", ::getpid());
-  const auto setting_file = tmp_root / "setting";
-  const auto gate_file = tmp_root / "gate";
-  const auto undo_started_file = tmp_root / "undo_started";
-  std::error_code fs_ec;
-  fs::remove_all(tmp_root, fs_ec);
-  fs::create_directories(tmp_root, fs_ec);
-  ASSERT_FALSE(fs_ec) << fs_ec.message();
-  const auto remove_tmp = util::fail_guard([&tmp_root]() {
-    std::error_code ec;
-    fs::remove_all(tmp_root, ec);
-  });
+  gated_launch_t launch {"overlap", {
+                                      {"AppA", "7", "sleep 30", "A-prep", false, "A-undo", true},
+                                      {"AppB", "8", "sleep 30", "B-prep"},
+                                    }};
+  ASSERT_TRUE(fs::exists(launch.dir.root));
 
-  // Prep commands run without a shell, so stage the file writes and the gate
-  // wait as executable scripts instead of `sh -c` one-liners with quotes.
-  const auto do_a_script = tmp_root / "do_a.sh";
-  const auto undo_a_script = tmp_root / "undo_a.sh";
-  const auto do_b_script = tmp_root / "do_b.sh";
-  {
-    std::ofstream {do_a_script} << "#!/bin/sh\necho A-prep > \"" << setting_file.string() << "\"\n";
-    std::ofstream {undo_a_script} << "#!/bin/sh\ntouch \"" << undo_started_file.string() << "\"\nwhile [ ! -f \"" << gate_file.string()
-                                  << "\" ]; do sleep 0.01; done\necho A-undo > \"" << setting_file.string() << "\"\n";
-    std::ofstream {do_b_script} << "#!/bin/sh\necho B-prep > \"" << setting_file.string() << "\"\n";
-  }
-  for (const auto &script : {do_a_script, undo_a_script, do_b_script}) {
-    std::error_code perm_ec;
-    fs::permissions(script, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, perm_ec);
-    ASSERT_FALSE(perm_ec) << perm_ec.message();
-  }
-  proc::ctx_t app_a {};
-  app_a.name = "AppA";
-  app_a.id = "7";
-  app_a.cmd = "sleep 30";
-  app_a.prep_cmds.emplace_back(do_a_script.string(), undo_a_script.string(), false);
-  proc::ctx_t app_b {};
-  app_b.name = "AppB";
-  app_b.id = "8";
-  app_b.cmd = "sleep 30";
-  app_b.prep_cmds.emplace_back(do_b_script.string(), std::string {}, false);
-  std::vector<proc::ctx_t> apps;
-  apps.push_back(std::move(app_a));
-  apps.push_back(std::move(app_b));
-  boost::process::v1::environment env = boost::this_process::environment();
-  proc::proc_t target(std::move(env), std::move(apps));
-  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
-  const auto terminate_target = util::fail_guard([&target]() {
-    target.terminate();
-  });
+  ASSERT_EQ(launch.target.execute(7, launch.session), 0);
+  ASSERT_NE(launch.target.app_process_id(), 0u);
 
-  ASSERT_EQ(target.execute(7, launch_session), 0);
-  ASSERT_NE(target.app_process_id(), 0u);
-
-  const auto read_setting = [&setting_file]() {
-    std::ifstream input {setting_file};
-    std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    while (!content.empty() && (content.back() == '\n' || content.back() == '\r')) {
-      content.pop_back();
-    }
-    return content;
-  };
-  ASSERT_EQ(read_setting(), "A-prep");
+  ASSERT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep");
 
   // Terminate A in the background: its undo signals start, then blocks on the gate.
-  std::jthread terminate_thread {[&target]() {
-    target.terminate();
+  std::jthread terminate_thread {[&launch]() {
+    launch.target.terminate();
   }};
-  bool undo_started = false;
-  for (int attempt = 0; attempt < 500 && !undo_started; ++attempt) {
-    std::error_code ec;
-    if (fs::exists(undo_started_file, ec) && !ec) {
-      undo_started = true;
-    } else {
-      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-  }
-  // Always release the gate so the background threads can finish even on failure.
-  auto release_gate = util::fail_guard([&gate_file]() {
-    std::ofstream {gate_file};
-  });
-  ASSERT_TRUE(undo_started) << "A's undo did not start; cannot overlap B's launch";
+  ASSERT_TRUE(wait_for_gate_file(launch.signal_file)) << "A's undo did not start; cannot overlap B's launch";
 
   // Attempt B's launch while A's cleanup is blocked. The transition gate must hold it.
   std::atomic<bool> b_attempting {false};
   std::atomic<bool> b_launch_done {false};
   std::atomic<int> b_launch_result {-999};
   std::latch b_started {1};
-  std::jthread b_thread {[&target, &launch_session, &b_attempting, &b_launch_done, &b_launch_result, &b_started]() {
+  std::jthread b_thread {[&launch, &b_attempting, &b_launch_done, &b_launch_result, &b_started]() {
     b_attempting.store(true);
     b_started.count_down();
-    const int result = target.execute(8, launch_session);
+    const int result = launch.target.execute(8, launch.session);
     b_launch_result.store(result);
     b_launch_done.store(true);
   }};
@@ -1011,20 +1137,17 @@ TEST(ProcessTest, OverlappingLaunchWaitsForPriorCleanup) {
   // Give B a chance to (incorrectly) run its prep while A is still blocked.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   EXPECT_FALSE(b_launch_done.load()) << "B's launch finished while A's cleanup was still blocked";
-  EXPECT_EQ(read_setting(), "A-prep") << "B's prep ran before A's undo finished";
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep") << "B's prep ran before A's undo finished";
 
   // Release A's undo; both threads must then complete with B's setting intact.
-  {
-    std::ofstream gate {gate_file};
-    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the undo gate";
-  }
+  ASSERT_TRUE(launch.open_gate_file()) << "failed to release the undo gate";
   terminate_thread.join();
   b_thread.join();
-  release_gate.disable();
+  launch.disarm_gate_release();
   EXPECT_EQ(b_launch_result.load(), 0);
-  EXPECT_EQ(read_setting(), "B-prep") << "A's undo overwrote B's prep after B started";
-  EXPECT_EQ(target.running(), 8);
-  EXPECT_NE(target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "B-prep") << "A's undo overwrote B's prep after B started";
+  EXPECT_EQ(launch.target.running(), 8);
+  EXPECT_NE(launch.target.app_process_id(), 0u);
 }
 
 /**
@@ -1089,67 +1212,21 @@ TEST(ProcessTest, RunningReapsExitedChildOnPlaceboPoll) {
  * the gate. Fails on the pre-fix blocking running(), which waits for release.
  */
 TEST(ProcessTest, RunningReportsLaunchInFlightDuringGatedPrep) {
-  gate_dir_t dir {"t1-exec-gate"};
-  ASSERT_TRUE(fs::exists(dir.root));
-  const auto setting_file = dir.root / "setting";
-  const auto gate_file = dir.root / "gate";
-  const auto started_file = dir.root / "started";
-  const auto do_script = dir.root / "do.sh";
-  write_gate_script(
-    do_script,
-    std::format(
-      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho G-prep > \"{}\"\n",
-      started_file.string(),
-      gate_file.string(),
-      setting_file.string()
-    )
-  );
+  gated_launch_t launch {"t1-exec-gate", {{"Gated", "7", "sleep 30", "G-prep", true}}};
+  ASSERT_TRUE(fs::exists(launch.dir.root));
 
-  proc::ctx_t ctx {};
-  ctx.name = "Gated";
-  ctx.id = "7";
-  ctx.cmd = "sleep 30";
-  ctx.prep_cmds.emplace_back(do_script.string(), std::string {}, false);
-  std::vector<proc::ctx_t> apps;
-  apps.push_back(std::move(ctx));
-  boost::process::v1::environment env = boost::this_process::environment();
-  proc::proc_t target(std::move(env), std::move(apps));
-  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
-  const auto terminate_target = util::fail_guard([&target]() {
-    target.terminate();
-  });
+  launch.launch_in_background(7);
+  ASSERT_TRUE(wait_for_gate_file(launch.signal_file)) << "gated prep did not start; cannot overlap the poll";
 
-  std::atomic<int> exec_result {-999};
-  std::jthread exec_thread {[&target, &launch_session, &exec_result]() {
-    exec_result.store(target.execute(7, launch_session));
-  }};
-  // Always release the gate so the background thread can finish even on failure.
-  auto release_gate = util::fail_guard([&gate_file]() {
-    std::ofstream {gate_file};
-  });
-  ASSERT_TRUE(wait_for_gate_file(started_file)) << "gated prep did not start; cannot overlap the poll";
-
-  auto poll = std::async(std::launch::async, [&target]() {
-    return target.running();
-  });
-  if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
-    // Release the gate before failing so the background thread, and the async
-    // poll waiting on it, can finish instead of hanging teardown.
-    std::ofstream {gate_file};
-    release_gate.disable();
-    FAIL() << "running() blocked on execute()'s prep wait";
-  }
-  EXPECT_EQ(poll.get(), 7);
-
-  {
-    std::ofstream gate {gate_file};
-    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the prep gate";
-  }
-  exec_thread.join();
-  release_gate.disable();
-  EXPECT_EQ(exec_result.load(), 0);
-  EXPECT_EQ(read_trimmed_gate_file(setting_file), "G-prep");
-  EXPECT_EQ(target.running(), 7);
+  const auto poll_result = launch.poll_running_or_release_gate();
+  ASSERT_TRUE(poll_result.has_value()) << "running() blocked on execute()'s prep wait";
+  EXPECT_EQ(*poll_result, 7);
+  ASSERT_TRUE(launch.open_gate_file()) << "failed to release the prep gate";
+  launch.exec_thread.join();
+  launch.disarm_gate_release();
+  EXPECT_EQ(launch.exec_result.load(), 0);
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "G-prep");
+  EXPECT_EQ(launch.target.running(), 7);
 }
 
 /**
@@ -1161,70 +1238,25 @@ TEST(ProcessTest, RunningReportsLaunchInFlightDuringGatedPrep) {
  * running(), which waits for release.
  */
 TEST(ProcessTest, RunningReportsZeroDuringGatedUndo) {
-  gate_dir_t dir {"t2-term-gate"};
-  ASSERT_TRUE(fs::exists(dir.root));
-  const auto setting_file = dir.root / "setting";
-  const auto gate_file = dir.root / "gate";
-  const auto undo_started_file = dir.root / "undo_started";
-  const auto do_script = dir.root / "do.sh";
-  const auto undo_script = dir.root / "undo.sh";
-  write_gate_script(do_script, std::format("echo A-prep > \"{}\"\n", setting_file.string()));
-  write_gate_script(
-    undo_script,
-    std::format(
-      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho A-undo > \"{}\"\n",
-      undo_started_file.string(),
-      gate_file.string(),
-      setting_file.string()
-    )
-  );
+  gated_launch_t launch {"t2-term-gate", {{"Gated", "7", "sleep 30", "A-prep", false, "A-undo", true}}};
+  ASSERT_TRUE(fs::exists(launch.dir.root));
+  ASSERT_EQ(launch.target.execute(7, launch.session), 0);
+  ASSERT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep");
 
-  proc::ctx_t ctx {};
-  ctx.name = "Gated";
-  ctx.id = "7";
-  ctx.cmd = "sleep 30";
-  ctx.prep_cmds.emplace_back(do_script.string(), undo_script.string(), false);
-  std::vector<proc::ctx_t> apps;
-  apps.push_back(std::move(ctx));
-  boost::process::v1::environment env = boost::this_process::environment();
-  proc::proc_t target(std::move(env), std::move(apps));
-  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
-  const auto terminate_target = util::fail_guard([&target]() {
-    target.terminate();
-  });
-  ASSERT_EQ(target.execute(7, launch_session), 0);
-  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep");
-
-  std::jthread terminate_thread {[&target]() {
-    target.terminate();
+  std::jthread terminate_thread {[&launch]() {
+    launch.target.terminate();
   }};
-  // Always release the gate so the background thread can finish even on failure.
-  auto release_gate = util::fail_guard([&gate_file]() {
-    std::ofstream {gate_file};
-  });
-  ASSERT_TRUE(wait_for_gate_file(undo_started_file)) << "gated undo did not start; cannot overlap the poll";
+  ASSERT_TRUE(wait_for_gate_file(launch.signal_file)) << "gated undo did not start; cannot overlap the poll";
 
-  auto poll = std::async(std::launch::async, [&target]() {
-    return target.running();
-  });
-  if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
-    // Release the gate before failing so the background thread, and the async
-    // poll waiting on it, can finish instead of hanging teardown.
-    std::ofstream {gate_file};
-    release_gate.disable();
-    FAIL() << "running() blocked on terminate()'s undo wait";
-  }
-  EXPECT_EQ(poll.get(), 0);
-
-  {
-    std::ofstream gate {gate_file};
-    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the undo gate";
-  }
+  const auto poll_result = launch.poll_running_or_release_gate();
+  ASSERT_TRUE(poll_result.has_value()) << "running() blocked on terminate()'s undo wait";
+  EXPECT_EQ(*poll_result, 0);
+  ASSERT_TRUE(launch.open_gate_file()) << "failed to release the undo gate";
   terminate_thread.join();
-  release_gate.disable();
-  EXPECT_EQ(target.running(), 0);
-  EXPECT_EQ(target.app_process_id(), 0u);
-  EXPECT_EQ(read_trimmed_gate_file(setting_file), "A-undo");
+  launch.disarm_gate_release();
+  EXPECT_EQ(launch.target.running(), 0);
+  EXPECT_EQ(launch.target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "A-undo");
 }
 
 /**
@@ -1241,53 +1273,19 @@ TEST(ProcessTest, RunningReportsZeroDuringGatedUndo) {
  * second poll stalls past the deadline.
  */
 TEST(ProcessTest, RunningCleanupPreservesLaunchOrdering) {
-  gate_dir_t dir {"t3-cleanup-order"};
-  ASSERT_TRUE(fs::exists(dir.root));
-  const auto setting_file = dir.root / "setting";
-  const auto gate_file = dir.root / "gate";
-  const auto undo_started_file = dir.root / "undo_started";
-  const auto do_a_script = dir.root / "do_a.sh";
-  const auto undo_a_script = dir.root / "undo_a.sh";
-  const auto do_b_script = dir.root / "do_b.sh";
-  write_gate_script(do_a_script, std::format("echo A-prep > \"{}\"\n", setting_file.string()));
-  write_gate_script(
-    undo_a_script,
-    std::format(
-      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho A-undo > \"{}\"\n",
-      undo_started_file.string(),
-      gate_file.string(),
-      setting_file.string()
-    )
-  );
-  write_gate_script(do_b_script, std::format("echo B-prep > \"{}\"\n", setting_file.string()));
-
-  proc::ctx_t app_a {};
-  app_a.name = "AppA";
-  app_a.id = "7";
-  app_a.cmd = "true";
-  app_a.prep_cmds.emplace_back(do_a_script.string(), undo_a_script.string(), false);
-  proc::ctx_t app_b {};
-  app_b.name = "AppB";
-  app_b.id = "8";
-  app_b.cmd = "sleep 30";
-  app_b.prep_cmds.emplace_back(do_b_script.string(), std::string {}, false);
-  std::vector<proc::ctx_t> apps;
-  apps.push_back(std::move(app_a));
-  apps.push_back(std::move(app_b));
-  boost::process::v1::environment env = boost::this_process::environment();
-  proc::proc_t target(std::move(env), std::move(apps));
-  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
-  const auto terminate_target = util::fail_guard([&target]() {
-    target.terminate();
-  });
-  ASSERT_EQ(target.execute(7, launch_session), 0);
-  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep");
+  gated_launch_t launch {"t3-cleanup-order", {
+                                               {"AppA", "7", "true", "A-prep", false, "A-undo", true},
+                                               {"AppB", "8", "sleep 30", "B-prep"},
+                                             }};
+  ASSERT_TRUE(fs::exists(launch.dir.root));
+  ASSERT_EQ(launch.target.execute(7, launch.session), 0);
+  ASSERT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep");
 
   // Detect the natural exit via the identity getter only: any running() call
   // here would claim the cleanup this test overlaps with B's launch.
   bool exited = false;
   for (int attempt = 0; attempt < 500 && !exited; ++attempt) {
-    if (target.app_process_id() == 0u) {
+    if (launch.target.app_process_id() == 0u) {
       exited = true;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -1296,52 +1294,36 @@ TEST(ProcessTest, RunningCleanupPreservesLaunchOrdering) {
   ASSERT_TRUE(exited) << "A did not exit naturally";
 
   std::atomic<int> cleanup_result {-999};
-  std::jthread cleanup_thread {[&target, &cleanup_result]() {
-    cleanup_result.store(target.running());
+  std::jthread cleanup_thread {[&launch, &cleanup_result]() {
+    cleanup_result.store(launch.target.running());
   }};
-  // Always release the gate so the background threads can finish even on failure.
-  auto release_gate = util::fail_guard([&gate_file]() {
-    std::ofstream {gate_file};
-  });
-  ASSERT_TRUE(wait_for_gate_file(undo_started_file)) << "cleanup undo did not start; cannot overlap B's launch";
+  ASSERT_TRUE(wait_for_gate_file(launch.signal_file)) << "cleanup undo did not start; cannot overlap B's launch";
 
   std::atomic<bool> b_launch_done {false};
   std::atomic<int> b_launch_result {-999};
-  std::jthread b_thread {[&target, &launch_session, &b_launch_done, &b_launch_result]() {
-    const int result = target.execute(8, launch_session);
+  std::jthread b_thread {[&launch, &b_launch_done, &b_launch_result]() {
+    const int result = launch.target.execute(8, launch.session);
     b_launch_result.store(result);
     b_launch_done.store(true);
   }};
   // Give B a chance to (incorrectly) run its prep while A's cleanup is still blocked.
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   EXPECT_FALSE(b_launch_done.load()) << "B's launch finished while A's cleanup was still blocked";
-  EXPECT_EQ(read_trimmed_gate_file(setting_file), "A-prep") << "B's prep ran before A's undo finished";
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep") << "B's prep ran before A's undo finished";
 
   // A second poll while the cleanup owns the gate answers promptly instead of
   // blocking on it; the corpse is already claimed, so it reports 0.
-  auto poll = std::async(std::launch::async, [&target]() {
-    return target.running();
-  });
-  if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
-    // Release the gate before failing so the background threads, and the async
-    // poll waiting on them, can finish instead of hanging teardown.
-    std::ofstream {gate_file};
-    release_gate.disable();
-    FAIL() << "second running() blocked on the owned cleanup";
-  }
-  EXPECT_EQ(poll.get(), 0);
-
-  {
-    std::ofstream gate {gate_file};
-    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the undo gate";
-  }
+  const auto poll_result = launch.poll_running_or_release_gate();
+  ASSERT_TRUE(poll_result.has_value()) << "second running() blocked on the owned cleanup";
+  EXPECT_EQ(*poll_result, 0);
+  ASSERT_TRUE(launch.open_gate_file()) << "failed to release the undo gate";
   cleanup_thread.join();
   b_thread.join();
-  release_gate.disable();
+  launch.disarm_gate_release();
   EXPECT_EQ(cleanup_result.load(), 0);
   EXPECT_EQ(b_launch_result.load(), 0);
-  EXPECT_EQ(read_trimmed_gate_file(setting_file), "B-prep") << "A's undo overwrote B's prep after B started";
-  EXPECT_EQ(target.running(), 8);
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "B-prep") << "A's undo overwrote B's prep after B started";
+  EXPECT_EQ(launch.target.running(), 8);
 }
 
 /**
@@ -1433,69 +1415,33 @@ TEST(ProcessTest, RunningConcurrentPollsStayConsistentDuringExitAndTerminate) {
  * consistent: terminal reports are 0 and a successor launch works.
  */
 TEST(ProcessTest, TerminateDuringLaunchDrainsAfterGateRelease) {
-  gate_dir_t dir {"b4-term-launch"};
-  ASSERT_TRUE(fs::exists(dir.root));
-  const auto setting_file = dir.root / "setting";
-  const auto gate_file = dir.root / "gate";
-  const auto started_file = dir.root / "started";
-  const auto do_script = dir.root / "do.sh";
-  const auto undo_script = dir.root / "undo.sh";
-  write_gate_script(
-    do_script,
-    std::format(
-      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho L-prep > \"{}\"\n",
-      started_file.string(),
-      gate_file.string(),
-      setting_file.string()
-    )
-  );
-  write_gate_script(undo_script, std::format("echo L-undo > \"{}\"\n", setting_file.string()));
+  gated_launch_t launch {"b4-term-launch", {{"Gated", "7", "sleep 30", "L-prep", true, "L-undo", false}}};
+  ASSERT_TRUE(fs::exists(launch.dir.root));
 
-  proc::ctx_t ctx {};
-  ctx.name = "Gated";
-  ctx.id = "7";
-  ctx.cmd = "sleep 30";
-  ctx.prep_cmds.emplace_back(do_script.string(), undo_script.string(), false);
-  std::vector<proc::ctx_t> apps;
-  apps.push_back(std::move(ctx));
-  boost::process::v1::environment env = boost::this_process::environment();
-  proc::proc_t target(std::move(env), std::move(apps));
-  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
-  const auto terminate_target = util::fail_guard([&target]() {
-    target.terminate();
-  });
-
-  std::atomic<int> exec_result {-999};
-  std::jthread exec_thread {[&target, &launch_session, &exec_result]() {
-    exec_result.store(target.execute(7, launch_session));
-  }};
-  // Always release the gate so the background thread can finish even on failure.
-  auto release_gate = util::fail_guard([&gate_file]() {
-    std::ofstream {gate_file};
-  });
-  ASSERT_TRUE(wait_for_gate_file(started_file)) << "gated prep did not start; cannot overlap terminate()";
+  launch.launch_in_background(7);
+  ASSERT_TRUE(wait_for_gate_file(launch.signal_file)) << "gated prep did not start; cannot overlap terminate()";
 
   // Launch in flight: pollers fail closed with the new id while prep is gated.
-  EXPECT_EQ(target.running(), 7);
+  EXPECT_EQ(launch.target.running(), 7);
 
   // terminate() blocks on execute()'s transition until the releaser opens the gate.
-  std::jthread releaser {[&gate_file]() {
+  std::jthread releaser {[&launch]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
-    std::ofstream {gate_file};
+    std::ofstream {launch.gate_file};
   }};
-  target.terminate();
+  launch.target.terminate();
   releaser.join();
-  exec_thread.join();
-  release_gate.disable();
+  launch.exec_thread.join();
+  launch.disarm_gate_release();
 
-  EXPECT_EQ(exec_result.load(), 0);
-  EXPECT_EQ(target.running(), 0);
-  EXPECT_EQ(target.app_process_id(), 0u);
-  EXPECT_EQ(read_trimmed_gate_file(setting_file), "L-undo") << "terminate did not undo the completed prep";
+  EXPECT_EQ(launch.exec_result.load(), 0);
+  EXPECT_EQ(launch.target.running(), 0);
+  EXPECT_EQ(launch.target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "L-undo") << "terminate did not undo the completed prep";
 
   // A successor launch works on the consistent state.
-  ASSERT_EQ(target.execute(7, launch_session), 0);
-  EXPECT_EQ(target.running(), 7);
+  ASSERT_EQ(launch.target.execute(7, launch.session), 0);
+  EXPECT_EQ(launch.target.running(), 7);
 }
 
 /**
@@ -1508,52 +1454,33 @@ TEST(ProcessTest, TerminateDuringLaunchDrainsAfterGateRelease) {
  * the terminate() path.
  */
 TEST(ProcessTest, NaturalDeathCleansUpViaRunning) {
-  gate_dir_t dir {"b4-os-death"};
-  ASSERT_TRUE(fs::exists(dir.root));
-  const auto setting_file = dir.root / "setting";
-  const auto do_script = dir.root / "do.sh";
-  const auto undo_script = dir.root / "undo.sh";
-  write_gate_script(do_script, std::format("echo A-prep > \"{}\"\n", setting_file.string()));
-  write_gate_script(undo_script, std::format("echo A-undo > \"{}\"\n", setting_file.string()));
-
-  proc::ctx_t ctx {};
-  ctx.name = "Sleeper";
-  ctx.id = "7";
-  ctx.cmd = "sleep 30";
-  ctx.prep_cmds.emplace_back(do_script.string(), undo_script.string(), false);
-  std::vector<proc::ctx_t> apps;
-  apps.push_back(std::move(ctx));
-  boost::process::v1::environment env = boost::this_process::environment();
-  proc::proc_t target(std::move(env), std::move(apps));
-  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
-  const auto terminate_target = util::fail_guard([&target]() {
-    target.terminate();
-  });
-  ASSERT_EQ(target.execute(7, launch_session), 0);
-  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep");
-  const auto pid = target.app_process_id();
+  gated_launch_t launch {"b4-os-death", {{"Sleeper", "7", "sleep 30", "A-prep", false, "A-undo", false}}};
+  ASSERT_TRUE(fs::exists(launch.dir.root));
+  ASSERT_EQ(launch.target.execute(7, launch.session), 0);
+  ASSERT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep");
+  const auto pid = launch.target.app_process_id();
   ASSERT_NE(pid, 0u);
   ASSERT_EQ(::kill(static_cast<pid_t>(pid), 0), 0);
   ASSERT_EQ(::kill(static_cast<pid_t>(pid), SIGKILL), 0);
 
   bool dead = false;
   for (int attempt = 0; attempt < 500 && !dead; ++attempt) {
-    if (target.app_process_id() == 0u) {
+    if (launch.target.app_process_id() == 0u) {
       dead = true;
     } else {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
   }
   ASSERT_TRUE(dead) << "killed app was never observed dead";
-  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep") << "undo ran before running() claimed the corpse";
+  ASSERT_EQ(read_trimmed_gate_file(launch.setting_file), "A-prep") << "undo ran before running() claimed the corpse";
 
-  EXPECT_EQ(target.running(), 0);
-  EXPECT_EQ(target.app_process_id(), 0u);
-  EXPECT_EQ(read_trimmed_gate_file(setting_file), "A-undo") << "running() cleanup did not run the undo";
+  EXPECT_EQ(launch.target.running(), 0);
+  EXPECT_EQ(launch.target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(launch.setting_file), "A-undo") << "running() cleanup did not run the undo";
 
   // A successor launch works on the consistent state.
-  ASSERT_EQ(target.execute(7, launch_session), 0);
-  EXPECT_EQ(target.running(), 7);
+  ASSERT_EQ(launch.target.execute(7, launch.session), 0);
+  EXPECT_EQ(launch.target.running(), 7);
 }
 #endif
 
