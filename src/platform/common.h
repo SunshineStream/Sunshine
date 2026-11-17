@@ -932,6 +932,11 @@ namespace platf {
   /**
    * @brief Operating-system identity of a launched process for capture routing.
    *
+   * Handoff vocabulary shared by the process lifecycle (producer), audio
+   * session guards (carrier), and platform backends (consumers). It lives in
+   * platf rather than process.h/audio.h so backends see it without including
+   * the process manager or audio capture.
+   *
    * A PID alone can be reused after the original process exits. Pairing it with
    * an OS creation marker distinguishes the recorded process from a later
    * process that happens to receive the same PID. The marker is opaque:

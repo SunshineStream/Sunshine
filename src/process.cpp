@@ -55,9 +55,18 @@ namespace proc {
    * @brief Serialize access to proc_t lifecycle state shared across threads.
    *
    * Lock order: proc_transition_mutex() is always taken before this mutex,
-   * and audio::capture_target_mutex() is always taken before this mutex
-   * (the capture process-identity provider must be invoked under that mutex),
-   * and this mutex is never taken in the reverse order.
+   * and this mutex is never taken in the reverse order. There is deliberately
+   * no lock order between this mutex and audio::capture_target_mutex(): the
+   * two are never nested in either direction. The capture process-identity
+   * provider takes only this mutex (via app_process_identity()) and must
+   * always be invoked outside audio::capture_target_mutex(); audio takes the
+   * capture mutex only around set/clear_capture_target(), never around the
+   * provider call or microphone creation (see audio::capture_target_mutex()).
+   * Readers that must never block (proc_t::running(), app_process_identity(),
+   * and the getters) take only this mutex; execute(), terminate(), and
+   * running()'s cleanup path take proc_transition_mutex() first and this mutex
+   * second. finish_termination() runs under the transition mutex, never under
+   * this mutex.
    * This mutex is never held across blocking process waits, prep/undo
    * command waits, or display/input calls: lifecycle operations snapshot
    * or claim the shared state under this mutex and work on locals after
@@ -455,87 +464,89 @@ namespace proc {
     }
     return {static_cast<std::uint32_t>(_process.id()), combined_creation_time};
 #else
-    // POSIX backends never select per-process capture, so no creation marker is needed.
+    // POSIX reports {pid, 0}: a zero marker means unverifiable (common.h
+    // process_identity_t), so any future per-process backend fails closed to
+    // endpoint capture; the PID stays populated for logging/identity pairing.
     return {static_cast<std::uint32_t>(_process.id()), 0};
 #endif
   }
 
   int proc_t::running() {
-    std::lock_guard transition {proc_transition_mutex()};
-    return running_impl();
-  }
+    // Try-gated transition hold: pollers never block on unbounded prep/undo
+    // waits. When the gate is idle this also serializes the POSIX blanket
+    // reaper below against in-flight prep/undo `child.wait()` calls, so no
+    // exit status is stolen; when busy the reaper is skipped and any needed
+    // cleanup is left to the transition owner (stale-busy report).
+    std::unique_lock transition {proc_transition_mutex(), std::try_to_lock};
+    const bool transition_idle = transition.owns_lock();
 
-  int proc_t::running_impl() {
-    // Snapshot the decision inputs under the lock, then re-verify the
-    // generation before committing. The cleanup claim happens in the same
-    // lock hold as the final decision, so a successor launched in between
-    // is never the process cleaned up. The `wait_all` group query runs
-    // under the lock as well: on POSIX it reaps via `waitpid()`, so leaving
-    // it unlocked would let a concurrent poll's reaper steal the root
-    // child's exit status before `_process.running()` captures it.
-    struct running_snapshot_t {
-      int app_id {};  ///< App id observed in the snapshot.
-      std::uint64_t generation {};  ///< Lifecycle generation observed in the snapshot.
-      bool placebo {};  ///< Whether the Desktop placebo session was active.
-    };
-
-    // On POSIX, reap exited children on every poll (including the snapshot
-    // early returns below), as HEAD did; serialize against `bp::wait()` and
-    // `platf::process_group_running()` via the lifecycle mutex.
-#ifndef _WIN32
-    auto reaper = util::fail_guard([]() {
-      std::lock_guard lock {proc_lifecycle_mutex()};
-      while (waitpid(-1, nullptr, WNOHANG) > 0);
-    });
-#endif
-
-    running_snapshot_t snapshot;
-    {
-      std::lock_guard lock {proc_lifecycle_mutex()};
-      snapshot.app_id = _app_id;
-      snapshot.generation = _lifecycle_generation;
-      snapshot.placebo = placebo;
-    }
-
-    if (snapshot.placebo) {
-      return snapshot.app_id;
-    }
-
+    int report = 0;
     std::optional<termination_snapshot_t> claimed;
     {
       std::lock_guard lock {proc_lifecycle_mutex()};
-      if (_lifecycle_generation != snapshot.generation) {
-        // State changed while unlocked; report the current app, if any.
-        return _app_id > 0 ? _app_id : 0;
+      const auto action = decide_running_locked();
+      if (action == running_action_t::report_app) {
+        report = _app_id;
+      } else if (action == running_action_t::needs_cleanup) {
+        if (transition_idle) {
+          BOOST_LOG(info) << "App exited with code ["sv << _process.native_exit_code() << ']';
+          claimed = claim_termination_locked();
+        } else {
+          // A transition owner is in flight and owns the corpse (every
+          // transition holder claims at entry); report the last-known app id
+          // instead of blocking on it.
+          report = _app_id;
+        }
       }
-      if (placebo) {
-        return _app_id;
-      } else if (_app.wait_all && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
-        // The app is still running if any process in the group is still running.
-        return _app_id;
-      } else if (_process.running()) {
-        // The app is still running only if the initial process launched is still running
-        return _app_id;
-      } else if (_app.auto_detach && _process.native_exit_code() == 0 && std::chrono::steady_clock::now() - _app_launch_time < 5s) {
-        BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
-        BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
-        placebo = true;
-        return _app_id;
+#ifndef _WIN32
+      // Blanket-reap AFTER the root checks above so `_process.running()`
+      // captures the root exit status first, and only when the transition
+      // gate is idle so the reaper cannot steal a prep/undo wait status.
+      if (transition_idle) {
+        while (waitpid(-1, nullptr, WNOHANG) > 0);
       }
-
-      // Claim cleanup atomically with the decision: the move-out below is
-      // what a later terminate would have raced with a successor launch.
-      if (_process) {
-        BOOST_LOG(info) << "App exited with code ["sv << _process.native_exit_code() << ']';
-        claimed = claim_termination_locked();
-      }
+#endif
     }
 
     if (claimed) {
+      // finish_termination() runs under the transition hold (never under the
+      // lifecycle mutex), so a concurrent execute() prep cannot run until the
+      // undo/display-revert ordering it preserves has completed.
       finish_termination(std::move(*claimed));
     }
 
-    return 0;
+    return report;
+  }
+
+  auto proc_t::decide_running_locked() -> running_action_t {
+    if (placebo) {
+      return running_action_t::report_app;
+    }
+    if (_app_id <= 0) {
+      // Idle (0), or already claimed by a transition owner (-1): nothing to
+      // report or clean up.
+      return running_action_t::report_zero;
+    }
+    if (!_process.valid()) {
+      // Launch in flight: execute() publishes _app_id before spawning the
+      // child. Fail closed (busy) rather than reporting an exited app.
+      return running_action_t::report_app;
+    }
+    if (_app.wait_all && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+      // The app is still running if any process in the group is still running.
+      return running_action_t::report_app;
+    }
+    if (_process.running()) {
+      // The app is still running only if the initial process launched is still running
+      return running_action_t::report_app;
+    }
+    if (_app.auto_detach && _process.native_exit_code() == 0 && std::chrono::steady_clock::now() - _app_launch_time < 5s) {
+      BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
+      BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
+      placebo = true;
+      return running_action_t::report_app;
+    }
+    return running_action_t::needs_cleanup;
   }
 
   void proc_t::terminate() {
