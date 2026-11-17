@@ -8,6 +8,7 @@
 
   // standard includes
   #include <array>
+  #include <atomic>
   #include <csignal>
   #include <cstdio>
   #include <cstdlib>
@@ -33,6 +34,7 @@
 
   // local includes
   #include "src/logging.h"
+  #include "src/platform/linux/misc.h"
 
 namespace platf {
   std::vector<std::string> portal_display_names(bool allow_start_timeout);
@@ -146,6 +148,33 @@ namespace {
       stop();
     }
 
+    /**
+     * @brief Configure whether restored sessions return no streams.
+     *
+     * @param reject True to make Start return no streams when the session used a restore token.
+     */
+    void set_reject_restored_sessions(bool reject) {
+      reject_restored_sessions_.store(reject);
+    }
+
+    /**
+     * @brief Configure whether rejected restored sessions emit an empty streams array instead of omitting it.
+     *
+     * @param emit_empty True to emit `@a(ua{sv}) []`; false to omit the `streams` entry.
+     */
+    void set_emit_empty_streams_array(bool emit_empty) {
+      emit_empty_streams_array_.store(emit_empty);
+    }
+
+    /**
+     * @brief Check whether any request carried a restore token.
+     *
+     * @return True when a restore token was seen.
+     */
+    bool saw_restore_token() const {
+      return saw_restore_token_.load();
+    }
+
   private:
     /**
      * @brief Connect to the bus, claim the portal name and export the portal object.
@@ -187,7 +216,7 @@ namespace {
       g_autoptr(GDBusNodeInfo) node = g_dbus_node_info_new_for_xml(PORTAL_XML, nullptr);
       static const GDBusInterfaceVTable vtable {handle_method_call, nullptr, nullptr, {}};
       for (auto **iface = node->interfaces; *iface; ++iface) {
-        const auto id = g_dbus_connection_register_object(conn_, PORTAL_PATH, *iface, &vtable, nullptr, nullptr, nullptr);
+        const auto id = g_dbus_connection_register_object(conn_, PORTAL_PATH, *iface, &vtable, this, nullptr, nullptr);
         if (id == 0) {
           return false;
         }
@@ -199,7 +228,8 @@ namespace {
     /**
      * @brief Answer a portal method call, emitting the request's Response first.
      */
-    static void handle_method_call(GDBusConnection *conn, const gchar *sender, [[maybe_unused]] const gchar *object_path, [[maybe_unused]] const gchar *interface_name, const gchar *method_name, GVariant *parameters, GDBusMethodInvocation *invocation, [[maybe_unused]] gpointer user_data) {  // NOSONAR(cpp:S107): GDBusInterfaceMethodCallFunc signature.
+    static void handle_method_call(GDBusConnection *conn, const gchar *sender, [[maybe_unused]] const gchar *object_path, [[maybe_unused]] const gchar *interface_name, const gchar *method_name, GVariant *parameters, GDBusMethodInvocation *invocation, gpointer user_data) {  // NOSONAR(cpp:S107): GDBusInterfaceMethodCallFunc signature.
+      auto *portal = static_cast<fake_portal_t *>(user_data);
       if (g_str_equal(method_name, "OpenPipeWireRemote")) {
         g_autoptr(GUnixFDList) fd_list = g_unix_fd_list_new();
         const int fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
@@ -217,6 +247,9 @@ namespace {
         return;
       }
 
+      const gchar *restore_token = nullptr;
+      const bool has_restore_token = g_variant_lookup(options, "restore_token", "&s", &restore_token) && restore_token && restore_token[0] != '\0';
+
       g_autofree gchar *sender_id = g_strdelimit(g_strdup(sender + 1), ".", '_');
       g_autofree gchar *request_path = g_strdup_printf("%s/request/%s/%s", PORTAL_PATH, sender_id, handle_token);
 
@@ -226,17 +259,38 @@ namespace {
         const gchar *session_token = nullptr;
         g_variant_lookup(options, "session_handle_token", "&s", &session_token);
         g_autofree gchar *session_path = g_strdup_printf("%s/session/%s/%s", PORTAL_PATH, sender_id, session_token);
+        portal->session_restore_tokens_[session_path] = false;
         g_variant_builder_add(&results, "{sv}", "session_handle", g_variant_new_string(session_path));
-      } else if (g_str_equal(method_name, "Start")) {
-        // A geometry no real monitor has, so the stream is named by position and resolution
-        GVariantBuilder properties;
-        g_variant_builder_init(&properties, G_VARIANT_TYPE_VARDICT);
-        g_variant_builder_add(&properties, "{sv}", "size", g_variant_new("(ii)", 1234, 567));
-        g_variant_builder_add(&properties, "{sv}", "position", g_variant_new("(ii)", 7, 9));
-        GVariantBuilder streams;
-        g_variant_builder_init(&streams, G_VARIANT_TYPE("a(ua{sv})"));
-        g_variant_builder_add(&streams, "(ua{sv})", 42u, &properties);
-        g_variant_builder_add(&results, "{sv}", "streams", g_variant_builder_end(&streams));
+      } else {
+        g_autoptr(GVariant) session_value = g_variant_get_child_value(parameters, 0);
+        const gchar *session_path = g_variant_get_string(session_value, nullptr);
+        if (g_str_equal(method_name, "SelectDevices") || g_str_equal(method_name, "SelectSources")) {
+          if (has_restore_token) {
+            portal->session_restore_tokens_[session_path] = true;
+            portal->saw_restore_token_.store(true);
+          }
+        } else if (g_str_equal(method_name, "Start")) {
+          const auto session = portal->session_restore_tokens_.find(session_path);
+          const bool restored_session = session != portal->session_restore_tokens_.end() && session->second;
+          if (!restored_session || !portal->reject_restored_sessions_.load()) {
+            // A geometry no real monitor has, so the stream is named by position and resolution
+            GVariantBuilder properties;
+            g_variant_builder_init(&properties, G_VARIANT_TYPE_VARDICT);
+            g_variant_builder_add(&properties, "{sv}", "size", g_variant_new("(ii)", 1234, 567));
+            g_variant_builder_add(&properties, "{sv}", "position", g_variant_new("(ii)", 7, 9));
+            GVariantBuilder streams;
+            g_variant_builder_init(&streams, G_VARIANT_TYPE("a(ua{sv})"));
+            g_variant_builder_add(&streams, "(ua{sv})", 42u, &properties);
+            g_variant_builder_add(&results, "{sv}", "streams", g_variant_builder_end(&streams));
+          } else if (portal->emit_empty_streams_array_.load()) {
+            GVariantBuilder streams;
+            g_variant_builder_init(&streams, G_VARIANT_TYPE("a(ua{sv})"));
+            g_variant_builder_add(&results, "{sv}", "streams", g_variant_builder_end(&streams));
+          }
+          if (!restored_session) {
+            g_variant_builder_add(&results, "{sv}", "restore_token", g_variant_new_string("fresh-token"));
+          }
+        }
       }
 
       g_dbus_connection_emit_signal(conn, sender, request_path, "org.freedesktop.portal.Request", "Response", g_variant_new("(ua{sv})", 0u, &results), nullptr);
@@ -247,6 +301,10 @@ namespace {
     GMainLoop *loop_ = nullptr;
     GDBusConnection *conn_ = nullptr;
     std::vector<guint> registrations_;
+    std::map<std::string, bool> session_restore_tokens_;
+    std::atomic<bool> saw_restore_token_ {false};
+    std::atomic<bool> reject_restored_sessions_ {true};
+    std::atomic<bool> emit_empty_streams_array_ {false};
     std::jthread thread_;
   };
 
@@ -289,6 +347,10 @@ namespace {
       auto directory_template = (std::filesystem::temp_directory_path() / "sunshine-portal-bus-XXXXXX").string();  // NOSONAR(cpp:S5443): mkdtemp creates a private unique directory.
       ASSERT_NE(mkdtemp(directory_template.data()), nullptr);
       bus_directory_ = directory_template;
+      token_path_ = bus_directory_ / "portal_token.test";
+      portal::set_saved_token_path_for_testing(token_path_);
+      portal::clear_saved_token();
+
       const auto config_path = bus_directory_ / "bus.conf";
       std::ofstream(config_path) << std::format(BUS_CONFIG, bus_directory_.string());
 
@@ -321,6 +383,10 @@ namespace {
      */
     void TearDown() override {
       portal_.stop();
+      if (!token_path_.empty()) {
+        portal::clear_saved_token();
+        portal::reset_saved_token_path_for_testing();
+      }
       logging::log_flush();
       for (const auto &[name, previous] : previous_env_) {
         if (previous) {
@@ -344,6 +410,36 @@ namespace {
       BaseTest::TearDown();
     }
 
+    /**
+     * @brief Get the private token path used by this test.
+     *
+     * @return Token path inside the private bus directory.
+     */
+    const std::filesystem::path &token_path() const {
+      return token_path_;
+    }
+
+    /**
+     * @brief Write a restore token to the private token path.
+     *
+     * @param value Token contents.
+     */
+    void write_token(const std::string &value) const {
+      std::ofstream file(token_path_);
+      ASSERT_TRUE(file.is_open());
+      file << value;
+      ASSERT_TRUE(file.good());
+    }
+
+    /**
+     * @brief Access the fake portal used by this test.
+     *
+     * @return Fake portal instance.
+     */
+    fake_portal_t &fake_portal() {
+      return portal_;
+    }
+
   private:
     /**
      * @brief Set an environment variable for the test, remembering its previous value for TearDown.
@@ -362,6 +458,7 @@ namespace {
     GPid daemon_pid_ = 0;
     FILE *daemon_output_ = nullptr;
     std::filesystem::path bus_directory_;
+    std::filesystem::path token_path_;
     std::map<std::string, std::optional<std::string>, std::less<>> previous_env_;
   };
 }  // namespace
@@ -370,5 +467,51 @@ TEST_F(PortalRequestTest, ReceivesResponseEmittedBeforeMethodReturns) {
   const auto names = platf::portal_display_names(true);
 
   EXPECT_EQ(names, std::vector<std::string> {"position-7x9-resolution-1234x567"});
+}
+
+/**
+ * @brief Parameterized stale-token recovery tests for omitted and empty `streams` responses.
+ */
+class PortalRequestStaleTokenTest: public PortalRequestTest, public testing::WithParamInterface<bool> {};
+
+TEST_P(PortalRequestStaleTokenTest, DiscardsStaleRestoreTokenWhenStartHasNoStreams) {
+  fake_portal().set_emit_empty_streams_array(GetParam());
+  ASSERT_NO_FATAL_FAILURE(write_token("stale-token"));
+  ASSERT_TRUE(std::filesystem::exists(token_path()));
+
+  const auto names = platf::portal_display_names(true);
+
+  EXPECT_EQ(names, std::vector<std::string> {"position-7x9-resolution-1234x567"});
+  EXPECT_TRUE(fake_portal().saw_restore_token());
+  ASSERT_TRUE(std::filesystem::exists(token_path()));
+  std::ifstream file(token_path());
+  std::string token;
+  std::getline(file, token);
+  EXPECT_EQ(token, "fresh-token");
+  EXPECT_TRUE(portal::has_saved_token());
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  EmptyStartResponses,
+  PortalRequestStaleTokenTest,
+  testing::Values(false, true),
+  [](const testing::TestParamInfo<bool> &info) {
+    return info.param ? "EmptyStreamsArray" : "OmittedStreams";
+  }
+);
+
+TEST_F(PortalRequestTest, KeepsRestoreTokenWhenStartReturnsStreams) {
+  fake_portal().set_reject_restored_sessions(false);
+  ASSERT_NO_FATAL_FAILURE(write_token("valid-token"));
+
+  const auto names = platf::portal_display_names(true);
+
+  EXPECT_EQ(names, std::vector<std::string> {"position-7x9-resolution-1234x567"});
+  EXPECT_TRUE(fake_portal().saw_restore_token());
+  ASSERT_TRUE(std::filesystem::exists(token_path()));
+  std::ifstream file(token_path());
+  std::string token;
+  std::getline(file, token);
+  EXPECT_EQ(token, "valid-token");
 }
 #endif
