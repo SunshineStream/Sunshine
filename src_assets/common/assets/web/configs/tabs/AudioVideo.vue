@@ -70,6 +70,20 @@ watch([captureTarget, captureOwner, specificSink], syncCaptureConfig)
 // has no Quiet path, so a blank sink shows Play on this PC here even when the
 // saved keys still describe Quiet streaming.
 syncCaptureConfig()
+
+/**
+ * @brief Check whether the current capture selection is safe to save.
+ *
+ * Custom device with a blank sink name would persist an unusable target, so
+ * the settings page blocks the save and asks for a device name instead.
+ *
+ * @return True unless Custom device is selected with no sink name.
+ */
+function validateAudioCapture() {
+  return !specificSinkMissing.value
+}
+
+defineExpose({ validateAudioCapture })
 </script>
 
 <template>
@@ -116,14 +130,17 @@ syncCaptureConfig()
       <p id="audio_capture_how_it_works" class="form-text text-muted">{{ $t('config.audio_capture_how_it_works') }}: {{ $t(howItWorksKey) }}</p>
 
       <div v-if="captureTarget === 'specific'" class="mt-3">
-        <div class="form-check mb-2" v-if="platform !== 'macos'">
-          <input class="form-check-input" type="radio" id="audio_capture_owner_sunshine" value="sunshine" v-model="captureOwner" :disabled="!streamAudioEnabled" />
-          <label class="form-check-label" for="audio_capture_owner_sunshine">{{ $t('config.audio_capture_owner_sunshine') }}</label>
-        </div>
-        <div class="form-check mb-2" v-if="platform !== 'macos'">
-          <input class="form-check-input" type="radio" id="audio_capture_owner_self" value="self" v-model="captureOwner" :disabled="!streamAudioEnabled" />
-          <label class="form-check-label" for="audio_capture_owner_self">{{ $t('config.audio_capture_owner_self') }}</label>
-        </div>
+        <fieldset v-if="platform !== 'macos'" class="border-0 p-0 m-0">
+          <legend class="form-label">{{ $t('config.audio_capture_owner_legend') }}</legend>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" id="audio_capture_owner_sunshine" value="sunshine" v-model="captureOwner" :disabled="!streamAudioEnabled" />
+            <label class="form-check-label" for="audio_capture_owner_sunshine">{{ $t('config.audio_capture_owner_sunshine') }}</label>
+          </div>
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="radio" id="audio_capture_owner_self" value="self" v-model="captureOwner" :disabled="!streamAudioEnabled" />
+            <label class="form-check-label" for="audio_capture_owner_self">{{ $t('config.audio_capture_owner_self') }}</label>
+          </div>
+        </fieldset>
         <p v-if="platform === 'macos'" class="form-text">{{ $t('config.audio_capture_target_specific_sunshine_desc_macos') }}</p>
       </div>
 
@@ -138,9 +155,10 @@ syncCaptureConfig()
                :disabled="captureTarget !== 'specific' || !streamAudioEnabled"
                :class="{'is-invalid': specificSinkMissing}"
                :aria-invalid="specificSinkMissing"
+               :aria-describedby="specificSinkMissing ? 'audio_sink_feedback' : null"
                :value="specificSink"
                @input="specificSink = $event.target.value" />
-        <div v-if="specificSinkMissing" class="invalid-feedback d-block">{{ $t('config.audio_capture_sink_needed') }}</div>
+        <div v-if="specificSinkMissing" id="audio_sink_feedback" class="invalid-feedback d-block">{{ $t('config.audio_capture_sink_needed') }}</div>
         <div v-else-if="captureTarget !== 'specific' && specificSink.trim() !== ''" class="form-text">{{ $t('config.audio_capture_sink_kept_hint') }}</div>
         <div class="form-text">
           {{ $tp('config.audio_sink_desc') }}<br>

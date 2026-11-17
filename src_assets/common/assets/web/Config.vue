@@ -82,6 +82,9 @@
           <div class="alert alert-success mb-4" v-if="restarted">
             <b>{{ $t('_common.success') }}</b> {{ $t('config.restart_note') }}
           </div>
+          <div class="alert alert-danger mb-4" v-if="saveBlocked === 'audio_capture'">
+            <b>{{ $t('_common.error') }}</b> {{ $t('config.audio_capture_save_blocked') }}
+          </div>
 
       <!-- General Tab -->
       <general
@@ -100,6 +103,7 @@
       <!-- Audio/Video Tab -->
       <audio-video
         v-if="currentTab === 'av'"
+        ref="audioVideo"
         :config="config"
         :platform="platform"
       >
@@ -250,6 +254,7 @@
         platform: "",
         saved: false,
         restarted: false,
+        saveBlocked: null,
         config: null,
         currentTab: "general",
         searchQuery: "",
@@ -371,6 +376,24 @@
       save() {
         this.saved = false;
         this.restarted = false;
+        this.saveBlocked = null;
+
+        // Let the audio/video tab reject selections that would persist an
+        // unusable capture target. The tab may be unmounted (another tab is
+        // open), in which case there is nothing new to validate.
+        const audioTab = this.$refs.audioVideo;
+        const audioValid = audioTab?.validateAudioCapture?.() ?? true;
+        if (!audioValid) {
+          this.currentTab = 'av';
+          this.saveBlocked = 'audio_capture';
+          this.$nextTick(() => {
+            const sink = document.getElementById('audio_sink');
+            if (sink) {
+              sink.focus();
+            }
+          });
+          return Promise.resolve(false);
+        }
 
         // create a temp copy of this.config to use for the post request
         let config = this.serialize();
@@ -429,6 +452,7 @@
           // Show all form groups when search is cleared
           document.querySelectorAll('.mb-3').forEach(el => {
             el.style.display = '';
+            delete el.dataset.searchHidden;
           });
           return;
         }
@@ -446,21 +470,20 @@
 
         // Wait for tab content to render
         this.$nextTick(() => {
-          // Hide all form groups first
+          // Hide all form groups first, tagging what this search hid so the
+          // reveal step only undoes its own hiding.
           document.querySelectorAll('.config-page .mb-3').forEach(el => {
             el.style.display = 'none';
+            el.dataset.searchHidden = '1';
           });
 
-          // Show only matching elements
+          // Show each match plus every hidden ancestor up to the page root,
+          // so matches nested inside grouping fieldsets become visible.
           results.forEach(result => {
             const element = document.getElementById(result.key);
 
             if (element) {
-              // Show the element's container
-              const container = element.closest('.mb-3');
-              if (container) {
-                container.style.display = '';
-              }
+              this.revealSearchMatch(element);
             }
           });
 
@@ -479,6 +502,19 @@
             }
           }
         });
+      },
+      revealSearchMatch(element) {
+        // Climb from the match to the page root, unhiding every ancestor
+        // this search hid. Stops at .config-page so other tabs stay hidden.
+        const page = element.closest('.config-page');
+        let node = element.closest('.mb-3');
+        while (node && node !== page) {
+          if (node.dataset.searchHidden === '1') {
+            node.style.display = '';
+            delete node.dataset.searchHidden;
+          }
+          node = node.parentElement ? node.parentElement.closest('.mb-3') : null;
+        }
       },
     },
     mounted() {

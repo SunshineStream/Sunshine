@@ -244,6 +244,71 @@ describe('keep default sink configuration', () => {
     button.click()
     expect(open).toHaveBeenCalledWith('https://localhost:47990/config/#keep_default_sink', '_blank', 'noopener')
   })
+
+  it.each([
+    ['windows', 'silent', true],
+    ['windows', 'current', false],
+    ['windows', 'specific', false],
+    ['linux', 'silent', false],
+    ['macos', 'current', false],
+  ])('shows the virtual sink field on %s + %s only when expected (%s)', async (platform, target, visible) => {
+    const { wrapper } = mountAudioVideo(platform)
+    const radio = { silent: '#audio_capture_target_silent', current: '#audio_capture_target_current', specific: '#audio_capture_target_specific' }[target]
+    await wrapper.get(radio).setValue(true)
+    expect(wrapper.find('#virtual_sink').exists()).toBe(visible)
+    expect(wrapper.find('#install_steam_audio_drivers').exists()).toBe(visible)
+    if (visible) {
+      expect(wrapper.get('#virtual_sink').element.disabled).toBe(false)
+    }
+    wrapper.unmount()
+  })
+
+  it('disables the virtual sink and routing owner controls when Stream Audio is off', async () => {
+    const { wrapper } = mountAudioVideo('windows')
+    await wrapper.get('#audio_capture_target_silent').setValue(true)
+    expect(wrapper.get('#virtual_sink').element.disabled).toBe(false)
+    await wrapper.get('#stream_audio').setValue(false)
+    expect(wrapper.get('#virtual_sink').element.disabled).toBe(true)
+    expect(wrapper.get('#install_steam_audio_drivers').element.closest('fieldset').disabled).toBe(true)
+    await wrapper.get('#stream_audio').setValue(true)
+    expect(wrapper.get('#virtual_sink').element.disabled).toBe(false)
+    expect(wrapper.get('#install_steam_audio_drivers').element.closest('fieldset').disabled).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('writes only the capture keys for each target and leaves the rest untouched', async () => {
+    const before = { virtual_sink: 'My Sink', stream_audio: 'enabled' }
+    const { wrapper, config } = mountAudioVideo('linux', { ...before, audio_sink: '', keep_default_sink: 'disabled' })
+    await wrapper.get('#audio_capture_target_current').setValue(true)
+    expect(config.keep_default_sink).toBe('enabled')
+    expect(config.audio_sink).toBe('')
+    await wrapper.get('#audio_capture_target_specific').setValue(true)
+    await wrapper.get('#audio_sink').setValue('  spaced-sink  ')
+    expect(config.audio_sink).toBe('spaced-sink')
+    expect(config.virtual_sink).toBe(before.virtual_sink)
+    expect(config.stream_audio).toBe(before.stream_audio)
+    wrapper.unmount()
+  })
+
+  it('validates the capture selection for the save gate', async () => {
+    const { wrapper } = mountAudioVideo('linux')
+    expect(wrapper.vm.validateAudioCapture()).toBe(true)
+    await wrapper.get('#audio_capture_target_specific').setValue(true)
+    expect(wrapper.vm.validateAudioCapture()).toBe(false)
+    await wrapper.get('#audio_sink').setValue('named-target')
+    expect(wrapper.vm.validateAudioCapture()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('links the sink input to its validation message for assistive tech', async () => {
+    const { wrapper } = mountAudioVideo('linux')
+    await wrapper.get('#audio_capture_target_specific').setValue(true)
+    expect(wrapper.get('#audio_sink').attributes('aria-describedby')).toBe('audio_sink_feedback')
+    expect(wrapper.find('#audio_sink_feedback').exists()).toBe(true)
+    await wrapper.get('#audio_sink').setValue('named-target')
+    expect(wrapper.get('#audio_sink').attributes('aria-describedby')).toBeUndefined()
+    wrapper.unmount()
+  })
 })
 
 describe('audio sink platform guidance', () => {
@@ -257,7 +322,7 @@ describe('audio sink platform guidance', () => {
     expect(en.config.audio_capture_target_silent).toBe('Quiet streaming')
     expect(en.config.audio_capture_target_current).toBe('Play on this PC too')
     expect(en.config.audio_capture_target_specific).toBe('Custom device')
-    expect(en.config.audio_capture_how_it_works).toBe('How it works here')
+    expect(en.config.audio_capture_how_it_works).toBe('How this works')
     expect(en.config.audio_sink_placeholder_linux).toBe('sink-sunshine-stereo')
     expect(en.config.audio_sink_placeholder_freebsd).toBe('sink-sunshine-stereo')
     expect(en.config.audio_sink_placeholder_macos).toBe('BlackHole 2ch')
@@ -275,7 +340,7 @@ describe('audio sink platform guidance', () => {
     expect(en.config.audio_capture_target_silent_desc_macos).toMatch(/BlackHole/)
     expect(en.config.audio_capture_target_silent_desc_macos).toMatch(/Not available/)
     expect(en.config.audio_capture_target_current_desc_macos).toMatch(/system audio tap/)
-    expect(en.config.audio_capture_owner_sunshine).toBe('Sunshine automatically sends all sound to the device configured below while streaming')
+    expect(en.config.audio_capture_owner_sunshine).toBe('Sunshine sets the device below as the default while streaming')
     expect(en.config.audio_capture_owner_self).toBe('I route apps myself')
     expect(en.config.audio_capture_effective_target).toBe('Streaming will capture')
     expect(en.config.audio_capture_effective_retained).toBe('Custom name kept for Custom device only')
