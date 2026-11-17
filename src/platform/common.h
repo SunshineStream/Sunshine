@@ -891,6 +891,29 @@ namespace platf {
   };
 
   /**
+   * @brief Whether a recorded capture target still matches the expected session target.
+   *
+   * Pure function: no I/O, no global state. Sessions share one audio control,
+   * so an exiting session must only release the shared target when it still
+   * holds that session's intent and PID; otherwise it would wipe a survivor's
+   * target that was recorded after its own.
+   *
+   * @param recorded_intent Intent currently stored on the audio control.
+   * @param recorded_process_id PID currently stored on the audio control.
+   * @param expected_intent Intent recorded by the session being torn down.
+   * @param expected_process_id PID recorded by the session being torn down.
+   * @return True only when both the intent and the PID still match.
+   */
+  [[nodiscard]] constexpr bool capture_target_matches(
+    audio_capture_intent_e recorded_intent,
+    std::uint32_t recorded_process_id,
+    audio_capture_intent_e expected_intent,
+    std::uint32_t expected_process_id
+  ) noexcept {
+    return recorded_intent == expected_intent && recorded_process_id == expected_process_id;
+  }
+
+  /**
    * @brief Microphone capture parameters for audio_control_t::microphone().
    *
    * Groups the six capture arguments into one named bundle so call sites pass
@@ -904,6 +927,58 @@ namespace platf {
     std::uint32_t frame_size = 0;  ///< Number of samples captured per audio frame.
     bool continuous_audio = false;  ///< Whether silent audio should continue to be emitted.
     bool host_audio_enabled = false;  ///< Whether host playback should remain enabled during capture.
+  };
+
+  /**
+   * @brief Operating-system identity of a launched process for capture routing.
+   *
+   * A PID alone can be reused after the original process exits. Pairing it with
+   * an OS creation marker distinguishes the recorded process from a later
+   * process that happens to receive the same PID. The marker is opaque:
+   * backends must only compare it for equality, never interpret it. A zero
+   * marker means the identity is unverifiable (no process, or the platform
+   * cannot query creation markers); backends must fail closed to endpoint
+   * capture in that case.
+   *
+   * The identity is captured from the owned child handle under the process
+   * lifecycle lock and carried through the audio handoff as one bundle, so the
+   * baseline always names the launched process even if its PID is later
+   * reused. Backends must store the handed-off marker verbatim as their
+   * revalidation baseline instead of querying it by PID, which would reopen
+   * the reuse window the handoff closes.
+   */
+  struct process_identity_t {
+    std::uint32_t process_id {};  ///< Operating-system PID, or 0 for endpoint capture.
+    std::uint64_t creation_time {};  ///< Opaque OS creation marker, or 0 when unverifiable.
+  };
+
+  /**
+   * @brief Recorded per-process capture target shared by audio backends.
+   *
+   * Windows and Linux record the sink selected at startup so microphone() can
+   * consume it later; Windows additionally records the intent and PID for
+   * process-loopback capture. The record carries at most the intent and the
+   * PID: the creation marker travels with set_capture_target() but its storage,
+   * identity queries, and revalidation stay backend-side because they depend on
+   * WASAPI-only process APIs.
+   */
+  struct capture_target_record_t {
+    audio_capture_intent_e intent {audio_capture_intent_e::client_only};  ///< Intent for the next microphone() call.
+    std::uint32_t process_id {};  ///< PID for process-loopback capture, or 0 for endpoint capture.
+
+    /**
+     * @brief Check whether this record still matches the expected session target.
+     *
+     * Delegates to `capture_target_matches()` so sessions share one
+     * compare-and-reset contract.
+     *
+     * @param expected_intent Intent recorded by the session being torn down.
+     * @param expected_process_id PID recorded by the session being torn down.
+     * @return True only when both the intent and the PID still match.
+     */
+    [[nodiscard]] bool matches(audio_capture_intent_e expected_intent, std::uint32_t expected_process_id) const noexcept {
+      return capture_target_matches(intent, process_id, expected_intent, expected_process_id);
+    }
   };
 
   /**
@@ -932,6 +1007,15 @@ namespace platf {
     }
 
     /**
+     * @brief Whether the backend can capture one launched process tree.
+     *
+     * @return True when set_capture_target() may select per-process capture.
+     */
+    virtual bool supports_process_capture() const {
+      return false;
+    }
+
+    /**
      * @brief Capture the given sink without changing the host default.
      *
      * Only called when supports_keep_default_sink() is true. The default
@@ -949,13 +1033,15 @@ namespace platf {
      *
      * The default implementation is a no-op so backends without per-process
      * capture are unchanged. Backends that support process loopback override
-     * this to store the intent and PID together, so microphone() never sees
+     * this to store the intent and identity together, so microphone() never sees
      * a mismatched pair. A PID of 0 selects ordinary endpoint or sink capture.
+     * The creation marker arrives pre-queried from the owned child handle and
+     * must be stored verbatim as the revalidation baseline.
      *
      * @param intent Capture intent resolved from the audio configuration.
-     * @param process_id Operating-system PID to capture, or 0 for endpoint capture.
+     * @param identity Operating-system identity to capture, or {0, 0} for endpoint capture.
      */
-    virtual void set_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
+    virtual void set_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] process_identity_t identity) {
       // Intentionally empty: backends without per-process capture inherit this no-op.
     }
 
@@ -973,6 +1059,19 @@ namespace platf {
      */
     virtual void clear_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
       // Intentionally empty: backends without per-process capture inherit this no-op.
+    }
+
+    /**
+     * @brief Copy the recorded capture target.
+     *
+     * Public read of the shared record so `audio::session_capture_target_t`
+     * can verify, after creating a microphone without holding the outer
+     * capture-target mutex, that the target it refreshed is still recorded.
+     *
+     * @return Intent and PID as one consistent snapshot.
+     */
+    [[nodiscard]] capture_target_record_t snapshot_capture_target_record() const {
+      return snapshot_recorded_capture_target();
     }
 
     /**
@@ -1033,8 +1132,9 @@ namespace platf {
     virtual ~audio_control_t() = default;
 
   protected:
-    mutable std::mutex capture_state_mutex_;  ///< Guards `recorded_sink_` against concurrent sessions.
+    mutable std::mutex capture_state_mutex_;  ///< Guards `recorded_sink_` and `recorded_target_` against concurrent sessions.
     std::string recorded_sink_;  ///< Sink recorded for later consumption in microphone(), possibly empty.
+    capture_target_record_t recorded_target_;  ///< Intent and PID recorded for the next microphone() call.
 
     /**
      * @brief Record a capture sink for later consumption in microphone().
@@ -1076,6 +1176,79 @@ namespace platf {
     [[nodiscard]] std::string snapshot_recorded_sink() const {
       std::lock_guard lock {capture_state_mutex_};
       return recorded_sink_;
+    }
+
+    /**
+     * @brief Record the capture target for the next microphone() call.
+     *
+     * Thread-safe: the intent and PID are stored as one snapshot under
+     * `capture_state_mutex_`, so microphone() never sees a mismatched pair.
+     * Opt-in helper only: the `set_capture_target()` virtual stays a no-op so
+     * backends without per-process capture are unchanged.
+     *
+     * @param intent Capture intent resolved from the audio configuration.
+     * @param process_id Operating-system PID to capture, or 0 for endpoint capture.
+     */
+    void record_capture_target(audio_capture_intent_e intent, std::uint32_t process_id) {
+      std::lock_guard lock {capture_state_mutex_};
+      recorded_target_.intent = intent;
+      recorded_target_.process_id = process_id;
+    }
+
+    /**
+     * @brief Copy the recorded capture target under `capture_state_mutex_`.
+     *
+     * Named `snapshot_recorded_capture_target()` (rather than reusing the
+     * Windows `snapshot_capture_target()` name) because the Windows snapshot
+     * carries an additional process identity and C++ cannot overload on the
+     * return type alone.
+     *
+     * @return Intent and PID as one consistent snapshot.
+     */
+    [[nodiscard]] capture_target_record_t snapshot_recorded_capture_target() const {
+      std::lock_guard lock {capture_state_mutex_};
+      return recorded_target_;
+    }
+
+    /**
+     * @brief Reset backend-side state paired with the recorded capture target.
+     *
+     * Called by `clear_recorded_capture_target_if_matches()` while holding
+     * `capture_state_mutex_` after the shared record was reset. The default is
+     * a no-op. Overrides must be non-reentrant: they must not call any
+     * `record_*`/`snapshot_*`/`clear_*` helper (non-recursive mutex would
+     * deadlock) and must not perform OS, provider, or PulseAudio calls — no
+     * lock is ever held across such calls.
+     */
+    virtual void on_capture_target_cleared() {
+      // Intentionally empty: backends without paired state inherit this no-op.
+    }
+
+    /**
+     * @brief Release the recorded capture target when it still belongs to the caller.
+     *
+     * Thread-safe: the compare-and-reset runs under `capture_state_mutex_`.
+     * The target resets to endpoint capture only when the stored intent and
+     * PID still equal the given ones, so one exiting session cannot wipe
+     * another session's recorded target. Opt-in helper only: the
+     * `clear_capture_target()` virtual stays a no-op so backends without
+     * per-process capture are unchanged. After the shared record resets,
+     * `on_capture_target_cleared()` runs under the same lock hold so paired
+     * backend state resets atomically with the shared record.
+     *
+     * @param intent Capture intent recorded by the session being torn down.
+     * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
+     * @return True when the stored target matched and was reset.
+     */
+    bool clear_recorded_capture_target_if_matches(audio_capture_intent_e intent, std::uint32_t process_id) {
+      std::lock_guard lock {capture_state_mutex_};
+      if (!recorded_target_.matches(intent, process_id)) {
+        return false;
+      }
+      recorded_target_.intent = audio_capture_intent_e::client_only;
+      recorded_target_.process_id = 0;
+      on_capture_target_cleared();
+      return true;
     }
   };
 

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -49,6 +50,27 @@ namespace proc {
   namespace pt = boost::property_tree;
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
+
+  /**
+   * @brief Serialize access to proc_t lifecycle state shared across threads.
+   *
+   * Lock order: proc_transition_mutex() is always taken before this mutex,
+   * and audio::capture_target_mutex() is always taken before this mutex
+   * (the capture process-identity provider must be invoked under that mutex),
+   * and this mutex is never taken in the reverse order.
+   * This mutex is never held across blocking process waits, prep/undo
+   * command waits, or display/input calls: lifecycle operations snapshot
+   * or claim the shared state under this mutex and work on locals after
+   * releasing it. The only process queries made under it are the
+   * non-blocking `child::running()`/`native_exit_code()` checks and the
+   * non-blocking `platf::process_group_running()` group query.
+   *
+   * @return Reference to the process-lifetime lifecycle mutex.
+   */
+  std::mutex &proc_lifecycle_mutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
 
   /**
    * @brief RAII helper that runs shutdown cleanup when destroyed.
@@ -212,97 +234,145 @@ namespace proc {
     return true;
   }
 
+  /**
+   * @brief Serialize complete launch and cleanup transitions independently of state reads.
+   *
+   * @return Process-lifetime transition mutex.
+   */
+  std::mutex &proc_transition_mutex() {
+    static std::mutex mutex;
+    return mutex;
+  }
+
   int proc_t::execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
+    std::lock_guard transition {proc_transition_mutex()};
+    return execute_impl(app_id, std::move(launch_session));
+  }
+
+  int proc_t::execute_impl(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session) {
     // Ensure starting from a clean slate
-    terminate();
+    terminate_impl();
 
-    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
-      return app.id == std::to_string(app_id);
-    });
+    // Snapshot the app and environment under the lock, then run every
+    // prep/detached/launch wait on the locals. Shared state is only
+    // republished in short locked sections that verify `generation`, so a
+    // concurrent terminate or successor launch is never overwritten.
+    ctx_t app;
+    boost::process::v1::environment env;
+    std::uint64_t generation = 0;
+    {
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto &listed_app) {
+        return listed_app.id == std::to_string(app_id);
+      });
 
-    if (iter == _apps.end()) {
-      BOOST_LOG(error) << "Couldn't find app with ID ["sv << app_id << ']';
-      return 404;
+      if (iter == _apps.end()) {
+        BOOST_LOG(error) << "Couldn't find app with ID ["sv << app_id << ']';
+        return 404;
+      }
+
+      _app_id = app_id;
+      _app = *iter;
+      _app_prep_begin = std::begin(_app.prep_cmds);
+      _app_prep_it = _app_prep_begin;
+      _app_prep_completed = 0;
+      generation = ++_lifecycle_generation;
+      app = _app;
+      env = _env;
     }
 
-    _app_id = app_id;
-    _app = *iter;
-    _app_prep_begin = std::begin(_app.prep_cmds);
-    _app_prep_it = _app_prep_begin;
-
     // Add Stream-specific environment variables
-    _env["SUNSHINE_APP_ID"] = std::to_string(_app_id);
-    _env["SUNSHINE_APP_NAME"] = _app.name;
-    _env["SUNSHINE_CLIENT_NAME"] = launch_session->client_name;
-    _env["SUNSHINE_CLIENT_WIDTH"] = std::to_string(launch_session->width);
-    _env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(launch_session->height);
-    _env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session->fps);
-    _env["SUNSHINE_CLIENT_HDR"] = launch_session->enable_hdr ? "true" : "false";
-    _env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
-    _env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
-    _env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
+    env["SUNSHINE_APP_ID"] = std::to_string(app_id);
+    env["SUNSHINE_APP_NAME"] = app.name;
+    env["SUNSHINE_CLIENT_NAME"] = launch_session->client_name;
+    env["SUNSHINE_CLIENT_WIDTH"] = std::to_string(launch_session->width);
+    env["SUNSHINE_CLIENT_HEIGHT"] = std::to_string(launch_session->height);
+    env["SUNSHINE_CLIENT_FPS"] = std::to_string(launch_session->fps);
+    env["SUNSHINE_CLIENT_HDR"] = launch_session->enable_hdr ? "true" : "false";
+    env["SUNSHINE_CLIENT_GCMAP"] = std::to_string(launch_session->gcmap);
+    env["SUNSHINE_CLIENT_HOST_AUDIO"] = launch_session->host_audio ? "true" : "false";
+    env["SUNSHINE_CLIENT_ENABLE_SOPS"] = launch_session->enable_sops ? "true" : "false";
     int channelCount = launch_session->surround_info & 65535;
     switch (channelCount) {
       case 2:
-        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "2.0";
+        env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "2.0";
         break;
       case 6:
-        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "5.1";
+        env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "5.1";
         break;
       case 8:
-        _env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1";
+        env["SUNSHINE_CLIENT_AUDIO_CONFIGURATION"] = "7.1";
         break;
     }
-    _env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
+    env["SUNSHINE_CLIENT_AUDIO_SURROUND_PARAMS"] = launch_session->surround_params;
 
-    if (!_app.output.empty() && _app.output != "null"sv) {
+    {
+      // Publish the session environment so a concurrent terminate undoes
+      // prep commands with it and `update_apps_and_env()` preserves it.
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      if (_lifecycle_generation != generation) {
+        return -1;
+      }
+      _env = env;
+    }
+
+    // The pipe stays local until the launch is published, so a concurrent
+    // terminate can never close a FILE this launch is still spawning with.
+    file_t pipe;
+    if (!app.output.empty() && app.output != "null"sv) {
 #ifdef _WIN32
       // fopen() interprets the filename as an ANSI string on Windows, so we must convert it
       // to UTF-16 and use the wchar_t variants for proper Unicode log file path support.
-      auto woutput = utf_utils::from_utf8(_app.output);
+      auto woutput = utf_utils::from_utf8(app.output);
 
       // Use _SH_DENYNO to allow us to open this log file again for writing even if it is
       // still open from a previous execution. This is required to handle the case of a
       // detached process executing again while the previous process is still running.
-      _pipe.reset(_wfsopen(woutput.c_str(), L"a", _SH_DENYNO));
+      pipe.reset(_wfsopen(woutput.c_str(), L"a", _SH_DENYNO));
 #else
-      _pipe.reset(fopen(_app.output.c_str(), "a"));
+      pipe.reset(fopen(app.output.c_str(), "a"));
 #endif
     }
 
     std::error_code ec;
-    // Executed when returning from function
-    auto fg = util::fail_guard([this]() {
-      terminate();
+    // Executed when returning from function; generation-checked so failing
+    // cleanup for this launch cannot terminate a successor app.
+    auto fg = util::fail_guard([this, generation]() {
+      terminate_impl(generation);
     });
 
-    for (; _app_prep_it != std::end(_app.prep_cmds); ++_app_prep_it) {
-      auto &cmd = *_app_prep_it;
+    for (std::size_t prep_index = 0; prep_index < app.prep_cmds.size(); ++prep_index) {
+      const auto &cmd = app.prep_cmds[prep_index];
 
       // Skip empty commands
-      if (cmd.do_cmd.empty()) {
-        continue;
+      if (!cmd.do_cmd.empty()) {
+        const auto command = prepare_command(cmd.do_cmd);
+        boost::filesystem::path working_dir = app.working_dir.empty() ?
+                                                find_working_directory(command, env) :
+                                                boost::filesystem::path(app.working_dir);
+        BOOST_LOG(info) << "Executing Do Cmd: ["sv << command << ']';
+        auto child = platf::run_command(cmd.elevated, true, command, working_dir, env, pipe.get(), ec, nullptr);
+
+        if (!wait_for_prep_command(child, command, ec, app.cmd.empty())) {
+          return -1;
+        }
       }
 
-      const auto command = prepare_command(cmd.do_cmd);
-      boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(command, _env) :
-                                              boost::filesystem::path(_app.working_dir);
-      BOOST_LOG(info) << "Executing Do Cmd: ["sv << command << ']';
-      auto child = platf::run_command(cmd.elevated, true, command, working_dir, _env, _pipe.get(), ec, nullptr);
-
-      if (!wait_for_prep_command(child, command, ec, _app.cmd.empty())) {
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      if (_lifecycle_generation != generation) {
         return -1;
       }
+      _app_prep_completed = prep_index + 1;
+      _app_prep_it = std::begin(_app.prep_cmds) + static_cast<std::ptrdiff_t>(_app_prep_completed);
     }
 
-    for (auto &cmd : _app.detached) {
+    for (auto &cmd : app.detached) {
       const auto command = prepare_command(cmd);
-      boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(command, _env) :
-                                              boost::filesystem::path(_app.working_dir);
+      boost::filesystem::path working_dir = app.working_dir.empty() ?
+                                              find_working_directory(command, env) :
+                                              boost::filesystem::path(app.working_dir);
       BOOST_LOG(info) << "Spawning ["sv << command << "] in ["sv << working_dir << ']';
-      auto child = platf::run_command(_app.elevated, true, command, working_dir, _env, _pipe.get(), ec, nullptr);
+      auto child = platf::run_command(app.elevated, true, command, working_dir, env, pipe.get(), ec, nullptr);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't spawn ["sv << command << "]: System: "sv << ec.message();
       } else {
@@ -310,85 +380,209 @@ namespace proc {
       }
     }
 
-    if (_app.cmd.empty()) {
+    if (app.cmd.empty()) {
       BOOST_LOG(info) << "Executing [Desktop]"sv;
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      if (_lifecycle_generation != generation) {
+        return -1;
+      }
       placebo = true;
+      _pipe = std::move(pipe);
+      _app_launch_time = std::chrono::steady_clock::now();
     } else {
-      const auto command = prepare_command(_app.cmd);
-      boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(command, _env) :
-                                              boost::filesystem::path(_app.working_dir);
+      const auto command = prepare_command(app.cmd);
+      boost::filesystem::path working_dir = app.working_dir.empty() ?
+                                              find_working_directory(command, env) :
+                                              boost::filesystem::path(app.working_dir);
       BOOST_LOG(info) << "Executing: ["sv << command << "] in ["sv << working_dir << ']';
-      _process = platf::run_command(_app.elevated, true, command, working_dir, _env, _pipe.get(), ec, &_process_group);
+      boost::process::v1::group launched_group;
+      auto launched_process = platf::run_command(app.elevated, true, command, working_dir, env, pipe.get(), ec, &launched_group);
       if (ec) {
         BOOST_LOG(warning) << "Couldn't run ["sv << command << "]: System: "sv << ec.message();
         return -1;
       }
+      bool superseded = false;
+      {
+        std::lock_guard lock {proc_lifecycle_mutex()};
+        if (_lifecycle_generation != generation) {
+          superseded = true;
+        } else {
+          _process = std::move(launched_process);
+          _process_group = std::move(launched_group);
+          _pipe = std::move(pipe);
+          _app_launch_time = std::chrono::steady_clock::now();
+        }
+      }
+      if (superseded) {
+        // A terminate or successor launch claimed the lifecycle while this
+        // process was starting; stop only the process launched here.
+        terminate_process_group(launched_process, launched_group, app.exit_timeout);
+        return -1;
+      }
     }
-
-    _app_launch_time = std::chrono::steady_clock::now();
 
     fg.disable();
 
     return 0;
   }
 
+  std::uint32_t proc_t::app_process_id() {
+    return app_process_identity().process_id;
+  }
+
+  /**
+   * @brief Return the operating-system identity of the launched application root process.
+   */
+  platf::process_identity_t proc_t::app_process_identity() {
+    std::lock_guard lock {proc_lifecycle_mutex()};
+    if (placebo || !_process.valid() || !_process.running()) {
+      return {};
+    }
+#ifdef _WIN32
+    // Query the creation marker from the owned child handle while the lock pins
+    // it to the launched process: even if the PID is reused later, the recorded
+    // baseline still names this process, so revalidation rejects the replacement.
+    FILETIME creation_time {};
+    FILETIME exit_time {};
+    FILETIME kernel_time {};
+    FILETIME user_time {};
+    if (!GetProcessTimes(_process.native_handle(), &creation_time, &exit_time, &kernel_time, &user_time)) {
+      return {};
+    }
+    const auto combined_creation_time = (static_cast<std::uint64_t>(creation_time.dwHighDateTime) << 32) | static_cast<std::uint64_t>(creation_time.dwLowDateTime);
+    if (combined_creation_time == 0) {
+      return {};
+    }
+    return {static_cast<std::uint32_t>(_process.id()), combined_creation_time};
+#else
+    // POSIX backends never select per-process capture, so no creation marker is needed.
+    return {static_cast<std::uint32_t>(_process.id()), 0};
+#endif
+  }
+
   int proc_t::running() {
+    std::lock_guard transition {proc_transition_mutex()};
+    return running_impl();
+  }
+
+  int proc_t::running_impl() {
+    // Snapshot the decision inputs under the lock, then re-verify the
+    // generation before committing. The cleanup claim happens in the same
+    // lock hold as the final decision, so a successor launched in between
+    // is never the process cleaned up. The `wait_all` group query runs
+    // under the lock as well: on POSIX it reaps via `waitpid()`, so leaving
+    // it unlocked would let a concurrent poll's reaper steal the root
+    // child's exit status before `_process.running()` captures it.
+    struct running_snapshot_t {
+      int app_id {};  ///< App id observed in the snapshot.
+      std::uint64_t generation {};  ///< Lifecycle generation observed in the snapshot.
+      bool placebo {};  ///< Whether the Desktop placebo session was active.
+    };
+
+    // On POSIX, reap exited children on every poll (including the snapshot
+    // early returns below), as HEAD did; serialize against `bp::wait()` and
+    // `platf::process_group_running()` via the lifecycle mutex.
 #ifndef _WIN32
-    // On POSIX OSes, we must periodically wait for our children to avoid
-    // them becoming zombies. This must be synchronized carefully with
-    // calls to bp::wait() and platf::process_group_running() which both
-    // invoke waitpid() under the hood.
     auto reaper = util::fail_guard([]() {
+      std::lock_guard lock {proc_lifecycle_mutex()};
       while (waitpid(-1, nullptr, WNOHANG) > 0);
     });
 #endif
 
-    if (placebo) {
-      return _app_id;
-    } else if (_app.wait_all && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
-      // The app is still running if any process in the group is still running
-      return _app_id;
-    } else if (_process.running()) {
-      // The app is still running only if the initial process launched is still running
-      return _app_id;
-    } else if (_app.auto_detach && _process.native_exit_code() == 0 && std::chrono::steady_clock::now() - _app_launch_time < 5s) {
-      BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
-      BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
-      placebo = true;
-      return _app_id;
+    running_snapshot_t snapshot;
+    {
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      snapshot.app_id = _app_id;
+      snapshot.generation = _lifecycle_generation;
+      snapshot.placebo = placebo;
     }
 
-    // Perform cleanup actions now if needed
-    if (_process) {
-      BOOST_LOG(info) << "App exited with code ["sv << _process.native_exit_code() << ']';
-      terminate();
+    if (snapshot.placebo) {
+      return snapshot.app_id;
+    }
+
+    std::optional<termination_snapshot_t> claimed;
+    {
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      if (_lifecycle_generation != snapshot.generation) {
+        // State changed while unlocked; report the current app, if any.
+        return _app_id > 0 ? _app_id : 0;
+      }
+      if (placebo) {
+        return _app_id;
+      } else if (_app.wait_all && _process_group && platf::process_group_running((std::uintptr_t) _process_group.native_handle())) {
+        // The app is still running if any process in the group is still running.
+        return _app_id;
+      } else if (_process.running()) {
+        // The app is still running only if the initial process launched is still running
+        return _app_id;
+      } else if (_app.auto_detach && _process.native_exit_code() == 0 && std::chrono::steady_clock::now() - _app_launch_time < 5s) {
+        BOOST_LOG(info) << "App exited gracefully within 5 seconds of launch. Treating the app as a detached command."sv;
+        BOOST_LOG(info) << "Adjust this behavior in the Applications tab or apps.json if this is not what you want."sv;
+        placebo = true;
+        return _app_id;
+      }
+
+      // Claim cleanup atomically with the decision: the move-out below is
+      // what a later terminate would have raced with a successor launch.
+      if (_process) {
+        BOOST_LOG(info) << "App exited with code ["sv << _process.native_exit_code() << ']';
+        claimed = claim_termination_locked();
+      }
+    }
+
+    if (claimed) {
+      finish_termination(std::move(*claimed));
     }
 
     return 0;
   }
 
   void proc_t::terminate() {
+    std::lock_guard transition {proc_transition_mutex()};
+    terminate_impl();
+  }
+
+  auto proc_t::claim_termination_locked() -> termination_snapshot_t {
+    termination_snapshot_t snapshot;
+    ++_lifecycle_generation;
+    placebo = false;
+    snapshot.process = std::move(_process);
+    _process = boost::process::v1::child();
+    snapshot.process_group = std::move(_process_group);
+    _process_group = boost::process::v1::group();
+    snapshot.app = _app;
+    snapshot.env = _env;
+    snapshot.pipe = std::move(_pipe);
+    _pipe = file_t {};
+    snapshot.prep_completed = std::min(_app_prep_completed, snapshot.app.prep_cmds.size());
+    _app_prep_completed = 0;
+    _app_prep_it = _app_prep_begin;
+    snapshot.exit_timeout = _app.exit_timeout;
+    snapshot.has_run = _app_id > 0;
+    snapshot.app_name = _app.name;
+    _app_id = -1;
+    return snapshot;
+  }
+
+  void proc_t::finish_termination(termination_snapshot_t &&snapshot) {
     input::terminate_gamepads();
     std::error_code ec;
-    placebo = false;
-    terminate_process_group(_process, _process_group, _app.exit_timeout);
-    _process = boost::process::v1::child();
-    _process_group = boost::process::v1::group();
+    terminate_process_group(snapshot.process, snapshot.process_group, snapshot.exit_timeout);
 
-    for (; _app_prep_it != _app_prep_begin; --_app_prep_it) {
-      auto &cmd = *(_app_prep_it - 1);
+    for (std::size_t prep_index = snapshot.prep_completed; prep_index > 0; --prep_index) {
+      const auto &cmd = snapshot.app.prep_cmds[prep_index - 1];
 
       if (cmd.undo_cmd.empty()) {
         continue;
       }
 
       const auto command = prepare_command(cmd.undo_cmd);
-      boost::filesystem::path working_dir = _app.working_dir.empty() ?
-                                              find_working_directory(command, _env) :
-                                              boost::filesystem::path(_app.working_dir);
+      boost::filesystem::path working_dir = snapshot.app.working_dir.empty() ?
+                                              find_working_directory(command, snapshot.env) :
+                                              boost::filesystem::path(snapshot.app.working_dir);
       BOOST_LOG(info) << "Executing Undo Cmd: ["sv << command << ']';
-      auto child = platf::run_command(cmd.elevated, true, command, working_dir, _env, _pipe.get(), ec, nullptr);
+      auto child = platf::run_command(cmd.elevated, true, command, working_dir, snapshot.env, snapshot.pipe.get(), ec, nullptr);
 
       if (ec) {
         BOOST_LOG(warning) << "System: "sv << ec.message();
@@ -402,24 +596,39 @@ namespace proc {
       }
     }
 
-    _pipe.reset();
-
-    bool has_run = _app_id > 0;
+    snapshot.pipe.reset();
 
     // Only show the Stopped notification if we actually have an app to stop
     // Since terminate() is always run when a new app has started
-    if (proc::proc.get_last_run_app_name().length() > 0 && has_run) {
+    if (!snapshot.app_name.empty() && snapshot.has_run) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-      system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
+      system_tray::update_tray_stopped(snapshot.app_name);
 #endif
 
       display_device::revert_configuration();
     }
-
-    _app_id = -1;
   }
 
-  const std::vector<ctx_t> &proc_t::get_apps() const {
+  void proc_t::terminate_impl(std::optional<std::uint64_t> expected_generation) {
+    std::optional<termination_snapshot_t> claimed;
+    {
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      if (expected_generation && *expected_generation != _lifecycle_generation) {
+        return;
+      }
+      claimed = claim_termination_locked();
+    }
+    finish_termination(std::move(*claimed));
+  }
+
+  std::function<platf::process_identity_t()> app_process_identity_provider(proc_t &target) {
+    return [&target]() {
+      return target.app_process_identity();
+    };
+  }
+
+  std::vector<ctx_t> proc_t::get_apps() const {
+    std::lock_guard lock {proc_lifecycle_mutex()};
     return _apps;
   }
 
@@ -432,19 +641,25 @@ namespace proc {
   // Returns default image if image configuration is not set.
   // Returns http content-type header compatible image type.
   std::string proc_t::get_app_image(int app_id) {
-    auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto app) {
-      return app.id == std::to_string(app_id);
-    });
-    auto app_image_path = iter == _apps.end() ? std::string() : iter->image_path;
+    std::string app_image_path;
+    {
+      std::lock_guard lock {proc_lifecycle_mutex()};
+      auto iter = std::find_if(_apps.begin(), _apps.end(), [&app_id](const auto &listed_app) {
+        return listed_app.id == std::to_string(app_id);
+      });
+      app_image_path = iter == _apps.end() ? std::string() : iter->image_path;
+    }
 
     return validate_app_image_path(app_image_path);
   }
 
   std::string proc_t::get_last_run_app_name() {
+    std::lock_guard lock {proc_lifecycle_mutex()};
     return _app.name;
   }
 
   void proc_t::update_apps_and_env(proc_t &&other) {
+    std::lock_guard lock {proc_lifecycle_mutex()};
     if (_app_id > 0 || placebo) {
       // Preserve session-specific environment variables for the running app
       for (const auto &var : _env) {

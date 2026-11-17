@@ -1351,7 +1351,7 @@ namespace nvhttp {
 
     apps.put("<xmlattr>.status_code", 200);
 
-    for (auto &proc : proc::proc.get_apps()) {
+    for (auto &proc : std::as_const(proc::proc).get_apps()) {
       pt::ptree app;
 
       app.put("IsHdrSupported"s, video::active_hevc_mode >= 3 ? 1 : 0);

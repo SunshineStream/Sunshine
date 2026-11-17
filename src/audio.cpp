@@ -221,7 +221,7 @@ namespace audio {
     // creation fails so teardown still releases this session's target.
     {
       std::lock_guard lock {*mutex_};
-      control_->set_capture_target(intent_, 0);
+      control_->set_capture_target(intent_, platf::process_identity_t {0, 0});
       recorded_ = true;
     }
     return control_->microphone(mic_params);

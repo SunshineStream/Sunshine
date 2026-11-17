@@ -6,10 +6,14 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <latch>
 #include <optional>
 #include <system_error>
 #include <thread>
@@ -23,6 +27,7 @@
   #include <Windows.h>
 #else
   // lib includes
+  #include <sys/wait.h>
   #include <unistd.h>
 #endif
 
@@ -653,6 +658,308 @@ TEST_F(ProcessRefreshTest, UpdateAppsAndEnv_UpdatesAppsList) {
   EXPECT_EQ(target.get_apps()[0].name, "AppB");
   EXPECT_EQ(target.get_apps()[1].name, "AppC");
 }
+
+TEST_F(ProcessUpdateTest, AppProcessIdIsZeroForDesktopPlacebo) {
+  EXPECT_EQ(proc::proc.app_process_id(), 0u);
+}
+
+#ifndef _WIN32
+TEST(ProcessTest, AppProcessIdTracksRealChildLifecycle) {
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::ctx_t ctx {};
+  ctx.name = "Sleeper";
+  ctx.id = "7";
+  ctx.cmd = "sleep 30";
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  const auto expected_pid = target.app_process_id();
+  EXPECT_NE(expected_pid, 0u);
+  std::atomic<bool> saw_unexpected_pid {false};
+  std::atomic<unsigned int> reader_calls {0};
+  std::latch reader_ready {1};
+  std::jthread reader {[&](std::stop_token stop_token) {
+    bool signaled = false;
+    while (!stop_token.stop_requested()) {
+      const auto pid = target.app_process_id();
+      if (pid != 0u && pid != expected_pid) {
+        saw_unexpected_pid.store(true);
+      }
+      reader_calls.fetch_add(1);
+      if (!signaled) {
+        signaled = true;
+        reader_ready.count_down();
+      }
+    }
+  }};
+  reader_ready.wait();
+  target.terminate();
+  reader.request_stop();
+  reader.join();
+  EXPECT_GT(reader_calls.load(), 0u);
+  EXPECT_FALSE(saw_unexpected_pid.load());
+  EXPECT_EQ(target.app_process_id(), 0u);
+}
+
+#endif
+
+/**
+ * @brief Verify the provider handed to audio capture tracks the launched app.
+ *
+ * `stream.cpp` passes `proc::app_process_identity_provider(proc::proc)` to
+ * `audio::capture()`; this pins that the provider reports the live child
+ * identity and falls back to {0, 0} after termination.
+ */
+TEST(ProcessTest, AppProcessIdentityProviderTracksRealChildLifecycle) {
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::ctx_t ctx {};
+  ctx.name = "Sleeper";
+  ctx.id = "7";
+#ifdef _WIN32
+  ctx.cmd = R"(cmd.exe /c ping.exe -n 31 127.0.0.1 >NUL)";
+#else
+  ctx.cmd = "sleep 30";
+#endif
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  proc::proc_t target(std::move(env), std::move(apps));
+  const auto provider = proc::app_process_identity_provider(target);
+
+  EXPECT_EQ(provider().process_id, 0u);
+  EXPECT_EQ(provider().creation_time, 0u);
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  EXPECT_NE(provider().process_id, 0u);
+#ifdef _WIN32
+  // The marker is queried from the owned child handle, so it is verifiable for a live child.
+  EXPECT_NE(provider().creation_time, 0u);
+#else
+  // POSIX backends never select per-process capture, so no marker is reported.
+  EXPECT_EQ(provider().creation_time, 0u);
+#endif
+  EXPECT_EQ(provider().process_id, target.app_process_id());
+
+  target.terminate();
+  EXPECT_EQ(provider().process_id, 0u);
+  EXPECT_EQ(provider().creation_time, 0u);
+}
+
+#ifndef _WIN32
+
+/**
+ * @brief Verify running() cleanup after a relaunch never terminates the successor app.
+ */
+TEST(ProcessTest, RunningAfterRelaunchKeepsSuccessorAlive) {
+  boost::process::v1::environment env = boost::this_process::environment();
+  std::vector<proc::ctx_t> apps;
+  for (const auto id : {"7", "8"}) {
+    proc::ctx_t ctx {};
+    ctx.name = "Sleeper";
+    ctx.id = id;
+    ctx.cmd = "sleep 30";
+    apps.push_back(std::move(ctx));
+  }
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  const auto first_pid = target.app_process_id();
+  ASSERT_NE(first_pid, 0u);
+  target.terminate();
+  EXPECT_EQ(target.running(), 0);
+
+  ASSERT_EQ(target.execute(8, launch_session), 0);
+  const auto successor_pid = target.app_process_id();
+  ASSERT_NE(successor_pid, 0u);
+  EXPECT_EQ(target.running(), 8);
+  EXPECT_EQ(target.running(), 8);
+  EXPECT_EQ(target.app_process_id(), successor_pid);
+
+  target.terminate();
+  EXPECT_EQ(target.running(), 0);
+}
+
+/**
+ * @brief Verify a launch overlapping prior cleanup waits for that cleanup to finish.
+ *
+ * Blocks A's undo on a file gate, attempts B's launch concurrently, releases A,
+ * and verifies B's prep setting survives. Without the transition gate, B's prep
+ * runs while A's termination is still blocked, and A's undo then overwrites B's
+ * setting after B starts. Display revert runs in the same finish_termination()
+ * critical section as the undo, so the file ordering also pins that no old
+ * display-revert runs after B starts. Sequential relaunch coverage alone cannot
+ * catch this: it never overlaps cleanup with the next launch.
+ */
+TEST(ProcessTest, OverlappingLaunchWaitsForPriorCleanup) {
+  const auto tmp_root = fs::temp_directory_path() / std::format("sunshine-proc-overlap-{}", ::getpid());
+  const auto setting_file = tmp_root / "setting";
+  const auto gate_file = tmp_root / "gate";
+  const auto undo_started_file = tmp_root / "undo_started";
+  std::error_code fs_ec;
+  fs::remove_all(tmp_root, fs_ec);
+  fs::create_directories(tmp_root, fs_ec);
+  ASSERT_FALSE(fs_ec) << fs_ec.message();
+  const auto remove_tmp = util::fail_guard([&tmp_root]() {
+    std::error_code ec;
+    fs::remove_all(tmp_root, ec);
+  });
+
+  // Prep commands run without a shell, so stage the file writes and the gate
+  // wait as executable scripts instead of `sh -c` one-liners with quotes.
+  const auto do_a_script = tmp_root / "do_a.sh";
+  const auto undo_a_script = tmp_root / "undo_a.sh";
+  const auto do_b_script = tmp_root / "do_b.sh";
+  {
+    std::ofstream {do_a_script} << "#!/bin/sh\necho A-prep > \"" << setting_file.string() << "\"\n";
+    std::ofstream {undo_a_script} << "#!/bin/sh\ntouch \"" << undo_started_file.string() << "\"\nwhile [ ! -f \"" << gate_file.string()
+                                  << "\" ]; do sleep 0.01; done\necho A-undo > \"" << setting_file.string() << "\"\n";
+    std::ofstream {do_b_script} << "#!/bin/sh\necho B-prep > \"" << setting_file.string() << "\"\n";
+  }
+  for (const auto &script : {do_a_script, undo_a_script, do_b_script}) {
+    std::error_code perm_ec;
+    fs::permissions(script, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, perm_ec);
+    ASSERT_FALSE(perm_ec) << perm_ec.message();
+  }
+  proc::ctx_t app_a {};
+  app_a.name = "AppA";
+  app_a.id = "7";
+  app_a.cmd = "sleep 30";
+  app_a.prep_cmds.emplace_back(do_a_script.string(), undo_a_script.string(), false);
+  proc::ctx_t app_b {};
+  app_b.name = "AppB";
+  app_b.id = "8";
+  app_b.cmd = "sleep 30";
+  app_b.prep_cmds.emplace_back(do_b_script.string(), std::string {}, false);
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(app_a));
+  apps.push_back(std::move(app_b));
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  ASSERT_NE(target.app_process_id(), 0u);
+
+  const auto read_setting = [&setting_file]() {
+    std::ifstream input {setting_file};
+    std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    while (!content.empty() && (content.back() == '\n' || content.back() == '\r')) {
+      content.pop_back();
+    }
+    return content;
+  };
+  ASSERT_EQ(read_setting(), "A-prep");
+
+  // Terminate A in the background: its undo signals start, then blocks on the gate.
+  std::jthread terminate_thread {[&target]() {
+    target.terminate();
+  }};
+  bool undo_started = false;
+  for (int attempt = 0; attempt < 500 && !undo_started; ++attempt) {
+    std::error_code ec;
+    if (fs::exists(undo_started_file, ec) && !ec) {
+      undo_started = true;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  // Always release the gate so the background threads can finish even on failure.
+  auto release_gate = util::fail_guard([&gate_file]() {
+    std::ofstream {gate_file};
+  });
+  ASSERT_TRUE(undo_started) << "A's undo did not start; cannot overlap B's launch";
+
+  // Attempt B's launch while A's cleanup is blocked. The transition gate must hold it.
+  std::atomic<bool> b_attempting {false};
+  std::atomic<bool> b_launch_done {false};
+  std::atomic<int> b_launch_result {-999};
+  std::latch b_started {1};
+  std::jthread b_thread {[&target, &launch_session, &b_attempting, &b_launch_done, &b_launch_result, &b_started]() {
+    b_attempting.store(true);
+    b_started.count_down();
+    const int result = target.execute(8, launch_session);
+    b_launch_result.store(result);
+    b_launch_done.store(true);
+  }};
+  b_started.wait();
+  ASSERT_TRUE(b_attempting.load());
+  // Give B a chance to (incorrectly) run its prep while A is still blocked.
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  EXPECT_FALSE(b_launch_done.load()) << "B's launch finished while A's cleanup was still blocked";
+  EXPECT_EQ(read_setting(), "A-prep") << "B's prep ran before A's undo finished";
+
+  // Release A's undo; both threads must then complete with B's setting intact.
+  {
+    std::ofstream gate {gate_file};
+    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the undo gate";
+  }
+  terminate_thread.join();
+  b_thread.join();
+  release_gate.disable();
+  EXPECT_EQ(b_launch_result.load(), 0);
+  EXPECT_EQ(read_setting(), "B-prep") << "A's undo overwrote B's prep after B started";
+  EXPECT_EQ(target.running(), 8);
+  EXPECT_NE(target.app_process_id(), 0u);
+}
+
+/**
+ * @brief Verify `running()` reaps exited children on the Desktop placebo poll.
+ *
+ * The placebo early return in `proc_t::running_impl()` must still run the
+ * POSIX `waitpid()` reaper; otherwise exited detached children linger as
+ * zombies for the whole Desktop session.
+ */
+TEST(ProcessTest, RunningReapsExitedChildOnPlaceboPoll) {
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::ctx_t ctx {};
+  ctx.name = "Desktop";
+  ctx.id = "42";
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  ASSERT_EQ(target.execute(42, launch_session), 0);
+  const auto cleanup = util::fail_guard([&target]() {
+    target.terminate();
+  });
+  ASSERT_EQ(target.running(), 42);
+
+  const pid_t child = fork();
+  ASSERT_NE(child, -1);
+  if (child == 0) {
+    _exit(0);
+  }
+  const auto reap_sacrificial = util::fail_guard([child]() {
+    // Test-local cleanup only; never masks the assertion below.
+    while (waitpid(child, nullptr, WNOHANG) > 0);
+  });
+
+  // Wait until the sacrificial child is an unreaped zombie, peeking with
+  // `waitid()`/`WNOWAIT` so the test itself never reaps it.
+  bool is_zombie = false;
+  for (int attempt = 0; attempt < 1000 && !is_zombie; ++attempt) {
+    siginfo_t info {};
+    if (waitid(P_PID, static_cast<id_t>(child), &info, WEXITED | WNOHANG | WNOWAIT) == 0 && info.si_pid == child) {
+      is_zombie = true;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+  ASSERT_TRUE(is_zombie) << "sacrificial child did not become a zombie";
+
+  EXPECT_EQ(target.running(), 42);
+
+  siginfo_t info {};
+  errno = 0;
+  EXPECT_EQ(waitid(P_PID, static_cast<id_t>(child), &info, WEXITED | WNOHANG | WNOWAIT), -1);
+  EXPECT_EQ(errno, ECHILD) << "running() left the exited child as a zombie";
+}
+#endif
 
 TEST_F(ProcessUpdateTest, UpdateAppsAndEnv_PreservesRunningState) {
   proc::proc.update_apps_and_env(buildNewSource());
