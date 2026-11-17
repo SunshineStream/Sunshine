@@ -43,7 +43,7 @@ const emitTrayIconsPlugin = {
         });
 
         if (process.platform === 'darwin') {
-            for (const name of ['sunshine', 'playing', 'pausing', 'locked']) {
+            for (const name of ['sunshine', 'playing', 'pausing']) {
                 const fileName = `macos-tray-${name}.svg`;
                 this.emitFile({
                     type: 'asset',

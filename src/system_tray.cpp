@@ -34,13 +34,9 @@
   #endif
   /**
    * @def TRAY_ICON_LOCKED
-   * @brief Path to the system tray icon used for pairing requests.
+   * @brief Path to the notification icon used for pairing requests.
    */
-  #ifdef __APPLE__
-    #define TRAY_ICON_LOCKED WEB_DIR "images/macos-tray-locked.svg"
-  #else
-    #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
-  #endif
+  #define TRAY_ICON_LOCKED WEB_DIR "images/sunshine-locked.svg"
   /**
    * @def TRAY_ICON_VIRTUALHID
    * @brief Path to the Virtual HID Broker notification icon.
@@ -692,6 +688,25 @@ namespace system_tray {
   }
 
   /**
+   * @brief Get the colored artwork for a tray state notification.
+   * @param icon_index Index of the state in the tray icon paths.
+   * @return Path to the notification artwork.
+   */
+  static const char *notification_icon_path(const std::size_t icon_index) {
+  #ifdef __APPLE__
+    constexpr std::array notification_icons {
+      WEB_DIR "images/logo-sunshine.svg",
+      TRAY_ICON_LOCKED,
+      WEB_DIR "images/sunshine-playing.svg",
+      WEB_DIR "images/sunshine-pausing.svg",
+    };
+    return GetResourcePath(notification_icons[icon_index]);
+  #else
+    return tray.allIconPaths[icon_index];
+  #endif
+  }
+
+  /**
    * @brief Resolve tray icons against the current executable or application bundle.
    */
   void resolve_tray_icon_paths() {
@@ -809,7 +824,12 @@ namespace system_tray {
       if (stop_token.stop_requested()) {
         return 1;
       }
-      if (tray_init(&tray) < 0) {
+  #ifdef __APPLE__
+      const int result = tray_init_with_options(&tray, TRAY_OPTION_TEMPLATE_ICON);
+  #else
+      const int result = tray_init(&tray);
+  #endif
+      if (result < 0) {
         BOOST_LOG(warning) << "Failed to create system tray"sv;
         return 1;
       }
@@ -881,7 +901,7 @@ namespace system_tray {
     static std::string msg = std::format("Streaming started for {}", app_name);
     tray.notification_text = msg.c_str();
     tray.tooltip = msg.c_str();
-    tray.notification_icon = tray.allIconPaths[2];
+    tray.notification_icon = notification_icon_path(2);
     tray_update(&tray);
   }
 
@@ -903,7 +923,7 @@ namespace system_tray {
     tray.notification_title = "Stream Paused";
     tray.notification_text = msg.c_str();
     tray.tooltip = msg.c_str();
-    tray.notification_icon = tray.allIconPaths[3];
+    tray.notification_icon = notification_icon_path(3);
     tray_update(&tray);
   }
 
@@ -922,7 +942,7 @@ namespace system_tray {
 
     static std::string msg = std::format("Application {} successfully stopped", app_name);
     tray.icon = tray.allIconPaths[0];
-    tray.notification_icon = tray.allIconPaths[0];
+    tray.notification_icon = notification_icon_path(0);
     tray.notification_title = "Application Stopped";
     tray.notification_text = msg.c_str();
     tray.tooltip = PROJECT_NAME;
@@ -944,7 +964,7 @@ namespace system_tray {
     tray.icon = tray.allIconPaths[0];
     tray.notification_title = "Incoming Pairing Request";
     tray.notification_text = "Click here to complete the pairing process";
-    tray.notification_icon = tray.allIconPaths[1];
+    tray.notification_icon = notification_icon_path(1);
     tray.tooltip = PROJECT_NAME;
     tray.notification_cb = []() {
       launch_ui("/pin");

@@ -140,7 +140,7 @@ if(SUNSHINE_ENABLE_TRAY AND (WIN32 OR APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux
     endforeach()
 
     if(APPLE)
-        foreach(icon IN ITEMS sunshine playing pausing locked)
+        foreach(icon IN ITEMS sunshine playing pausing)
             configure_file(
                     "${CMAKE_SOURCE_DIR}/src_assets/macos/tray/macos-tray-${icon}.svg"
                     "${SUNSHINE_TRAY_TEST_ICON_DESTINATION_DIR}/macos-tray-${icon}.svg"
