@@ -7,10 +7,12 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -249,6 +251,22 @@ TEST(AudioCaptureIntentTest, ResolvesIntentFromConfig) {
   EXPECT_EQ(resolve_audio_capture_intent(true, ""), intent::host_and_client);
   EXPECT_EQ(resolve_audio_capture_intent(false, "eq-sink"), intent::pinned_sink);
   EXPECT_EQ(resolve_audio_capture_intent(true, "eq-sink"), intent::pinned_sink);
+}
+
+/**
+ * @brief Process capture must keep silence first and let a pinned sink win.
+ */
+TEST(AudioCaptureProcessTreeTest, SelectsProcessTreeFromIntentSupportAndPid) {
+  using intent = platf::audio_capture_intent_e;
+
+  // Client-only never selects process capture, even with a PID.
+  EXPECT_FALSE(should_capture_process_tree(intent::client_only, true, 1234));
+  // Host-and-client selects the process tree only when supported and a PID is known.
+  EXPECT_TRUE(should_capture_process_tree(intent::host_and_client, true, 1234));
+  EXPECT_FALSE(should_capture_process_tree(intent::host_and_client, true, 0));
+  EXPECT_FALSE(should_capture_process_tree(intent::host_and_client, false, 1234));
+  // A pinned sink always wins.
+  EXPECT_FALSE(should_capture_process_tree(intent::pinned_sink, true, 1234));
 }
 
 /**
@@ -564,6 +582,12 @@ namespace {
       if (fail_microphone) {
         return nullptr;
       }
+      if (retarget_once) {
+        // Model another session replacing the shared target while this
+        // microphone was being created without the outer mutex held.
+        retarget_once = false;
+        record_capture_target(set_intent, set_process_id + 1);
+      }
       return std::make_unique<stub_mic_t>();
     }
 
@@ -594,6 +618,7 @@ namespace {
     int set_sink_status = 0;  ///< Status returned by set_sink().
     int capture_sink_status = 0;  ///< Status returned by capture_sink().
     bool fail_microphone = false;  ///< Whether microphone() returns nullptr.
+    bool retarget_once = false;  ///< Whether the next microphone() replaces the recorded target mid-creation.
     std::vector<std::string> calls;  ///< Recorded call sequence in invocation order.
     platf::audio_capture_intent_e set_intent = platf::audio_capture_intent_e::client_only;  ///< Intent from the last refresh.
     std::uint32_t set_process_id = 0;  ///< PID from the last refresh.
@@ -735,46 +760,88 @@ TEST(CaptureSinkDispatchTest, SwapWithoutRestoreSkipsSinkCall) {
 }
 
 /**
- * @brief The endpoint target must be recorded ahead of microphone creation.
+ * @brief A provided identity must reach set_capture_target ahead of microphone creation.
  *
  * Fail-without-fix: if the guard skips the refresh (or creates the microphone
  * first), the backend captures a stale target from a previous session instead
- * of this session's intent, and the set-before-microphone ordering below breaks.
+ * of the launched game, and the set-before-microphone ordering below breaks.
  */
-TEST(CaptureRefreshTest, EndpointTargetIsRecordedBeforeMicrophone) {
+TEST(CaptureRefreshTest, ProviderIdentityIsRecordedBeforeMicrophone) {
   recording_audio_control_t control;
   std::mutex mutex;
   session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {1234u, 91011u};
+  };
 
-  auto mic = target.create_microphone(make_mic_params());
+  auto mic = target.create_microphone(true, provider, make_mic_params());
 
   EXPECT_TRUE(static_cast<bool>(mic));
   EXPECT_TRUE(target.recorded());
+  EXPECT_EQ(target.process_id(), 1234u);
   EXPECT_EQ(control.set_intent, platf::audio_capture_intent_e::host_and_client);
-  EXPECT_EQ(control.set_process_id, 0u);
+  EXPECT_EQ(control.set_process_id, 1234u);
+  EXPECT_EQ(control.set_creation_time, 91011u);
   EXPECT_LT(control.call_index("set_capture_target"), control.call_index("microphone"));
 }
 
 /**
- * @brief Endpoint capture must record PID 0 for every intent.
+ * @brief The handed-off creation marker must reach the backend verbatim.
  *
- * Fail-without-fix: if the guard records anything but the endpoint target,
- * a session captures a process it never selected instead of the endpoint,
- * defeating silence or the configured sink pin.
+ * The marker is the backend's PID-reuse baseline: it is captured from the
+ * owned child handle under the process lifecycle lock, so the backend stores
+ * it without re-querying. Fail-without-fix: if the guard drops the marker
+ * (or passes a zeroed bundle), the backend records an unverifiable baseline
+ * and every process-capture session silently degrades to endpoint capture.
+ */
+TEST(CaptureRefreshTest, ProviderIdentityReachesBackendVerbatim) {
+  recording_audio_control_t control;
+  std::mutex mutex;
+  session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {4242u, 0xBEEFCAFEu};
+  };
+
+  auto mic = target.create_microphone(true, provider, make_mic_params());
+
+  ASSERT_TRUE(static_cast<bool>(mic));
+  EXPECT_EQ(control.set_process_id, 4242u);
+  EXPECT_EQ(control.set_creation_time, 0xBEEFCAFEu);
+}
+
+/**
+ * @brief Endpoint capture must record a zeroed identity for every non-process case.
+ *
+ * Fail-without-fix: if the guard records the raw provider PID without the
+ * should_capture_process_tree() gate, a client-only or pinned session (or an
+ * unsupported backend) captures the game process instead of the endpoint,
+ * defeating silence or the configured sink pin. Gating the PID while leaking
+ * the marker would likewise name no process at all.
  */
 TEST(CaptureRefreshTest, EndpointCasesRecordZeroPid) {
   using intent = platf::audio_capture_intent_e;
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {1234u, 91011u};
+  };
+  const std::function<platf::process_identity_t()> empty_provider;
 
-  for (const auto case_intent : {intent::host_and_client, intent::client_only, intent::pinned_sink}) {
+  for (const auto &[case_intent, supported, case_provider] : {
+         std::tuple {intent::host_and_client, true, empty_provider},
+         std::tuple {intent::host_and_client, false, provider},
+         std::tuple {intent::client_only, true, provider},
+         std::tuple {intent::pinned_sink, true, provider},
+       }) {
     recording_audio_control_t control;
     std::mutex mutex;
     session_capture_target_t target {control, case_intent, mutex};
 
-    auto mic = target.create_microphone(make_mic_params());
+    auto mic = target.create_microphone(supported, case_provider, make_mic_params());
 
     EXPECT_TRUE(static_cast<bool>(mic));
     EXPECT_TRUE(target.recorded());
+    EXPECT_EQ(target.process_id(), 0u);
     EXPECT_EQ(control.set_process_id, 0u);
+    EXPECT_EQ(control.set_creation_time, 0u);
     EXPECT_EQ(control.set_intent, case_intent);
     EXPECT_LT(control.call_index("set_capture_target"), control.call_index("microphone"));
   }
@@ -792,18 +859,45 @@ TEST(CaptureRefreshTest, MicrophoneFailureStillRecordsTarget) {
   recording_audio_control_t control;
   control.fail_microphone = true;
   std::mutex mutex;
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {1234u, 91011u};
+  };
 
   {
     session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
 
-    EXPECT_FALSE(static_cast<bool>(target.create_microphone(make_mic_params())));
+    EXPECT_FALSE(static_cast<bool>(target.create_microphone(true, provider, make_mic_params())));
     EXPECT_TRUE(target.recorded());
-    EXPECT_EQ(control.set_process_id, 0u);
+    EXPECT_EQ(target.process_id(), 1234u);
+    EXPECT_EQ(control.set_process_id, 1234u);
   }
 
   // The failed refresh still owns a target, so scope exit must release it.
   EXPECT_EQ(control.clear_intent, platf::audio_capture_intent_e::host_and_client);
-  EXPECT_EQ(control.clear_process_id, 0u);
+  EXPECT_EQ(control.clear_process_id, 1234u);
+}
+
+/**
+ * @brief A target replaced during microphone creation must discard that microphone and retry.
+ *
+ * Microphone creation no longer runs under the outer mutex, so the
+ * post-creation re-check is what preserves the refresh/microphone pairing.
+ */
+TEST(CaptureRefreshTest, RetargetDuringCreationDiscardsAndRetries) {
+  recording_audio_control_t control;
+  control.retarget_once = true;
+  std::mutex mutex;
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {1234u, 91011u};
+  };
+  session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+
+  auto mic = target.create_microphone(true, provider, make_mic_params());
+
+  EXPECT_TRUE(static_cast<bool>(mic));
+  EXPECT_EQ(std::count(control.calls.begin(), control.calls.end(), "set_capture_target"), 2);
+  EXPECT_EQ(std::count(control.calls.begin(), control.calls.end(), "microphone"), 2);
+  EXPECT_EQ(control.snapshot_capture_target_record().process_id, 1234u);
 }
 
 /**
@@ -853,17 +947,20 @@ TEST(CaptureReleaseTest, SkipsClearWhenNothingRecorded) {
 /**
  * @brief Teardown after a refresh must release exactly the recorded target.
  *
- * Fail-without-fix: if the guard releases a stale target instead of the last
- * recorded one, the backend keeps the dead session's target (leaking capture
- * state) or wipes a survivor's newer target.
+ * Fail-without-fix: if the guard releases a stale or zeroed PID instead of
+ * the last recorded one, the backend's clear-if-match keeps the dead session's
+ * target (leaking process capture) or wipes a survivor's newer target.
  */
 TEST(CaptureReleaseTest, ClearsRecordedTarget) {
   recording_audio_control_t control;
   std::mutex mutex;
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {1234u, 91011u};
+  };
 
   {
     session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
-    auto mic = target.create_microphone(make_mic_params());
+    auto mic = target.create_microphone(true, provider, make_mic_params());
     ASSERT_TRUE(static_cast<bool>(mic));
     // Release lands on scope exit, so only the refresh and creation run here.
     ASSERT_EQ(control.calls.size(), 2U);
@@ -872,7 +969,7 @@ TEST(CaptureReleaseTest, ClearsRecordedTarget) {
   ASSERT_EQ(control.calls.size(), 3U);
   EXPECT_EQ(control.calls[2], "clear_capture_target");
   EXPECT_EQ(control.clear_intent, platf::audio_capture_intent_e::host_and_client);
-  EXPECT_EQ(control.clear_process_id, 0u);
+  EXPECT_EQ(control.clear_process_id, 1234u);
 }
 
 /**
@@ -886,6 +983,9 @@ TEST(CaptureOrchestrationTest, StartupSequenceRunsDispatchRefreshCreateAndReleas
   for (const auto &routing : {make_capture_routing(), make_swap_routing()}) {
     recording_audio_control_t control;
     std::mutex mutex;
+    const std::function<platf::process_identity_t()> provider = [] {
+      return platf::process_identity_t {1234u, 91011u};
+    };
     audio_ctx_t ctx {};
 
     {
@@ -894,7 +994,7 @@ TEST(CaptureOrchestrationTest, StartupSequenceRunsDispatchRefreshCreateAndReleas
       ctx.restore_sink = routing.restore_at_teardown;
       EXPECT_EQ(ctx.restore_sink, routing.restore_at_teardown);
       ASSERT_TRUE(select_audio_capture_sink(control, routing));
-      auto mic = target.create_microphone(make_mic_params());
+      auto mic = target.create_microphone(true, provider, make_mic_params());
       ASSERT_TRUE(static_cast<bool>(mic));
       ASSERT_EQ(control.calls.size(), 3U);
     }
@@ -905,7 +1005,7 @@ TEST(CaptureOrchestrationTest, StartupSequenceRunsDispatchRefreshCreateAndReleas
     EXPECT_EQ(control.calls[1], "set_capture_target");
     EXPECT_EQ(control.calls[2], "microphone");
     EXPECT_EQ(control.calls[3], "clear_capture_target");
-    EXPECT_EQ(control.clear_process_id, 0u);
+    EXPECT_EQ(control.clear_process_id, 1234u);
   }
 }
 
@@ -1242,6 +1342,32 @@ TEST(BaseRecordTest, MacOsLikeNoOpLeavesRecordUntouched) {
   control.set_capture_target(platf::audio_capture_intent_e::host_and_client, platf::process_identity_t {1234, 999});
   control.clear_capture_target(platf::audio_capture_intent_e::host_and_client, 1234);
   EXPECT_TRUE(control.snapshot_recorded_sink().empty());
+  EXPECT_EQ(control.snapshot_recorded_capture_target().intent, platf::audio_capture_intent_e::client_only);
+  EXPECT_EQ(control.snapshot_recorded_capture_target().process_id, 0u);
+}
+
+/**
+ * @brief The session guard must refresh and release the real base record.
+ *
+ * Fail-without-fix: if the guard talks to a mirror instead of the shared
+ * store, a failed microphone creation leaks the recorded target and the next
+ * session inherits a target this session recorded but never owned.
+ */
+TEST(BaseRecordTest, SessionGuardReleasesRealBaseRecord) {
+  recorded_audio_control_t control;
+  std::mutex mutex;
+  const std::function<platf::process_identity_t()> provider = [] {
+    return platf::process_identity_t {1234u, 91011u};
+  };
+
+  {
+    session_capture_target_t target {control, platf::audio_capture_intent_e::host_and_client, mutex};
+    auto mic = target.create_microphone(true, provider, make_mic_params());
+    ASSERT_TRUE(static_cast<bool>(mic));
+    EXPECT_TRUE(target.recorded());
+    EXPECT_EQ(control.snapshot_recorded_capture_target().process_id, 1234u);
+  }
+
   EXPECT_EQ(control.snapshot_recorded_capture_target().intent, platf::audio_capture_intent_e::client_only);
   EXPECT_EQ(control.snapshot_recorded_capture_target().process_id, 0u);
 }

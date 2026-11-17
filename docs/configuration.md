@@ -963,7 +963,10 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             @note{Platform behavior:<br>
             <strong>Windows:</strong> captures the target endpoint directly and is hands-off, so an external
             router such as VoiceMeeter or GoXLR keeps owning endpoint defaults and formats; it also skips the
-            Steam driver install, the startup default-device reset, and default reinstallation.<br>
+            Steam driver install, the startup default-device reset, and default reinstallation. When no
+            <code>audio_sink</code> is configured and Sunshine launched the application, Windows may instead
+            capture the launched process tree with WASAPI process loopback, so other applications stay out of
+            the stream; endpoint capture remains the fallback.<br>
             <strong>Linux:</strong> captures the configured sink's monitor, or the host sink's monitor when
             none is configured, and adopts pre-existing null sinks instead of unloading them.<br>
             <strong>FreeBSD:</strong> captures the configured sink's monitor, or the host sink's monitor when

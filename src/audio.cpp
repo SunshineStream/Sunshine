@@ -38,10 +38,11 @@ namespace audio {
    * @brief Serializes capture-target refresh, microphone creation, and target release across concurrent sessions.
    *
    * All capture() threads share one audio control. Each session's
-   * session_capture_target_t guard holds this mutex across the refresh
-   * and the exit clear, but never across microphone creation itself,
-   * which can wait on endpoint activation; holding the lock across it
-   * would stall every other session's teardown.
+   * session_capture_target_t guard holds this mutex across the refresh,
+   * the post-creation re-check, and the exit clear, but never across
+   * microphone creation itself, which can wait on endpoint activation;
+   * the re-check keeps one session from keeping a microphone created
+   * after another session replaced the shared target.
    *
    * Lock order: this outer mutex is always taken before the backend-internal
    * `platf::audio_control_t::capture_state_mutex_`, acquired inside
@@ -207,24 +208,50 @@ namespace audio {
       return;
     }
     std::lock_guard lock {*mutex_};
-    control_->clear_capture_target(intent_, 0);
+    control_->clear_capture_target(intent_, process_id_);
   }
 
   /**
-   * @brief Refresh the endpoint capture target, then create the microphone for it.
+   * @brief Refresh the capture target, then create the microphone for it.
    */
-  std::unique_ptr<platf::mic_t> session_capture_target_t::create_microphone(const platf::microphone_params_t &mic_params) {
-    // Refresh the endpoint target before every microphone creation. Only the
-    // refresh runs under the lock: microphone creation can wait on endpoint
-    // activation, and holding the lock across it would stall every other
-    // session's teardown. The refresh is recorded even when microphone
-    // creation fails so teardown still releases this session's target.
-    {
+  std::unique_ptr<platf::mic_t> session_capture_target_t::create_microphone(
+    bool process_capture_supported,
+    const std::function<platf::process_identity_t()> &capture_process_identity_provider,
+    const platf::microphone_params_t &mic_params
+  ) {
+    // Refresh the capture target before every microphone creation so a
+    // process that appears or exits between reinitializations is reflected.
+    // Only the refresh runs under the lock: microphone creation can wait
+    // seconds on endpoint activation, and holding the lock across it would
+    // stall every other session's teardown. The refresh is recorded even
+    // when microphone creation fails so teardown still releases this
+    // session's target. After creation the recorded target is re-checked
+    // under the lock; a microphone created while another session replaced
+    // the target is discarded and creation retries once with a fresh
+    // refresh, preserving the original refresh/microphone pairing.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      const auto identity = capture_process_identity_provider ? capture_process_identity_provider() : platf::process_identity_t {};
+      // Gate the whole bundle, not just the PID: the handed-off creation
+      // marker is the backend's revalidation baseline, and a marker paired
+      // with a zeroed PID would name no process at all.
+      const auto effective_identity = should_capture_process_tree(intent_, process_capture_supported, identity.process_id) ? identity : platf::process_identity_t {};
+      {
+        std::lock_guard lock {*mutex_};
+        process_id_ = effective_identity.process_id;
+        control_->set_capture_target(intent_, effective_identity);
+        recorded_ = true;
+      }
+      auto mic = control_->microphone(mic_params);
+      if (!process_capture_supported) {
+        return mic;
+      }
       std::lock_guard lock {*mutex_};
-      control_->set_capture_target(intent_, platf::process_identity_t {0, 0});
-      recorded_ = true;
+      if (control_->snapshot_capture_target_record().matches(intent_, process_id_)) {
+        return mic;
+      }
+      BOOST_LOG(info) << "Capture target changed during microphone creation; discarding and retrying"sv;
     }
-    return control_->microphone(mic_params);
+    return nullptr;
   }
 
   /**
@@ -235,9 +262,10 @@ namespace audio {
    * the resolved routing, and one session_capture_target_t guard owns the
    * shared target for the session. Both microphone call sites (startup and
    * reinitialization) are the same single guard call, and guard destruction
-   * releases the shared target only when a refresh ran.
+   * releases the shared target only when it still holds this session's intent
+   * and PID.
    */
-  void capture(safe::mail_t mail, config_t config, stream::session_t *channel_data) {
+  void capture(safe::mail_t mail, config_t config, stream::session_t *channel_data, std::function<platf::process_identity_t()> capture_process_identity_provider) {
     auto shutdown_event = mail->event<bool>(mail::shutdown);
     if (!config::audio.stream) {
       shutdown_event->view();
@@ -267,6 +295,7 @@ namespace audio {
     }
 
     const auto capture_intent = resolve_audio_capture_intent(config::audio.keep_default_sink, config::audio.sink);
+    const auto process_capture_supported = control->supports_process_capture();
 
     // One RAII owner for the session's shared capture target. Destruction
     // releases exactly the last recorded target, or nothing when no refresh
@@ -293,7 +322,8 @@ namespace audio {
                       << "], restore_at_teardown ["sv << routing.restore_at_teardown
                       << "], keep_default_sink requested ["sv << config::audio.keep_default_sink
                       << "], keep_default_sink supported ["sv << control->supports_keep_default_sink()
-                      << "], capture intent ["sv << audio_capture_intent_name(capture_intent) << ']';
+                      << "], capture intent ["sv << audio_capture_intent_name(capture_intent)
+                      << "], process capture supported ["sv << process_capture_supported << ']';
       // If the selected sink cannot be selected, there is no audio to capture.
       if (!select_audio_capture_sink(*control, routing)) {
         return;
@@ -311,7 +341,7 @@ namespace audio {
       continuous_audio,
       host_audio
     };
-    auto mic = capture_target.create_microphone(mic_params);
+    auto mic = capture_target.create_microphone(process_capture_supported, capture_process_identity_provider, mic_params);
     if (!mic) {
       return;
     }
@@ -348,7 +378,7 @@ namespace audio {
           BOOST_LOG(info) << "Reinitializing audio capture"sv;
           mic.reset();
           do {
-            mic = capture_target.create_microphone(mic_params);
+            mic = capture_target.create_microphone(process_capture_supported, capture_process_identity_provider, mic_params);
             if (!mic) {
               BOOST_LOG(warning) << "Couldn't re-initialize audio input"sv;
             }

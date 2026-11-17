@@ -247,6 +247,24 @@ namespace audio {
   }
 
   /**
+   * @brief Whether the launched process tree should be captured directly.
+   *
+   * Silence takes priority for client-only intent: per-process capture is
+   * only selected for host-and-client intent, where capturing the game
+   * process must not defeat a silent route. A pinned sink always wins,
+   * because a configured sink resolves to pinned intent.
+   *
+   * @param intent User-level capture intent.
+   * @param process_capture_supported Whether the backend captures a process tree.
+   * @param process_id Launched application PID, or 0 when unavailable.
+   * @return True when the backend should capture the process tree.
+   */
+  [[nodiscard]] constexpr bool should_capture_process_tree(platf::audio_capture_intent_e intent, bool process_capture_supported, std::uint32_t process_id) noexcept {
+    using enum platf::audio_capture_intent_e;
+    return intent == host_and_client && process_capture_supported && process_id != 0;
+  }
+
+  /**
    * @brief Select the capture sink for startup without touching the capture target.
    *
    * Encodes the swap-vs-capture dispatch used by capture(): the swap path swaps
@@ -264,12 +282,12 @@ namespace audio {
    * @brief RAII owner of one session's shared capture target.
    *
    * Sessions share one audio control. Every create_microphone() call refreshes
-   * the endpoint target (set_capture_target()) under one lock acquisition,
-   * so a refresh can never be dropped or interleaved with another session's
-   * refresh, then creates the microphone without holding the lock. Destruction releases exactly
-   * the last recorded target via clear_capture_target(), or nothing when no
-   * refresh ever ran (for example after an aborted sink selection), so one
-   * session cannot wipe another session's recorded target on its way out.
+   * the target (set_capture_target()) and creates the microphone under one
+   * lock acquisition, so a refresh can never be dropped or interleaved with
+   * another session's refresh. Destruction releases exactly the last recorded
+   * target via clear_capture_target(), or nothing when no refresh ever ran
+   * (for example after an aborted sink selection), so one session cannot wipe
+   * another session's recorded target on its way out.
    *
    * The referenced control and mutex must outlive the guard.
    */
@@ -293,18 +311,25 @@ namespace audio {
     session_capture_target_t &operator=(const session_capture_target_t &) = delete;
 
     /**
-     * @brief Refresh the endpoint capture target, then create the microphone for it.
+     * @brief Refresh the capture target, then create the microphone for it.
      *
      * The refresh always runs before microphone creation so a dropped refresh
      * is observable: set_capture_target() is called on every invocation,
      * including reinitializations and microphone failures. The lock covers
-     * only the refresh, never microphone creation itself. The endpoint form
-     * always records PID 0: per-process capture is not selected here.
+     * only the refresh and the post-creation re-check, never microphone
+     * creation itself; when the recorded target changed during creation the
+     * microphone is discarded and creation retries once.
      *
+     * @param process_capture_supported Whether the backend captures a process tree.
+     * @param capture_process_identity_provider Optional callable returning the launched application identity ({0, 0} for endpoint capture).
      * @param mic_params Microphone capture parameters for the requested layout.
      * @return Microphone capture object, or nullptr when creation failed.
      */
-    [[nodiscard]] std::unique_ptr<platf::mic_t> create_microphone(const platf::microphone_params_t &mic_params);
+    [[nodiscard]] std::unique_ptr<platf::mic_t> create_microphone(
+      bool process_capture_supported,
+      const std::function<platf::process_identity_t()> &capture_process_identity_provider,
+      const platf::microphone_params_t &mic_params
+    );
 
     /**
      * @brief Get the capture intent owned by this session.
@@ -312,6 +337,14 @@ namespace audio {
      */
     [[nodiscard]] platf::audio_capture_intent_e intent() const noexcept {
       return intent_;
+    }
+
+    /**
+     * @brief Get the PID from the last refresh, or 0 when no refresh ran.
+     * @return Effective PID recorded via set_capture_target().
+     */
+    [[nodiscard]] std::uint32_t process_id() const noexcept {
+      return process_id_;
     }
 
     /**
@@ -326,6 +359,7 @@ namespace audio {
     platf::audio_control_t *control_;  ///< Non-owning controller holding the shared capture target; must outlive the guard.
     platf::audio_capture_intent_e intent_;  ///< Capture intent recorded by this session.
     std::mutex *mutex_;  ///< Non-owning mutex serializing refresh, creation, and release; typically audio::capture_target_mutex().
+    std::uint32_t process_id_ = 0;  ///< PID from the last refresh, or 0 for endpoint capture.
     bool recorded_ = false;  ///< Whether this session called set_capture_target().
   };
 
@@ -348,8 +382,9 @@ namespace audio {
    * @param mail Mailbox used to publish encoded audio packets.
    * @param config Audio capture and encoder settings.
    * @param channel_data Stream session that receives the encoded packets.
+   * @param capture_process_identity_provider Optional callable returning the launched application identity ({0, 0} for endpoint capture).
    */
-  void capture(safe::mail_t mail, config_t config, stream::session_t *channel_data);
+  void capture(safe::mail_t mail, config_t config, stream::session_t *channel_data, std::function<platf::process_identity_t()> capture_process_identity_provider = {});
 
   /**
    * @brief Get the reference to the audio context.
