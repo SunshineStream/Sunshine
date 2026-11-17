@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <future>
 #include <latch>
 #include <optional>
 #include <system_error>
@@ -27,6 +28,7 @@
   #include <Windows.h>
 #else
   // lib includes
+  #include <signal.h>
   #include <sys/wait.h>
   #include <unistd.h>
 #endif
@@ -678,16 +680,22 @@ TEST(ProcessTest, AppProcessIdTracksRealChildLifecycle) {
   const auto expected_pid = target.app_process_id();
   EXPECT_NE(expected_pid, 0u);
   std::atomic<bool> saw_unexpected_pid {false};
-  std::atomic<unsigned int> reader_calls {0};
+  std::atomic<bool> saw_dead_pid {false};
+  std::atomic<unsigned int> nonzero_samples {0};
   std::latch reader_ready {1};
   std::jthread reader {[&](std::stop_token stop_token) {
     bool signaled = false;
     while (!stop_token.stop_requested()) {
       const auto pid = target.app_process_id();
-      if (pid != 0u && pid != expected_pid) {
-        saw_unexpected_pid.store(true);
+      if (pid != 0u) {
+        nonzero_samples.fetch_add(1);
+        if (pid != expected_pid) {
+          saw_unexpected_pid.store(true);
+        }
+        if (::kill(static_cast<pid_t>(pid), 0) != 0) {
+          saw_dead_pid.store(true);
+        }
       }
-      reader_calls.fetch_add(1);
       if (!signaled) {
         signaled = true;
         reader_ready.count_down();
@@ -695,11 +703,20 @@ TEST(ProcessTest, AppProcessIdTracksRealChildLifecycle) {
     }
   }};
   reader_ready.wait();
+  // Identity oracle: the reported PID must name the live `sleep` child, so a
+  // constant-but-wrong PID fails even when it names some other live process.
+  {
+    std::ifstream cmdline {std::format("/proc/{}/cmdline", expected_pid), std::ios::binary};
+    const std::string content((std::istreambuf_iterator<char>(cmdline)), std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("sleep"), std::string::npos) << "reported PID does not name the sleep child";
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(100));
   target.terminate();
   reader.request_stop();
   reader.join();
-  EXPECT_GT(reader_calls.load(), 0u);
+  EXPECT_GE(nonzero_samples.load(), 10u) << "too few live samples to pin lifecycle agreement";
   EXPECT_FALSE(saw_unexpected_pid.load());
+  EXPECT_FALSE(saw_dead_pid.load());
   EXPECT_EQ(target.app_process_id(), 0u);
 }
 
@@ -722,8 +739,12 @@ TEST(ProcessTest, AppProcessIdentityProviderTracksRealChildLifecycle) {
 #else
   ctx.cmd = "sleep 30";
 #endif
+  proc::ctx_t desktop {};
+  desktop.name = "Desktop";
+  desktop.id = "42";
   std::vector<proc::ctx_t> apps;
   apps.push_back(std::move(ctx));
+  apps.push_back(std::move(desktop));
   proc::proc_t target(std::move(env), std::move(apps));
   const auto provider = proc::app_process_identity_provider(target);
 
@@ -735,8 +756,24 @@ TEST(ProcessTest, AppProcessIdentityProviderTracksRealChildLifecycle) {
 #ifdef _WIN32
   // The marker is queried from the owned child handle, so it is verifiable for a live child.
   EXPECT_NE(provider().creation_time, 0u);
+  // Exact-match oracle: the marker must equal an independent OS query, so a
+  // constant-but-wrong marker fails.
+  {
+    HANDLE handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, provider().process_id);
+    ASSERT_NE(handle, nullptr);
+    FILETIME creation {};
+    FILETIME exit_time {};
+    FILETIME kernel_time {};
+    FILETIME user_time {};
+    ASSERT_TRUE(GetProcessTimes(handle, &creation, &exit_time, &kernel_time, &user_time));
+    CloseHandle(handle);
+    const auto queried_creation_time = (static_cast<std::uint64_t>(creation.dwHighDateTime) << 32) | static_cast<std::uint64_t>(creation.dwLowDateTime);
+    EXPECT_NE(queried_creation_time, 0u);
+    EXPECT_EQ(provider().creation_time, queried_creation_time);
+  }
 #else
-  // POSIX backends never select per-process capture, so no marker is reported.
+  // POSIX reports a zero marker, so the EXPECT below requires creation_time 0u
+  // (unverifiable by contract, not by backend prediction).
   EXPECT_EQ(provider().creation_time, 0u);
 #endif
   EXPECT_EQ(provider().process_id, target.app_process_id());
@@ -744,9 +781,92 @@ TEST(ProcessTest, AppProcessIdentityProviderTracksRealChildLifecycle) {
   target.terminate();
   EXPECT_EQ(provider().process_id, 0u);
   EXPECT_EQ(provider().creation_time, 0u);
+
+  // The Desktop placebo session reports {0, 0} on every platform.
+  ASSERT_EQ(target.execute(42, launch_session), 0);
+  EXPECT_EQ(provider().process_id, 0u);
+  EXPECT_EQ(provider().creation_time, 0u);
+  target.terminate();
+  EXPECT_EQ(provider().process_id, 0u);
+  EXPECT_EQ(provider().creation_time, 0u);
 }
 
 #ifndef _WIN32
+
+namespace {
+  /**
+   * @brief Scratch directory for file-gate concurrency tests, removed on destruction.
+   */
+  struct gate_dir_t {
+    fs::path root;  ///< Scratch root; gate, setting, and script files live here.
+
+    /**
+     * @brief Create an empty scratch directory for one test.
+     *
+     * @param name Test-unique directory infix.
+     */
+    explicit gate_dir_t(const char *name) {
+      root = fs::temp_directory_path() / std::format("sunshine-proc-{}-{}", name, ::getpid());
+      std::error_code ec;
+      fs::remove_all(root, ec);
+      fs::create_directories(root, ec);
+    }
+
+    ~gate_dir_t() {
+      std::error_code ec;
+      fs::remove_all(root, ec);
+    }
+  };
+
+  /**
+   * @brief Write an executable `sh` script for a prep/undo command.
+   *
+   * Prep commands run without a shell, so file writes and gate waits are
+   * staged as scripts instead of `sh -c` one-liners with quotes.
+   *
+   * @param path Script file to write.
+   * @param body Script body after the shebang line.
+   */
+  void write_gate_script(const fs::path &path, const std::string &body) {
+    std::ofstream {path} << "#!/bin/sh\n"
+                         << body;
+    std::error_code ec;
+    fs::permissions(path, fs::perms::owner_exec | fs::perms::group_exec | fs::perms::others_exec, fs::perm_options::add, ec);
+  }
+
+  /**
+   * @brief Poll for a file-gate signal with a bounded wait.
+   *
+   * @param path Signal file to wait for.
+   * @param attempts Number of 10ms polls before giving up.
+   * @return True when the file appeared before the deadline.
+   */
+  bool wait_for_gate_file(const fs::path &path, int attempts = 500) {
+    for (int attempt = 0; attempt < attempts; ++attempt) {
+      std::error_code ec;
+      if (fs::exists(path, ec) && !ec) {
+        return true;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return false;
+  }
+
+  /**
+   * @brief Read a small text file, stripping trailing newlines.
+   *
+   * @param path File to read.
+   * @return Trimmed file content, or empty when the file is missing.
+   */
+  std::string read_trimmed_gate_file(const fs::path &path) {
+    std::ifstream input {path};
+    std::string content((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    while (!content.empty() && (content.back() == '\n' || content.back() == '\r')) {
+      content.pop_back();
+    }
+    return content;
+  }
+}  // namespace
 
 /**
  * @brief Verify running() cleanup after a relaunch never terminates the successor app.
@@ -910,7 +1030,7 @@ TEST(ProcessTest, OverlappingLaunchWaitsForPriorCleanup) {
 /**
  * @brief Verify `running()` reaps exited children on the Desktop placebo poll.
  *
- * The placebo early return in `proc_t::running_impl()` must still run the
+ * The placebo report in `proc_t::running()` must still run the
  * POSIX `waitpid()` reaper; otherwise exited detached children linger as
  * zombies for the whole Desktop session.
  */
@@ -958,6 +1078,482 @@ TEST(ProcessTest, RunningReapsExitedChildOnPlaceboPoll) {
   errno = 0;
   EXPECT_EQ(waitid(P_PID, static_cast<id_t>(child), &info, WEXITED | WNOHANG | WNOWAIT), -1);
   EXPECT_EQ(errno, ECHILD) << "running() left the exited child as a zombie";
+}
+
+/**
+ * @brief Verify running() answers promptly while execute() is blocked in a prep wait.
+ *
+ * The prep script signals start, then waits on a file gate; execute() runs on
+ * a background thread holding the transition gate. running() must report the
+ * in-flight app id (launch-busy) within the deadline instead of blocking on
+ * the gate. Fails on the pre-fix blocking running(), which waits for release.
+ */
+TEST(ProcessTest, RunningReportsLaunchInFlightDuringGatedPrep) {
+  gate_dir_t dir {"t1-exec-gate"};
+  ASSERT_TRUE(fs::exists(dir.root));
+  const auto setting_file = dir.root / "setting";
+  const auto gate_file = dir.root / "gate";
+  const auto started_file = dir.root / "started";
+  const auto do_script = dir.root / "do.sh";
+  write_gate_script(
+    do_script,
+    std::format(
+      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho G-prep > \"{}\"\n",
+      started_file.string(),
+      gate_file.string(),
+      setting_file.string()
+    )
+  );
+
+  proc::ctx_t ctx {};
+  ctx.name = "Gated";
+  ctx.id = "7";
+  ctx.cmd = "sleep 30";
+  ctx.prep_cmds.emplace_back(do_script.string(), std::string {}, false);
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+
+  std::atomic<int> exec_result {-999};
+  std::jthread exec_thread {[&target, &launch_session, &exec_result]() {
+    exec_result.store(target.execute(7, launch_session));
+  }};
+  // Always release the gate so the background thread can finish even on failure.
+  auto release_gate = util::fail_guard([&gate_file]() {
+    std::ofstream {gate_file};
+  });
+  ASSERT_TRUE(wait_for_gate_file(started_file)) << "gated prep did not start; cannot overlap the poll";
+
+  auto poll = std::async(std::launch::async, [&target]() {
+    return target.running();
+  });
+  if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    // Release the gate before failing so the background thread, and the async
+    // poll waiting on it, can finish instead of hanging teardown.
+    std::ofstream {gate_file};
+    release_gate.disable();
+    FAIL() << "running() blocked on execute()'s prep wait";
+  }
+  EXPECT_EQ(poll.get(), 7);
+
+  {
+    std::ofstream gate {gate_file};
+    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the prep gate";
+  }
+  exec_thread.join();
+  release_gate.disable();
+  EXPECT_EQ(exec_result.load(), 0);
+  EXPECT_EQ(read_trimmed_gate_file(setting_file), "G-prep");
+  EXPECT_EQ(target.running(), 7);
+}
+
+/**
+ * @brief Verify running() answers promptly while terminate() is blocked in an undo wait.
+ *
+ * terminate() claims first (publishing _app_id -1), then blocks on the gated
+ * undo holding the transition gate. running() must report 0 from the
+ * post-claim fast read within the deadline. Fails on the pre-fix blocking
+ * running(), which waits for release.
+ */
+TEST(ProcessTest, RunningReportsZeroDuringGatedUndo) {
+  gate_dir_t dir {"t2-term-gate"};
+  ASSERT_TRUE(fs::exists(dir.root));
+  const auto setting_file = dir.root / "setting";
+  const auto gate_file = dir.root / "gate";
+  const auto undo_started_file = dir.root / "undo_started";
+  const auto do_script = dir.root / "do.sh";
+  const auto undo_script = dir.root / "undo.sh";
+  write_gate_script(do_script, std::format("echo A-prep > \"{}\"\n", setting_file.string()));
+  write_gate_script(
+    undo_script,
+    std::format(
+      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho A-undo > \"{}\"\n",
+      undo_started_file.string(),
+      gate_file.string(),
+      setting_file.string()
+    )
+  );
+
+  proc::ctx_t ctx {};
+  ctx.name = "Gated";
+  ctx.id = "7";
+  ctx.cmd = "sleep 30";
+  ctx.prep_cmds.emplace_back(do_script.string(), undo_script.string(), false);
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep");
+
+  std::jthread terminate_thread {[&target]() {
+    target.terminate();
+  }};
+  // Always release the gate so the background thread can finish even on failure.
+  auto release_gate = util::fail_guard([&gate_file]() {
+    std::ofstream {gate_file};
+  });
+  ASSERT_TRUE(wait_for_gate_file(undo_started_file)) << "gated undo did not start; cannot overlap the poll";
+
+  auto poll = std::async(std::launch::async, [&target]() {
+    return target.running();
+  });
+  if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    // Release the gate before failing so the background thread, and the async
+    // poll waiting on it, can finish instead of hanging teardown.
+    std::ofstream {gate_file};
+    release_gate.disable();
+    FAIL() << "running() blocked on terminate()'s undo wait";
+  }
+  EXPECT_EQ(poll.get(), 0);
+
+  {
+    std::ofstream gate {gate_file};
+    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the undo gate";
+  }
+  terminate_thread.join();
+  release_gate.disable();
+  EXPECT_EQ(target.running(), 0);
+  EXPECT_EQ(target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(setting_file), "A-undo");
+}
+
+/**
+ * @brief Verify running()-driven cleanup still orders a concurrent launch after the undo.
+ *
+ * A exits naturally (detected via app_process_id() only, so the corpse stays
+ * unclaimed); a background running() claims it and blocks in the gated undo
+ * holding the transition gate. B's concurrent launch must wait: its prep must
+ * not run while the gate is closed, and after release B's setting wins. A
+ * second poll during the owned cleanup answers promptly with the post-claim 0
+ * instead of blocking, which is what distinguishes the try-gated design from a
+ * blocking cleanup gate. Fails pre-fix: the first running() either blocks
+ * nothing (no ordering without the gate) or, under a blocking gate, the
+ * second poll stalls past the deadline.
+ */
+TEST(ProcessTest, RunningCleanupPreservesLaunchOrdering) {
+  gate_dir_t dir {"t3-cleanup-order"};
+  ASSERT_TRUE(fs::exists(dir.root));
+  const auto setting_file = dir.root / "setting";
+  const auto gate_file = dir.root / "gate";
+  const auto undo_started_file = dir.root / "undo_started";
+  const auto do_a_script = dir.root / "do_a.sh";
+  const auto undo_a_script = dir.root / "undo_a.sh";
+  const auto do_b_script = dir.root / "do_b.sh";
+  write_gate_script(do_a_script, std::format("echo A-prep > \"{}\"\n", setting_file.string()));
+  write_gate_script(
+    undo_a_script,
+    std::format(
+      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho A-undo > \"{}\"\n",
+      undo_started_file.string(),
+      gate_file.string(),
+      setting_file.string()
+    )
+  );
+  write_gate_script(do_b_script, std::format("echo B-prep > \"{}\"\n", setting_file.string()));
+
+  proc::ctx_t app_a {};
+  app_a.name = "AppA";
+  app_a.id = "7";
+  app_a.cmd = "true";
+  app_a.prep_cmds.emplace_back(do_a_script.string(), undo_a_script.string(), false);
+  proc::ctx_t app_b {};
+  app_b.name = "AppB";
+  app_b.id = "8";
+  app_b.cmd = "sleep 30";
+  app_b.prep_cmds.emplace_back(do_b_script.string(), std::string {}, false);
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(app_a));
+  apps.push_back(std::move(app_b));
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep");
+
+  // Detect the natural exit via the identity getter only: any running() call
+  // here would claim the cleanup this test overlaps with B's launch.
+  bool exited = false;
+  for (int attempt = 0; attempt < 500 && !exited; ++attempt) {
+    if (target.app_process_id() == 0u) {
+      exited = true;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ASSERT_TRUE(exited) << "A did not exit naturally";
+
+  std::atomic<int> cleanup_result {-999};
+  std::jthread cleanup_thread {[&target, &cleanup_result]() {
+    cleanup_result.store(target.running());
+  }};
+  // Always release the gate so the background threads can finish even on failure.
+  auto release_gate = util::fail_guard([&gate_file]() {
+    std::ofstream {gate_file};
+  });
+  ASSERT_TRUE(wait_for_gate_file(undo_started_file)) << "cleanup undo did not start; cannot overlap B's launch";
+
+  std::atomic<bool> b_launch_done {false};
+  std::atomic<int> b_launch_result {-999};
+  std::jthread b_thread {[&target, &launch_session, &b_launch_done, &b_launch_result]() {
+    const int result = target.execute(8, launch_session);
+    b_launch_result.store(result);
+    b_launch_done.store(true);
+  }};
+  // Give B a chance to (incorrectly) run its prep while A's cleanup is still blocked.
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  EXPECT_FALSE(b_launch_done.load()) << "B's launch finished while A's cleanup was still blocked";
+  EXPECT_EQ(read_trimmed_gate_file(setting_file), "A-prep") << "B's prep ran before A's undo finished";
+
+  // A second poll while the cleanup owns the gate answers promptly instead of
+  // blocking on it; the corpse is already claimed, so it reports 0.
+  auto poll = std::async(std::launch::async, [&target]() {
+    return target.running();
+  });
+  if (poll.wait_for(std::chrono::seconds(2)) != std::future_status::ready) {
+    // Release the gate before failing so the background threads, and the async
+    // poll waiting on them, can finish instead of hanging teardown.
+    std::ofstream {gate_file};
+    release_gate.disable();
+    FAIL() << "second running() blocked on the owned cleanup";
+  }
+  EXPECT_EQ(poll.get(), 0);
+
+  {
+    std::ofstream gate {gate_file};
+    ASSERT_TRUE(static_cast<bool>(gate)) << "failed to release the undo gate";
+  }
+  cleanup_thread.join();
+  b_thread.join();
+  release_gate.disable();
+  EXPECT_EQ(cleanup_result.load(), 0);
+  EXPECT_EQ(b_launch_result.load(), 0);
+  EXPECT_EQ(read_trimmed_gate_file(setting_file), "B-prep") << "A's undo overwrote B's prep after B started";
+  EXPECT_EQ(target.running(), 8);
+}
+
+/**
+ * @brief Hammer running() across steady run, natural exit, and racing terminate.
+ *
+ * Poller threads report only {0, 7} while the main thread drives a natural
+ * exit and then a racing terminate; the test passing at all (cleanly, under
+ * ASan/TSan) pins the single-hold reaper/claim atomicity. Guard-only: it
+ * asserts no promptness or ordering, which the gated tests above pin.
+ */
+TEST(ProcessTest, RunningConcurrentPollsStayConsistentDuringExitAndTerminate) {
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::ctx_t ctx {};
+  ctx.name = "Sleeper";
+  ctx.id = "7";
+  ctx.cmd = "sleep 30";
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+
+  std::atomic<bool> saw_bad_id {false};
+  const auto hammer = [&target, &saw_bad_id](std::stop_token stop_token) {
+    while (!stop_token.stop_requested()) {
+      const int id = target.running();
+      if (id != 0 && id != 7) {
+        saw_bad_id.store(true);
+      }
+      (void) target.app_process_id();
+    }
+  };
+
+  // Phase 1: steady run, then a natural exit raced with the pollers.
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  {
+    std::vector<std::jthread> pollers;
+    for (int i = 0; i < 4; ++i) {
+      pollers.emplace_back(hammer);
+    }
+    const auto stop_pollers = util::fail_guard([&pollers]() {
+      for (auto &poller : pollers) {
+        poller.request_stop();
+      }
+    });
+    const auto pid = target.app_process_id();
+    ASSERT_NE(pid, 0u);
+    ASSERT_EQ(::kill(static_cast<pid_t>(pid), SIGKILL), 0);
+    bool cleaned = false;
+    for (int attempt = 0; attempt < 500 && !cleaned; ++attempt) {
+      if (target.running() == 0) {
+        cleaned = true;
+      } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    }
+    EXPECT_TRUE(cleaned) << "natural exit was never cleaned up under the hammer";
+  }
+
+  // Phase 2: steady run, then a racing terminate.
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  {
+    std::vector<std::jthread> pollers;
+    for (int i = 0; i < 4; ++i) {
+      pollers.emplace_back(hammer);
+    }
+    const auto stop_pollers = util::fail_guard([&pollers]() {
+      for (auto &poller : pollers) {
+        poller.request_stop();
+      }
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    target.terminate();
+    EXPECT_EQ(target.running(), 0);
+    EXPECT_EQ(target.app_process_id(), 0u);
+  }
+
+  EXPECT_FALSE(saw_bad_id.load()) << "poller observed an id outside {0, 7}";
+}
+
+/**
+ * @brief Verify terminate() during a gated launch waits, then drains once released.
+ *
+ * execute() holds the transition gate across the prep wait, so terminate()
+ * cannot interleave: it blocks until the gate releases, execute() reports 0,
+ * and terminate() then undoes the completed prep. The final state stays
+ * consistent: terminal reports are 0 and a successor launch works.
+ */
+TEST(ProcessTest, TerminateDuringLaunchDrainsAfterGateRelease) {
+  gate_dir_t dir {"b4-term-launch"};
+  ASSERT_TRUE(fs::exists(dir.root));
+  const auto setting_file = dir.root / "setting";
+  const auto gate_file = dir.root / "gate";
+  const auto started_file = dir.root / "started";
+  const auto do_script = dir.root / "do.sh";
+  const auto undo_script = dir.root / "undo.sh";
+  write_gate_script(
+    do_script,
+    std::format(
+      "touch \"{}\"\nwhile [ ! -f \"{}\" ]; do sleep 0.01; done\necho L-prep > \"{}\"\n",
+      started_file.string(),
+      gate_file.string(),
+      setting_file.string()
+    )
+  );
+  write_gate_script(undo_script, std::format("echo L-undo > \"{}\"\n", setting_file.string()));
+
+  proc::ctx_t ctx {};
+  ctx.name = "Gated";
+  ctx.id = "7";
+  ctx.cmd = "sleep 30";
+  ctx.prep_cmds.emplace_back(do_script.string(), undo_script.string(), false);
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+
+  std::atomic<int> exec_result {-999};
+  std::jthread exec_thread {[&target, &launch_session, &exec_result]() {
+    exec_result.store(target.execute(7, launch_session));
+  }};
+  // Always release the gate so the background thread can finish even on failure.
+  auto release_gate = util::fail_guard([&gate_file]() {
+    std::ofstream {gate_file};
+  });
+  ASSERT_TRUE(wait_for_gate_file(started_file)) << "gated prep did not start; cannot overlap terminate()";
+
+  // Launch in flight: pollers fail closed with the new id while prep is gated.
+  EXPECT_EQ(target.running(), 7);
+
+  // terminate() blocks on execute()'s transition until the releaser opens the gate.
+  std::jthread releaser {[&gate_file]() {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    std::ofstream {gate_file};
+  }};
+  target.terminate();
+  releaser.join();
+  exec_thread.join();
+  release_gate.disable();
+
+  EXPECT_EQ(exec_result.load(), 0);
+  EXPECT_EQ(target.running(), 0);
+  EXPECT_EQ(target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(setting_file), "L-undo") << "terminate did not undo the completed prep";
+
+  // A successor launch works on the consistent state.
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  EXPECT_EQ(target.running(), 7);
+}
+
+/**
+ * @brief Verify an OS-killed app is cleaned up by running(), with undo and successor intact.
+ *
+ * After SIGKILL, the death is detected via app_process_id() only, so the
+ * corpse stays unclaimed until the single running() call triggers the cleanup:
+ * the undo must not have run before it, and must have run after it. A
+ * successor launch then works. Pins the natural-death path distinctly from
+ * the terminate() path.
+ */
+TEST(ProcessTest, NaturalDeathCleansUpViaRunning) {
+  gate_dir_t dir {"b4-os-death"};
+  ASSERT_TRUE(fs::exists(dir.root));
+  const auto setting_file = dir.root / "setting";
+  const auto do_script = dir.root / "do.sh";
+  const auto undo_script = dir.root / "undo.sh";
+  write_gate_script(do_script, std::format("echo A-prep > \"{}\"\n", setting_file.string()));
+  write_gate_script(undo_script, std::format("echo A-undo > \"{}\"\n", setting_file.string()));
+
+  proc::ctx_t ctx {};
+  ctx.name = "Sleeper";
+  ctx.id = "7";
+  ctx.cmd = "sleep 30";
+  ctx.prep_cmds.emplace_back(do_script.string(), undo_script.string(), false);
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(std::move(ctx));
+  boost::process::v1::environment env = boost::this_process::environment();
+  proc::proc_t target(std::move(env), std::move(apps));
+  auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  const auto terminate_target = util::fail_guard([&target]() {
+    target.terminate();
+  });
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep");
+  const auto pid = target.app_process_id();
+  ASSERT_NE(pid, 0u);
+  ASSERT_EQ(::kill(static_cast<pid_t>(pid), 0), 0);
+  ASSERT_EQ(::kill(static_cast<pid_t>(pid), SIGKILL), 0);
+
+  bool dead = false;
+  for (int attempt = 0; attempt < 500 && !dead; ++attempt) {
+    if (target.app_process_id() == 0u) {
+      dead = true;
+    } else {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+  ASSERT_TRUE(dead) << "killed app was never observed dead";
+  ASSERT_EQ(read_trimmed_gate_file(setting_file), "A-prep") << "undo ran before running() claimed the corpse";
+
+  EXPECT_EQ(target.running(), 0);
+  EXPECT_EQ(target.app_process_id(), 0u);
+  EXPECT_EQ(read_trimmed_gate_file(setting_file), "A-undo") << "running() cleanup did not run the undo";
+
+  // A successor launch works on the consistent state.
+  ASSERT_EQ(target.execute(7, launch_session), 0);
+  EXPECT_EQ(target.running(), 7);
 }
 #endif
 
