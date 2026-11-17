@@ -302,6 +302,79 @@ class Sunshine < Formula
     (artifact_dir/COVERAGE_BUILDPATH_FILE).write coverage_buildpath.to_s
   end
 
+  ## @brief Configure the bundled tests and platform coverage tooling.
+  ## @param args CMake arguments to extend.
+  def add_test_args(args)
+    unless IS_UPSTREAM_REPO
+      args << "-DBUILD_TESTS=OFF"
+      ohai "Building tests: disabled"
+      return
+    end
+
+    args << "-DBUILD_TESTS=ON"
+    test_runtime = opt_libexec/"tests"
+    args << "-DSUNSHINE_TEST_SOURCE_DIR=#{test_runtime}"
+    args << "-DSUNSHINE_TEST_RUNTIME_DIR=#{test_runtime}"
+    coverage_arg = if OS.mac?
+      "-DSUNSHINE_LLVM_COVERAGE=ON"
+    else
+      # gcovr writes intermediate files next to the mapped sources, so use Homebrew's writable temp tree.
+      coverage_runtime = HOMEBREW_TEMP/"coverage"
+      "-DSUNSHINE_TEST_GCOV_ROOT=#{coverage_runtime}"
+    end
+    args << coverage_arg
+    ohai "Building tests: enabled"
+  end
+
+  ## @brief Install the test binary and fixtures used by the upstream Homebrew jobs.
+  def install_test_fixtures
+    return unless IS_UPSTREAM_REPO
+
+    bin.install "build/tests/#{TEST_BINARY}"
+
+    test_runtime = libexec/"tests"
+    %w[docs src src_assets test_assets].each do |directory|
+      test_runtime.install "build/tests/#{directory}"
+    end
+    boost_test_fixtures = %w[
+      cmake/compile_definitions/macos.cmake
+      cmake/dependencies/Boost_Sunshine.cmake
+      cmake/macros/common.cmake
+      cmake/prep/options.cmake
+      package-lock.cmake
+      packaging/linux/Arch/PKGBUILD
+      packaging/linux/copr/Sunshine.spec
+      packaging/linux/flatpak/modules/boost.json
+      packaging/linux/flatpak/scripts/additional-install.sh
+      scripts/linux_build.sh
+      tests/scripts/test_additional_install.sh
+    ]
+    if OS.mac?
+      boost_test_fixtures += %w[
+        .github/workflows/ci-macos.yml
+        scripts/macos_build.sh
+      ]
+    end
+    boost_test_fixtures.each do |fixture|
+      (test_runtime/Pathname.new(fixture).dirname).install "build/tests/#{fixture}"
+    end
+    test_runtime.install "sunshine.png"
+    (test_runtime/"tests/unit").install "tests/unit/test_video.cpp"
+
+    if OS.linux?
+      coverage_runtime = test_runtime/"coverage"
+      coverage_runtime.install "src"
+      (test_runtime/GCOV_PREFIX_STRIP_FILE).write "#{buildpath.each_filename.count}\n"
+      coverage_notes = buildpath.glob("build/**/*.gcno")
+      odie "No gcov notes were created" if coverage_notes.empty?
+
+      coverage_notes.each do |coverage_note|
+        relative_note = coverage_note.relative_path_from(buildpath)
+        (coverage_runtime/relative_note.dirname).install coverage_note
+      end
+    end
+  end
+
   ## @brief Build and install Sunshine with platform dependencies and optional CI test fixtures.
   def install
     setup_build_environment
@@ -329,24 +402,7 @@ class Sunshine < Formula
     # Point cmake at the venv Python that has jinja2 installed (set up in setup_build_environment)
     args << "-DPython_EXECUTABLE=#{@glad_python}" if @glad_python
 
-    if IS_UPSTREAM_REPO
-      args << "-DBUILD_TESTS=ON"
-      test_runtime = opt_libexec/"tests"
-      args << "-DSUNSHINE_TEST_SOURCE_DIR=#{test_runtime}"
-      args << "-DSUNSHINE_TEST_RUNTIME_DIR=#{test_runtime}"
-      coverage_arg = if OS.mac?
-        "-DSUNSHINE_LLVM_COVERAGE=ON"
-      else
-        # gcovr writes intermediate files next to the mapped sources, so use Homebrew's writable temp tree.
-        coverage_runtime = HOMEBREW_TEMP/"coverage"
-        "-DSUNSHINE_TEST_GCOV_ROOT=#{coverage_runtime}"
-      end
-      args << coverage_arg
-      ohai "Building tests: enabled"
-    else
-      args << "-DBUILD_TESTS=OFF"
-      ohai "Building tests: disabled"
-    end
+    add_test_args(args)
 
     if build.with? "docs"
       ohai "Building docs: enabled"
@@ -385,51 +441,7 @@ class Sunshine < Formula
     system "make", "-C", "build"
     system "make", "-C", "build", "install"
 
-    if IS_UPSTREAM_REPO
-      bin.install "build/tests/#{TEST_BINARY}"
-
-      test_runtime = libexec/"tests"
-      %w[docs src src_assets test_assets].each do |directory|
-        test_runtime.install "build/tests/#{directory}"
-      end
-      boost_test_fixtures = %w[
-        cmake/compile_definitions/macos.cmake
-        cmake/dependencies/Boost_Sunshine.cmake
-        cmake/macros/common.cmake
-        cmake/prep/options.cmake
-        package-lock.cmake
-        packaging/linux/Arch/PKGBUILD
-        packaging/linux/copr/Sunshine.spec
-        packaging/linux/flatpak/modules/boost.json
-        packaging/linux/flatpak/scripts/additional-install.sh
-        scripts/linux_build.sh
-        tests/scripts/test_additional_install.sh
-      ]
-      if OS.mac?
-        boost_test_fixtures += %w[
-          .github/workflows/ci-macos.yml
-          scripts/macos_build.sh
-        ]
-      end
-      boost_test_fixtures.each do |fixture|
-        (test_runtime/Pathname.new(fixture).dirname).install "build/tests/#{fixture}"
-      end
-      test_runtime.install "sunshine.png"
-      (test_runtime/"tests/unit").install "tests/unit/test_video.cpp"
-
-      if OS.linux?
-        coverage_runtime = test_runtime/"coverage"
-        coverage_runtime.install "src"
-        (test_runtime/GCOV_PREFIX_STRIP_FILE).write "#{buildpath.each_filename.count}\n"
-        coverage_notes = buildpath.glob("build/**/*.gcno")
-        odie "No gcov notes were created" if coverage_notes.empty?
-
-        coverage_notes.each do |coverage_note|
-          relative_note = coverage_note.relative_path_from(buildpath)
-          (coverage_runtime/relative_note.dirname).install coverage_note
-        end
-      end
-    end
+    install_test_fixtures
 
     # codesign the binary on intel macs
     system "codesign", "-s", "-", "--force", "--deep", bin/"sunshine" if OS.mac? && Hardware::CPU.intel?
