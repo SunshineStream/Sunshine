@@ -115,7 +115,16 @@ namespace proc {
     int execute(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session);
 
     /**
-     * @return `_app_id` if a process is running, otherwise returns `0`
+     * @brief Report the currently running app without ever blocking on a transition.
+     *
+     * The fast path takes only the lifecycle mutex. When an exited app needs
+     * cleanup, the transition gate is taken with `try_to_lock`, so a poller
+     * never waits on unbounded prep/undo command waits. If the gate is busy,
+     * the last-known app id is reported (fail closed) and the transition
+     * owner performs the cleanup. A mid-launch app (id published, child not
+     * yet spawned) likewise reports its id.
+     *
+     * @return `_app_id` if an app is running, launching, or its cleanup is owned elsewhere; otherwise `0`.
      */
     int running();
 
@@ -215,11 +224,23 @@ namespace proc {
     int execute_impl(int app_id, std::shared_ptr<rtsp_stream::launch_session_t> launch_session);
 
     /**
-     * @brief Implementation of running() that may call terminate_impl() directly for cleanup.
-     *
-     * @return `_app_id` if a process is running, otherwise returns `0`.
+     * @brief Fast-path classification for running(), decided under the lifecycle mutex.
      */
-    int running_impl();
+    enum class running_action_t {
+      report_app,  ///< Report the current app id: running, placebo, or mid-launch busy.
+      report_zero,  ///< Report 0: idle, or already claimed by a transition owner.
+      needs_cleanup,  ///< Exited corpse with claimable state; cleanup follows when the transition gate is idle.
+    };
+
+    /**
+     * @brief Classify the current lifecycle state for running().
+     *
+     * The caller must hold the lifecycle mutex. Besides reading state, this
+     * may promote a quickly-exited app to the detached (placebo) session.
+     *
+     * @return Action the caller takes after (optionally) reaping and claiming.
+     */
+    running_action_t decide_running_locked();
 
     /**
      * @brief State claimed atomically for one termination.
@@ -354,6 +375,9 @@ namespace proc {
    * The returned callable reports `target.app_process_identity()` at each call, so
    * audio (re)initialization always sees the currently launched app. It
    * borrows `target`; the caller keeps it alive for the provider's lifetime.
+   * Invoke the provider outside audio::capture_target_mutex(); it takes
+   * proc_lifecycle_mutex() internally, so invoking it under the capture mutex
+   * would nest the two.
    *
    * @param target Process manager whose launched app identity is reported.
    * @return Provider returning the launched root identity, or {0, 0} when unavailable.
