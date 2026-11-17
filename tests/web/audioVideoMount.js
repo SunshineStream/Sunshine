@@ -4,8 +4,8 @@ import { ref } from 'vue'
 import AudioVideo from '../../src_assets/common/assets/web/configs/tabs/AudioVideo.vue'
 import configTabs from '../../src_assets/common/assets/web/configs/config_tabs.json'
 
-export function mountAudioVideo(platform) {
-  const config = structuredClone(configTabs.find(tab => tab.id === 'av').options)
+export function mountAudioVideo(platform, overrides = {}) {
+  const config = { ...structuredClone(configTabs.find(tab => tab.id === 'av').options), ...overrides }
   const wrapper = mount(AudioVideo, {
     props: { platform, config },
     global: {

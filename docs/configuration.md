@@ -821,7 +821,6 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             <br>
             Sunshine can only access microphones on macOS due to system limitations.
             To stream system audio use
-            [Soundflower](https://github.com/mattingalls/Soundflower) or
             [BlackHole](https://github.com/ExistentialAudio/BlackHole).
             <br>
             <br>
@@ -839,6 +838,14 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             `sink-sunshine-stereo`). Enter one here to capture a private mix you route
             yourself; combined with [keep_default_sink](#keep_default_sink), the host
             default output is left untouched.}
+            <br>
+            <br>
+            In the Web UI Audio Capture choices: a blank value with
+            [keep_default_sink](#keep_default_sink) disabled is <strong>Quiet streaming</strong>; a blank value
+            with it enabled is <strong>Play on this PC too</strong>; a named value is <strong>Custom device</strong>,
+            where <strong>I route apps myself</strong> enables [keep_default_sink](#keep_default_sink) and
+            <strong>Sunshine sets it as the default</strong> leaves it disabled so Sunshine sets the named
+            sink as the default while streaming and restores the previous default afterwards.
         </td>
     </tr>
     <tr>
@@ -872,14 +879,24 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
         <td>Description</td>
         <td colspan="2">
             The audio device that's virtual, like Steam Streaming Speakers. This allows Sunshine to stream audio,
-            while muting the speakers.
+            while muting the speakers. It applies only to the <strong>Quiet streaming</strong> path
+            ([keep_default_sink](#keep_default_sink) disabled; the Windows Web UI shows it only for Quiet
+            streaming) and is ignored for <strong>Play on this PC too</strong> and for <strong>Custom device</strong>
+            with <strong>I route apps myself</strong>. A named [audio_sink](#audio_sink) always wins over
+            this virtual sink, including when Moonlight host playback is off.
             @tip{See [audio_sink](#audio_sink)!}
-            @tip{These are some options for virtual sound devices.
-            * Stream Streaming Speakers (Linux, macOS, Windows)
+            @tip{This option is Windows only. Some options for virtual sound devices on Windows:
+            * Steam Streaming Speakers
               * Steam must be installed.
               * Enable [install_steam_audio_drivers](#install_steam_audio_drivers)
                 or use Steam Remote Play at least once to install the drivers.
-            * [Virtual Audio Cable](https://vb-audio.com/Cable) (macOS, Windows)
+            * [Virtual Audio Cable](https://vb-audio.com/Cable)
+            <br>
+            <br>
+            On FreeBSD/Linux, leave this option unset and use <strong>Quiet streaming</strong> instead:
+            Sunshine captures its own null sinks (for example `sink-sunshine-stereo`) automatically.
+            On macOS, use <strong>Custom device</strong> with
+            [BlackHole](https://github.com/ExistentialAudio/BlackHole) and route the game to it yourself.
             }
         </td>
     </tr>
@@ -958,8 +975,23 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             <code>external_audio = enabled</code> setting is migrated to <code>keep_default_sink = enabled</code>
             on upgrade, unless <code>keep_default_sink</code> is also set. Unlike the old Windows mode, an
             explicit [audio_sink](#audio_sink) is no longer required. Note that [virtual_sink](#virtual_sink)
-            and Moonlight's host-playback selection only apply on the swap path; in keep-default mode the
+            only affects sink selection on the swap path; in keep-default mode the
             capture target is the configured <code>audio_sink</code>, or the host sink when none is configured.
+            Moonlight's host-playback selection likewise only affects sink selection on the swap path,
+            except on macOS where it still controls the system tap mute behavior (muted tap versus tap plus
+            speakers) in keep-default mode.
+            <br>
+            <br>
+            In the Web UI, the Audio Capture choices map to these keys as follows: <strong>Quiet streaming</strong>
+            leaves this option disabled and <code>audio_sink</code> blank, so the client hears the audio while the
+            host stays silent when Moonlight host playback is off; <strong>Play on this PC too</strong> enables this
+            option with <code>audio_sink</code> blank; <strong>Custom device</strong> sets <code>audio_sink</code>
+            to the named sink, device, or input and adds a routing-owner choice: <strong>I route apps
+            myself</strong> enables this option (Sunshine captures the named sink without changing the default),
+            while <strong>Sunshine sets it as the default</strong> leaves this option disabled (Sunshine sets the
+            named sink as the default while streaming and restores the previous default afterwards). On macOS, Quiet streaming is
+            disabled in the Web UI and neither Custom routing owner changes the default output; for silent or
+            separated capture, use Custom device with BlackHole and route the game to it yourself.
             @note{Platform behavior:<br>
             <strong>Windows:</strong> captures the target endpoint directly and is hands-off, so an external
             router such as VoiceMeeter or GoXLR keeps owning endpoint defaults and formats; it also skips the
