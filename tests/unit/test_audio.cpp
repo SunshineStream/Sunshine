@@ -1093,4 +1093,3 @@ TEST(BaseRecordTest, KeepDefaultHelperRecordsAndReturnsZero) {
   EXPECT_EQ(control.capture_sink("keep-default-sink"), 0);
   EXPECT_EQ(control.snapshot_recorded_sink(), "keep-default-sink");
 }
-
