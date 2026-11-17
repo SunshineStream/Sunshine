@@ -352,6 +352,27 @@ namespace {
     }
     return (static_cast<std::uint64_t>(creation_time.dwHighDateTime) << 32) | static_cast<std::uint64_t>(creation_time.dwLowDateTime);
   }
+
+  /**
+   * @brief Build a loopback probe targeting the current process.
+   *
+   * Fills the shared baseline (endpoint-id sinks, host_and_client intent, live
+   * PID and creation marker); tests override individual fields for their case.
+   *
+   * @param enumerator Device enumerator the probe resolves endpoints through.
+   * @return Probe ready for the microphone() test seams.
+   */
+  platf::audio::tests::microphone_loopback_probe_t make_current_process_probe(fake_device_enumerator_t &enumerator) {
+    return {
+      .assigned_sink = "endpoint-id",
+      .configured_sink = {},
+      .intent = platf::audio_capture_intent_e::host_and_client,
+      .process_id = static_cast<std::uint32_t>(::GetCurrentProcessId()),
+      .creation_time = current_process_creation_time(),
+      .device_enum = &enumerator,
+      .keep_default = false,
+    };
+  }
 }  // namespace
 
 TEST(WindowsAudioTest, PreservesVirtualSpeakerFormatPreferenceAndChannelMasks) {
@@ -811,66 +832,36 @@ TEST(WindowsAudioTest, CaptureProcessSetterStoresIdentityVerbatim) {
 
 TEST(WindowsAudioTest, MicrophoneAttemptsLoopbackForCurrentProcessTarget) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = {},
-    .intent = platf::audio_capture_intent_e::host_and_client,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = false,
-  };
   EXPECT_TRUE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
-  EXPECT_EQ(probe.attempted_process_id, current_process_id);
+  EXPECT_EQ(probe.attempted_process_id, probe.process_id);
 }
 
 TEST(WindowsAudioTest, MicrophoneReturnsLoopbackForValidTarget) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = {},
-    .intent = platf::audio_capture_intent_e::host_and_client,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = false,
-  };
   // The endpoint fallback creates no fake clients, so a returned microphone
   // proves the loopback branch — including post-activation revalidation —
   // succeeded rather than falling back.
   EXPECT_TRUE(platf::audio::tests::microphone_returns_loopback_for_valid_target(probe));
-  EXPECT_EQ(probe.attempted_process_id, current_process_id);
+  EXPECT_EQ(probe.attempted_process_id, probe.process_id);
   EXPECT_TRUE(probe.microphone_returned);
 }
 
 TEST(WindowsAudioTest, MicrophoneFallsBackToEndpointWhenActivationFails) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = {},
-    .intent = platf::audio_capture_intent_e::host_and_client,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = false,
-  };
   EXPECT_TRUE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
-  EXPECT_EQ(probe.attempted_process_id, current_process_id);
+  EXPECT_EQ(probe.attempted_process_id, probe.process_id);
   // The failing activator falls back to endpoint capture: the assigned sink is
   // resolved through the injected enumerator, and endpoint initialization
   // fails without audio hardware.
@@ -898,20 +889,11 @@ TEST(WindowsAudioTest, MicrophoneSkipsLoopbackWithoutCaptureTarget) {
 
 TEST(WindowsAudioTest, MicrophoneSkipsLoopbackForSilentIntent) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = {},
-    .intent = platf::audio_capture_intent_e::client_only,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = false,
-  };
+  probe.intent = platf::audio_capture_intent_e::client_only;
   EXPECT_FALSE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
   EXPECT_EQ(probe.attempted_process_id, 0u);
   EXPECT_EQ(enumerator.get_device_calls, 1);
@@ -920,45 +902,29 @@ TEST(WindowsAudioTest, MicrophoneSkipsLoopbackForSilentIntent) {
 
 TEST(WindowsAudioTest, MicrophoneAttemptsLoopbackForBlankKeepDefaultTarget) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = {},
-    .intent = platf::audio_capture_intent_e::host_and_client,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = true,
-  };
+  probe.keep_default = true;
   EXPECT_TRUE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
-  EXPECT_EQ(probe.attempted_process_id, current_process_id);
+  EXPECT_EQ(probe.attempted_process_id, probe.process_id);
   // The follow-default fallback builds its own enumerator, so the injected one stays untouched.
   EXPECT_EQ(enumerator.get_device_calls, 0);
 }
 
 TEST(WindowsAudioTest, MicrophoneSkipsLoopbackForPinnedIntent) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
   // Even with a live PID, a pinned sink stays pinned: the backend never
   // attempts loopback for pinned intent, independent of the guard recording
   // PID 0 for such sessions upstream.
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = "endpoint-id",
-    .intent = platf::audio_capture_intent_e::pinned_sink,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = true,
-  };
+  probe.configured_sink = "endpoint-id";
+  probe.intent = platf::audio_capture_intent_e::pinned_sink;
+  probe.keep_default = true;
   EXPECT_FALSE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
   EXPECT_EQ(probe.attempted_process_id, 0u);
   EXPECT_EQ(enumerator.get_device_calls, 1);
@@ -968,25 +934,16 @@ TEST(WindowsAudioTest, MicrophoneSkipsLoopbackForPinnedIntent) {
 
 TEST(WindowsAudioTest, MicrophoneLoopbackDecisionIgnoresConfiguredSink) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
   // The backend decides on intent and revalidated PID only: a configured sink
   // no longer blocks the attempt here because the shared guard already maps a
   // configured sink to pinned intent (and PID 0) before the backend runs.
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = "other-sink",
-    .intent = platf::audio_capture_intent_e::host_and_client,
-    .process_id = current_process_id,
-    .creation_time = creation_time,
-    .device_enum = &enumerator,
-    .keep_default = false,
-  };
+  probe.configured_sink = "other-sink";
   EXPECT_TRUE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
-  EXPECT_EQ(probe.attempted_process_id, current_process_id);
+  EXPECT_EQ(probe.attempted_process_id, probe.process_id);
   // The failing activator falls back to endpoint capture against the assigned sink.
   EXPECT_EQ(enumerator.get_device_calls, 1);
   EXPECT_EQ(enumerator.last_requested_id, L"endpoint-id");
@@ -995,24 +952,15 @@ TEST(WindowsAudioTest, MicrophoneLoopbackDecisionIgnoresConfiguredSink) {
 
 TEST(WindowsAudioTest, MicrophoneRejectsStaleIdentityAfterPidReuse) {
   fake_device_enumerator_t enumerator {L"endpoint-id"};
-  const auto current_process_id = static_cast<std::uint32_t>(::GetCurrentProcessId());
-  ASSERT_NE(current_process_id, 0u);
-  const auto creation_time = current_process_creation_time();
-  ASSERT_NE(creation_time, 0u);
+  auto probe = make_current_process_probe(enumerator);
+  ASSERT_NE(probe.process_id, 0u);
+  ASSERT_NE(probe.creation_time, 0u);
 
   // The recorded baseline names the original occupant; the live PID now names
   // a different process (same PID, different marker). Validation must reject
   // the stale baseline so no loopback activation targets the replacement, and
   // endpoint fallback must resolve through the assigned sink instead.
-  platf::audio::tests::microphone_loopback_probe_t probe {
-    .assigned_sink = "endpoint-id",
-    .configured_sink = {},
-    .intent = platf::audio_capture_intent_e::host_and_client,
-    .process_id = current_process_id,
-    .creation_time = creation_time + 1,
-    .device_enum = &enumerator,
-    .keep_default = false,
-  };
+  probe.creation_time += 1;
   EXPECT_FALSE(platf::audio::tests::microphone_attempts_loopback_for_target(probe));
   EXPECT_EQ(probe.attempted_process_id, 0u);
   EXPECT_EQ(enumerator.get_device_calls, 1);
