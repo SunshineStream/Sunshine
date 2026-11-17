@@ -1516,18 +1516,15 @@ TEST(BaseRecordTest, SessionGuardReleasesRealBaseRecord) {
  * Models the Windows `on_capture_target_cleared()` override: the hook resets
  * the paired identity exactly when the shared record resets.
  */
-class hook_audio_control_t: public platf::audio_control_t {
+class hook_audio_control_t: public recorded_audio_control_t {
 public:
   int set_sink(const std::string &) override {
     return 0;
   }
 
-  bool supports_keep_default_sink() const override {
-    return true;
-  }
-
-  int capture_sink(const std::string &sink) override {
-    return record_keep_default_capture_sink(sink);
+  // Stays at the base default: these tests pin record/hook pairing, not capture support.
+  bool supports_process_capture() const override {
+    return false;
   }
 
   /**
@@ -1544,30 +1541,6 @@ public:
     recorded_target_.intent = intent;
     recorded_target_.process_id = identity.process_id;
     paired_identity = identity.process_id;
-  }
-
-  /**
-   * @brief Release the shared base record when it still belongs to the caller.
-   * @param intent Capture intent recorded by the session being torn down.
-   * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
-   */
-  void clear_capture_target(platf::audio_capture_intent_e intent, std::uint32_t process_id) override {
-    clear_recorded_capture_target_if_matches(intent, process_id);
-  }
-
-  // Keep the params-bundle overload visible: the positional override below would otherwise hide it.
-  using platf::audio_control_t::microphone;
-
-  std::unique_ptr<platf::mic_t> microphone(const std::uint8_t *, int, std::uint32_t, std::uint32_t, bool, bool) override {
-    return std::make_unique<stub_mic_t>();
-  }
-
-  bool is_sink_available(const std::string &) override {
-    return true;
-  }
-
-  std::optional<platf::sink_t> sink_info() override {
-    return std::nullopt;
   }
 
 protected:
