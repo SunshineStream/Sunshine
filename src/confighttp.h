@@ -40,18 +40,7 @@ namespace confighttp {
   void send_response(const resp_https_t &response, const nlohmann::json &output_tree);
   void send_unauthorized(const resp_https_t &response, const req_https_t &request);
   void send_redirect(const resp_https_t &response, const req_https_t &request, const char *path);
-  /**
-   * @brief Enforce the Web UI remote-address policy independently of credentials.
-   * @param response HTTP response used to report a forbidden address.
-   * @param request Request whose remote address is checked.
-   * @return True when the source address is allowed.
-   */
   bool check_access(const resp_https_t &response, const req_https_t &request);
-  /**
-   * @brief Create initial credentials or change existing credentials after access checks.
-   * @param response HTTP response object to populate.
-   * @param request JSON credential update request.
-   */
   void savePassword(const resp_https_t &response, const req_https_t &request);
   bool authenticate(const resp_https_t &response, const req_https_t &request);
   void not_found(const resp_https_t &response, const std::string &error_message = "Not Found");
