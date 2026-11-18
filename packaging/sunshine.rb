@@ -40,11 +40,6 @@ class Sunshine < Formula
 
   bottle do
     root_url "https://ghcr.io/v2/lizardbyte/homebrew"
-    sha256 arm64_tahoe:   "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 arm64_sequoia: "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 arm64_sonoma:  "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 arm64_linux:   "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 x86_64_linux:  "0000000000000000000000000000000000000000000000000000000000000000"
   end
 
   option "with-docs", "Enable docs build"
@@ -139,12 +134,18 @@ class Sunshine < Formula
     cause "Array out of bounds error when compiling glad sources"
   end
 
+  ## @brief Configure build metadata, the Linux compiler, and the glad Python environment.
   def setup_build_environment
     ENV["BRANCH"] = "@GITHUB_BRANCH@"
     ENV["BUILD_VERSION"] = "@BUILD_VERSION@"
     ENV["COMMIT"] = "@GITHUB_COMMIT@"
 
-    setup_linux_gcc_environment if OS.linux?
+    if OS.linux?
+      # Use GCC because gcov from llvm cannot handle our paths
+      gcc_path = Formula[GCC_FORMULA]
+      ENV["CC"] = "#{gcc_path.opt_bin}/gcc-#{GCC_VERSION}"
+      ENV["CXX"] = "#{gcc_path.opt_bin}/g++-#{GCC_VERSION}"
+    end
 
     return unless OS.linux?
 
@@ -154,108 +155,15 @@ class Sunshine < Formula
     # to prevent cmake from trying to install Python dependencies again.
     # Follows https://docs.brew.sh/Formula-Cookbook#python-dependencies
     venv = virtualenv_create(buildpath/"venv", "python3")
-    venv.pip_install resources
+    venv.pip_install [resource("markupsafe"), resource("jinja2")]
     @glad_python = (buildpath/"venv/bin/python3").to_s
   end
 
-  def setup_linux_gcc_environment
-    # Use GCC because gcov from llvm cannot handle our paths
-    gcc_path = Formula[GCC_FORMULA]
-    ENV["CC"] = "#{gcc_path.opt_bin}/gcc-#{GCC_VERSION}"
-    ENV["CXX"] = "#{gcc_path.opt_bin}/g++-#{GCC_VERSION}"
-  end
-
-  ## @brief Generate CMake arguments with Homebrew dependency and Linux runtime paths.
-  ## @return CMake command-line arguments.
-  def base_cmake_args
-    args = %W[
-      -DBUILD_WERROR=ON
-      -DCMAKE_INSTALL_PREFIX=#{prefix}
-      -DGLAD_SKIP_PIP_INSTALL=ON
-      -DHOMEBREW_ALLOW_FETCHCONTENT=ON
-      -DOPENSSL_ROOT_DIR=#{formula_opt_prefix("openssl@4")}
-      -DSUNSHINE_ASSETS_DIR=sunshine/assets
-      -DSUNSHINE_BUILD_HOMEBREW=ON
-      -DSUNSHINE_PUBLISHER_NAME='LizardByte'
-      -DSUNSHINE_PUBLISHER_WEBSITE='https://app.lizardbyte.dev'
-      -DSUNSHINE_PUBLISHER_ISSUE_URL='https://app.lizardbyte.dev/support'
-    ]
-    if OS.linux?
-      # GCC treats Homebrew's lib directory as implicit, so CMake omits its automatic rpath.
-      # Keep curl's indirect dependencies ahead of incompatible system libraries when linking and running.
-      args << "-DCMAKE_BUILD_RPATH=#{HOMEBREW_PREFIX}/lib"
-      args << "-DCMAKE_INSTALL_RPATH=#{HOMEBREW_PREFIX}/lib"
-    end
-    args << "-DSUNSHINE_EXECUTABLE_PATH=#{opt_bin}/sunshine" if OS.linux?
-    # Point cmake at the venv Python that has jinja2 installed (set up in setup_build_environment)
-    args << "-DPython_EXECUTABLE=#{@glad_python}" if @glad_python
-    args
-  end
-
-  def add_test_args(args)
-    if IS_UPSTREAM_REPO
-      args << "-DBUILD_TESTS=ON"
-      test_runtime = opt_libexec/"tests"
-      args << "-DSUNSHINE_TEST_SOURCE_DIR=#{test_runtime}"
-      args << "-DSUNSHINE_TEST_RUNTIME_DIR=#{test_runtime}"
-      coverage_arg = if OS.mac?
-        "-DSUNSHINE_LLVM_COVERAGE=ON"
-      else
-        # gcovr writes intermediate files next to the mapped sources, so use Homebrew's writable temp tree.
-        coverage_runtime = HOMEBREW_TEMP/"coverage"
-        "-DSUNSHINE_TEST_GCOV_ROOT=#{coverage_runtime}"
-      end
-      args << coverage_arg
-      ohai "Building tests: enabled"
-    else
-      args << "-DBUILD_TESTS=OFF"
-      ohai "Building tests: disabled"
-    end
-  end
-
-  def add_docs_args(args)
-    if build.with? "docs"
-      ohai "Building docs: enabled"
-      args << "-DBUILD_DOCS=ON"
-    else
-      ohai "Building docs: disabled"
-      args << "-DBUILD_DOCS=OFF"
-    end
-  end
-
-  def add_boost_args(args)
-    if build.without? "static-boost"
-      args << "-DBOOST_USE_STATIC=OFF"
-      ohai "Disabled statically linking Boost libraries"
-    else
-      configure_static_boost(args)
-    end
-  end
-
-  def configure_static_boost(args)
-    args << "-DBOOST_USE_STATIC=ON"
-    ohai "Enabled statically linking Boost libraries"
-
-    unless formula_any_version_installed?("icu4c")
-      odie <<~EOS
-        icu4c must be installed to link against static Boost libraries,
-        either install icu4c or use brew install sunshine --with-static-boost instead
-      EOS
-    end
-    ENV.append "CXXFLAGS", "-I#{formula_opt_include("icu4c")}"
-    icu4c_lib_path = formula_opt_lib("icu4c").to_s
-    ENV.append "LDFLAGS", "-L#{icu4c_lib_path}"
-    ENV["LIBRARY_PATH"] = icu4c_lib_path
-    ohai "Linking against ICU libraries at: #{icu4c_lib_path}"
-  end
-
+  ## @brief Add CUDA compiler arguments for Linux builds.
+  ## @param args CMake arguments to extend.
   def add_cuda_args(args)
     return unless OS.linux?
 
-    configure_cuda(args)
-  end
-
-  def configure_cuda(args)
     cuda_path = Formula["lizardbyte/homebrew/#{CUDA_FORMULA}"]
     nvcc_path = "#{cuda_path.opt_libexec}/homebrew/bin/nvcc"
     gcc_path = Formula[GCC_FORMULA]
@@ -283,21 +191,6 @@ class Sunshine < Formula
     odie "#{path} was not created" unless path.exist?
   end
 
-  def run_test_suite(artifact_dir)
-    mkdir_p artifact_dir/"tests"
-    test_results = artifact_dir/TEST_RESULTS_XML
-
-    if OS.mac?
-      with_llvm_profile_file(artifact_dir) do
-        system bin/TEST_BINARY, "--gtest_color=yes", "--gtest_output=xml:#{test_results}"
-      end
-    else
-      system bin/TEST_BINARY, "--gtest_color=yes", "--gtest_output=xml:#{test_results}"
-    end
-
-    ensure_artifact_exists test_results
-  end
-
   def with_llvm_profile_file(artifact_dir)
     original_profile_file = ENV.fetch(LLVM_PROFILE_FILE_ENV, nil)
     ENV[LLVM_PROFILE_FILE_ENV] = "#{artifact_dir}/sunshine-%p.profraw"
@@ -310,80 +203,53 @@ class Sunshine < Formula
     end
   end
 
-  def coverage_gcov_options
-    gcc_path = Formula[GCC_FORMULA]
-    ["--gcov-executable", "#{gcc_path.opt_bin}/gcov-#{GCC_VERSION}"]
-  end
-
-  def llvm_profdata_executable
-    Utils.safe_popen_read("xcrun", "--find", "llvm-profdata").strip
-  end
-
-  def llvm_cov_executable
-    Utils.safe_popen_read("xcrun", "--find", "llvm-cov").strip
-  end
-
   def coverage_report_path(artifact_dir)
     artifact_dir/(OS.mac? ? COVERAGE_LCOV : COVERAGE_XML)
   end
 
-  def coverage_common_options(coverage_report)
-    [
-      "--exclude-noncode-lines",
-      "--exclude-throw-branches",
-      "--exclude-unreachable-branches",
-      "--xml-pretty",
-      "-o=#{coverage_report}",
-    ]
-  end
-
+  ## @brief Export and validate source coverage with LLVM on macOS or gcovr on Linux.
+  ## @param artifact_dir Directory containing test profiles and receiving the report.
+  ## @param coverage_buildpath Source build path used to map coverage records.
   def generate_coverage_report(artifact_dir, coverage_buildpath)
     return if coverage_buildpath.to_s.empty?
 
     coverage_report = coverage_report_path(artifact_dir)
 
     if OS.mac?
-      generate_llvm_coverage_report artifact_dir, coverage_buildpath, coverage_report
+      profile_files = Dir["#{artifact_dir}/*.profraw"]
+      odie "No LLVM profile data was created" if profile_files.empty?
+
+      profile_data = artifact_dir/COVERAGE_PROFDATA
+      llvm_profdata = Utils.safe_popen_read("xcrun", "--find", "llvm-profdata").strip
+      system llvm_profdata, "merge", "--sparse", "-o", profile_data.to_s, *profile_files
+      lcov = Utils.safe_popen_read(
+        Utils.safe_popen_read("xcrun", "--find", "llvm-cov").strip,
+        "export",
+        "-format=lcov",
+        "-instr-profile=#{profile_data}",
+        (bin/TEST_BINARY).to_s,
+      )
+      coverage_report.write lcov_for_source_files(lcov, coverage_buildpath)
+      has_lines = coverage_report.read.lines.any? { |line| line.start_with?("DA:") }
+      odie "#{coverage_report} does not contain any source lines" unless has_lines
     else
-      generate_gcov_coverage_report coverage_report, coverage_buildpath
+      cd "#{coverage_buildpath}/build" do
+        gcc_path = Formula[GCC_FORMULA]
+        system "gcovr", "tests/CMakeFiles/#{TEST_BINARY}.dir/__/src",
+          "-r", "../src",
+          "--gcov-executable", "#{gcc_path.opt_bin}/gcov-#{GCC_VERSION}",
+          "--exclude-noncode-lines",
+          "--exclude-throw-branches",
+          "--exclude-unreachable-branches",
+          "--xml-pretty",
+          "-o=#{coverage_report}"
+      end
+
+      lines_valid = coverage_report.read[/lines-valid="(\d+)"/, 1].to_i
+      odie "#{coverage_report} does not contain any source lines" if lines_valid.zero?
     end
 
     ensure_artifact_exists coverage_report
-  end
-
-  def generate_llvm_coverage_report(artifact_dir, coverage_buildpath, coverage_report)
-    profile_files = Dir["#{artifact_dir}/*.profraw"]
-    odie "No LLVM profile data was created" if profile_files.empty?
-
-    profile_data = artifact_dir/COVERAGE_PROFDATA
-    system llvm_profdata_executable, "merge", "--sparse", "-o", profile_data.to_s, *profile_files
-    lcov = Utils.safe_popen_read(
-      llvm_cov_executable,
-      "export",
-      "-format=lcov",
-      "-instr-profile=#{profile_data}",
-      (bin/TEST_BINARY).to_s,
-    )
-    coverage_report.write lcov_for_source_files(lcov, coverage_buildpath)
-    ensure_lcov_report_has_lines coverage_report
-  end
-
-  def generate_gcov_coverage_report(coverage_report, coverage_buildpath)
-    cd "#{coverage_buildpath}/build" do
-      system "gcovr", "tests/CMakeFiles/#{TEST_BINARY}.dir/__/src",
-        "-r", "../src",
-        *coverage_gcov_options,
-        *coverage_common_options(coverage_report)
-    end
-
-    ensure_cobertura_report_has_lines coverage_report
-  end
-
-  def coverage_source_prefixes(coverage_buildpath)
-    coverage_buildpath = Pathname.new(coverage_buildpath.to_s)
-    paths = [coverage_buildpath.to_s]
-    paths << coverage_buildpath.realpath.to_s if coverage_buildpath.exist?
-    paths.uniq.map { |path| "#{path}/src/" }
   end
 
   def relative_lcov_record(record, source_prefixes)
@@ -408,20 +274,17 @@ class Sunshine < Formula
     "#{lines.join}end_of_record\n"
   end
 
+  ## @brief Retain LCOV records for source files and normalize their paths.
+  ## @param lcov LCOV report contents.
+  ## @param coverage_buildpath Source build path used to identify absolute records.
+  ## @return LCOV records with paths relative to the repository root.
   def lcov_for_source_files(lcov, coverage_buildpath)
-    source_prefixes = coverage_source_prefixes(coverage_buildpath)
+    coverage_buildpath = Pathname.new(coverage_buildpath.to_s)
+    paths = [coverage_buildpath.to_s]
+    paths << coverage_buildpath.realpath.to_s if coverage_buildpath.exist?
+    source_prefixes = paths.uniq.map { |path| "#{path}/src/" }
     records = lcov.split("end_of_record\n")
     records.filter_map { |record| relative_lcov_record(record, source_prefixes) }.join
-  end
-
-  def ensure_cobertura_report_has_lines(path)
-    lines_valid = path.read[/lines-valid="(\d+)"/, 1].to_i
-    odie "#{path} does not contain any source lines" if lines_valid.zero?
-  end
-
-  def ensure_lcov_report_has_lines(path)
-    has_lines = path.read.lines.any? { |line| line.start_with?("DA:") }
-    odie "#{path} does not contain any source lines" unless has_lines
   end
 
   def collect_test_artifacts
@@ -434,81 +297,152 @@ class Sunshine < Formula
     (artifact_dir/COVERAGE_BUILDPATH_FILE).write coverage_buildpath.to_s
   end
 
-  def build_cmake_args
-    args = base_cmake_args
-    add_test_args(args)
-    add_docs_args(args)
-    add_boost_args(args)
-    add_cuda_args(args)
-    args
+  ## @brief Configure the bundled tests and platform coverage tooling.
+  ## @param args CMake arguments to extend.
+  def add_test_args(args)
+    unless IS_UPSTREAM_REPO
+      args << "-DBUILD_TESTS=OFF"
+      ohai "Building tests: disabled"
+      return
+    end
+
+    args << "-DBUILD_TESTS=ON"
+    test_runtime = opt_libexec/"tests"
+    args << "-DSUNSHINE_TEST_SOURCE_DIR=#{test_runtime}"
+    args << "-DSUNSHINE_TEST_RUNTIME_DIR=#{test_runtime}"
+    coverage_arg = if OS.mac?
+      "-DSUNSHINE_LLVM_COVERAGE=ON"
+    else
+      # gcovr writes intermediate files next to the mapped sources, so use Homebrew's writable temp tree.
+      coverage_runtime = HOMEBREW_TEMP/"coverage"
+      "-DSUNSHINE_TEST_GCOV_ROOT=#{coverage_runtime}"
+    end
+    args << coverage_arg
+    ohai "Building tests: enabled"
   end
 
-  def build_and_install_project
+  ## @brief Install the test binary and fixtures used by the upstream Homebrew jobs.
+  def install_test_fixtures
+    return unless IS_UPSTREAM_REPO
+
+    bin.install "build/tests/#{TEST_BINARY}"
+
+    test_runtime = libexec/"tests"
+    %w[docs src src_assets test_assets].each do |directory|
+      test_runtime.install "build/tests/#{directory}"
+    end
+    boost_test_fixtures = %w[
+      cmake/compile_definitions/macos.cmake
+      cmake/dependencies/Boost_Sunshine.cmake
+      cmake/macros/common.cmake
+      cmake/prep/options.cmake
+      package-lock.cmake
+      packaging/linux/Arch/PKGBUILD
+      packaging/linux/copr/Sunshine.spec
+      packaging/linux/flatpak/modules/boost.json
+      packaging/linux/flatpak/scripts/additional-install.sh
+      scripts/linux_build.sh
+      tests/scripts/test_additional_install.sh
+    ]
+    if OS.mac?
+      boost_test_fixtures += %w[
+        .github/workflows/ci-macos.yml
+        scripts/macos_build.sh
+      ]
+    end
+    boost_test_fixtures.each do |fixture|
+      (test_runtime/Pathname.new(fixture).dirname).install "build/tests/#{fixture}"
+    end
+    test_runtime.install "sunshine.png"
+    (test_runtime/"tests/unit").install "tests/unit/test_video.cpp"
+
+    if OS.linux?
+      coverage_runtime = test_runtime/"coverage"
+      coverage_runtime.install "src"
+      (test_runtime/GCOV_PREFIX_STRIP_FILE).write "#{buildpath.each_filename.count}\n"
+      coverage_notes = buildpath.glob("build/**/*.gcno")
+      odie "No gcov notes were created" if coverage_notes.empty?
+
+      coverage_notes.each do |coverage_note|
+        relative_note = coverage_note.relative_path_from(buildpath)
+        (coverage_runtime/relative_note.dirname).install coverage_note
+      end
+    end
+  end
+
+  ## @brief Build and install Sunshine with platform dependencies and optional CI test fixtures.
+  def install
+    setup_build_environment
+    standard_args = std_cmake_args
+
+    args = %W[
+      -DBUILD_WERROR=ON
+      -DCMAKE_INSTALL_PREFIX=#{prefix}
+      -DGLAD_SKIP_PIP_INSTALL=ON
+      -DHOMEBREW_ALLOW_FETCHCONTENT=ON
+      -DOPENSSL_ROOT_DIR=#{formula_opt_prefix("openssl@4")}
+      -DSUNSHINE_ASSETS_DIR=sunshine/assets
+      -DSUNSHINE_BUILD_HOMEBREW=ON
+      -DSUNSHINE_PUBLISHER_NAME='LizardByte'
+      -DSUNSHINE_PUBLISHER_WEBSITE='https://app.lizardbyte.dev'
+      -DSUNSHINE_PUBLISHER_ISSUE_URL='https://app.lizardbyte.dev/support'
+    ]
+    if OS.linux?
+      # GCC treats Homebrew's lib directory as implicit, so CMake omits its automatic rpath.
+      # Keep curl's indirect dependencies ahead of incompatible system libraries when linking and running.
+      args << "-DCMAKE_BUILD_RPATH=#{HOMEBREW_PREFIX}/lib"
+      args << "-DCMAKE_INSTALL_RPATH=#{HOMEBREW_PREFIX}/lib"
+    end
+    args << "-DSUNSHINE_EXECUTABLE_PATH=#{opt_bin}/sunshine" if OS.linux?
+    # Point cmake at the venv Python that has jinja2 installed (set up in setup_build_environment)
+    args << "-DPython_EXECUTABLE=#{@glad_python}" if @glad_python
+
+    add_test_args(args)
+
+    if build.with? "docs"
+      ohai "Building docs: enabled"
+      args << "-DBUILD_DOCS=ON"
+    else
+      ohai "Building docs: disabled"
+      args << "-DBUILD_DOCS=OFF"
+    end
+
+    if build.without? "static-boost"
+      args << "-DBOOST_USE_STATIC=OFF"
+      ohai "Disabled statically linking Boost libraries"
+    else
+      args << "-DBOOST_USE_STATIC=ON"
+      ohai "Enabled statically linking Boost libraries"
+
+      unless formula_any_version_installed?("icu4c")
+        odie <<~EOS
+          icu4c must be installed to link against static Boost libraries,
+          either install icu4c or use brew install sunshine --with-static-boost instead
+        EOS
+      end
+      ENV.append "CXXFLAGS", "-I#{formula_opt_include("icu4c")}"
+      icu4c_lib_path = formula_opt_lib("icu4c").to_s
+      ENV.append "LDFLAGS", "-L#{icu4c_lib_path}"
+      ENV["LIBRARY_PATH"] = icu4c_lib_path
+      ohai "Linking against ICU libraries at: #{icu4c_lib_path}"
+    end
+
+    add_cuda_args(args)
+
     system "cmake", "-S", ".", "-B", "build", "-G", "Unix Makefiles",
-            *std_cmake_args,
-            *build_cmake_args
+            *standard_args,
+            *args
 
     system "make", "-C", "build"
     system "make", "-C", "build", "install"
-  end
 
-  def install_platform_specific_files
-    if IS_UPSTREAM_REPO
-      bin.install "build/tests/#{TEST_BINARY}"
-
-      test_runtime = libexec/"tests"
-      %w[docs src src_assets test_assets].each do |directory|
-        test_runtime.install "build/tests/#{directory}"
-      end
-      boost_test_fixtures = %w[
-        cmake/compile_definitions/macos.cmake
-        cmake/dependencies/Boost_Sunshine.cmake
-        cmake/macros/common.cmake
-        cmake/prep/options.cmake
-        package-lock.cmake
-        packaging/linux/Arch/PKGBUILD
-        packaging/linux/copr/Sunshine.spec
-        packaging/linux/flatpak/modules/boost.json
-        packaging/linux/flatpak/scripts/additional-install.sh
-        scripts/linux_build.sh
-        tests/scripts/test_additional_install.sh
-      ]
-      if OS.mac?
-        boost_test_fixtures += %w[
-          .github/workflows/ci-macos.yml
-          scripts/macos_build.sh
-        ]
-      end
-      boost_test_fixtures.each do |fixture|
-        (test_runtime/Pathname.new(fixture).dirname).install "build/tests/#{fixture}"
-      end
-      test_runtime.install "sunshine.png"
-      (test_runtime/"tests/unit").install "tests/unit/test_video.cpp"
-
-      if OS.linux?
-        coverage_runtime = test_runtime/"coverage"
-        coverage_runtime.install "src"
-        (test_runtime/GCOV_PREFIX_STRIP_FILE).write "#{buildpath.each_filename.count}\n"
-        coverage_notes = buildpath.glob("build/**/*.gcno")
-        odie "No gcov notes were created" if coverage_notes.empty?
-
-        coverage_notes.each do |coverage_note|
-          relative_note = coverage_note.relative_path_from(buildpath)
-          (coverage_runtime/relative_note.dirname).install coverage_note
-        end
-      end
-    end
+    install_test_fixtures
 
     # codesign the binary on intel macs
     system "codesign", "-s", "-", "--force", "--deep", bin/"sunshine" if OS.mac? && Hardware::CPU.intel?
 
     bin.install "src_assets/linux/misc/postinst" if OS.linux?
-  end
 
-  def install
-    setup_build_environment
-    build_and_install_project
-    install_platform_specific_files
     collect_test_artifacts
   end
 
@@ -541,6 +475,7 @@ class Sunshine < Formula
     EOS
   end
 
+  ## @brief Verify the installed binary, CI fixtures, test results, and normalized source coverage.
   test do
     # test that the binary runs at all
     system bin/"sunshine", "--version"
@@ -581,7 +516,19 @@ class Sunshine < Formula
           assert_path_exists coverage_report_path(artifact_dir)
         end
       elsif ENV.fetch("HOMEBREW_BOTTLE_BUILD", "false") != "true"
-        run_test_suite testpath
+        artifact_dir = testpath
+        mkdir_p artifact_dir/"tests"
+        test_results = artifact_dir/TEST_RESULTS_XML
+
+        if OS.mac?
+          with_llvm_profile_file(artifact_dir) do
+            system bin/TEST_BINARY, "--gtest_color=yes", "--gtest_output=xml:#{test_results}"
+          end
+        else
+          system bin/TEST_BINARY, "--gtest_color=yes", "--gtest_output=xml:#{test_results}"
+        end
+
+        ensure_artifact_exists test_results
         generate_coverage_report testpath, ENV.fetch("HOMEBREW_BUILDPATH", "")
       end
 
