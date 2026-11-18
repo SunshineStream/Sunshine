@@ -108,6 +108,8 @@ protected:
   std::string saved_username;
   std::string saved_password;
   std::string saved_salt;
+  std::string saved_credentials_file;  ///< Original credentials path restored after each test.
+  net::net_e saved_origin_policy;  ///< Original remote-address policy.
   std::string saved_locale;
   std::vector<std::string> saved_csrf_allowed_origins;
   std::filesystem::path test_web_dir;
@@ -135,6 +137,9 @@ protected:
     saved_username = config::sunshine.username;
     saved_password = config::sunshine.password;
     saved_salt = config::sunshine.salt;
+    saved_credentials_file = config::sunshine.credentials_file;
+    saved_origin_policy = http::origin_web_ui_allowed;
+    http::origin_web_ui_allowed = net::LAN;
     saved_locale = config::sunshine.locale;
     saved_csrf_allowed_origins = config::sunshine.csrf_allowed_origins;
 
@@ -157,6 +162,8 @@ protected:
     // Create test web directory in temp
     test_web_dir = std::filesystem::temp_directory_path() / "sunshine_test_confighttp";  // NOSONAR(cpp:S5443): safe for tests
     std::filesystem::create_directories(test_web_dir / "web");
+    config::sunshine.credentials_file = (test_web_dir / "credentials.json").string();
+    std::filesystem::remove(config::sunshine.credentials_file);
     confighttp::set_portal_token_path_provider_for_testing([this]() {
       return test_web_dir / "portal_token";
     });
@@ -345,6 +352,7 @@ protected:
     server->resource["^/pairing-test$"]["POST"] = confighttp::savePin;
     server->resource["^/portal-token-reset-test$"]["POST"] = confighttp::resetPortalToken;
     server->resource["^/api/apps$"]["POST"] = confighttp::saveApp;
+    server->resource["^/api/password$"]["POST"] = confighttp::savePassword;
     server->default_resource["GET"] = confighttp::getFallbackPage;
 
     // Start server
@@ -385,6 +393,8 @@ protected:
     config::sunshine.username = saved_username;
     config::sunshine.password = saved_password;
     config::sunshine.salt = saved_salt;
+    config::sunshine.credentials_file = saved_credentials_file;
+    http::origin_web_ui_allowed = saved_origin_policy;
     config::sunshine.locale = saved_locale;
     config::sunshine.csrf_allowed_origins = saved_csrf_allowed_origins;
     nvhttp::expire_pair_sessions(std::chrono::steady_clock::time_point::max());
@@ -2247,4 +2257,35 @@ TEST_F(ConfigHttpTest, SaveAppOmitsNullOptionalFieldsAndPreservesConfiguredValue
     EXPECT_FALSE(app.at("prep-cmd").at(0).contains("undo"));
     EXPECT_FALSE(app.at("prep-cmd").at(0).contains("elevated"));
   }
+}
+
+/**
+ * @brief Initial credential creation must enforce the address policy without browser headers.
+ */
+TEST_F(ConfigHttpTest, InitialCredentialsRejectDisallowedSourceBeforeWritingState) {
+  config::sunshine.username.clear();
+  // A deny-all policy reaches the forbidden branch using a portable loopback fixture.
+  // net_e has a fixed int underlying type, so this sentinel is representable.
+  http::origin_web_ui_allowed = static_cast<net::net_e>(-1);
+  SimpleWeb::CaseInsensitiveMultimap headers {{"Content-Type", "application/json"}};
+  const auto response = client->request("POST", "/api/password", R"({"newUsername":"attacker","newPassword":"password","confirmNewPassword":"password"})", headers);
+  EXPECT_EQ(response->status_code, "403 Forbidden");
+  EXPECT_TRUE(config::sunshine.username.empty());
+  EXPECT_FALSE(std::filesystem::exists(config::sunshine.credentials_file));
+}
+
+/**
+ * @brief Allowed initial enrollment works, and subsequent changes still require authentication.
+ */
+TEST_F(ConfigHttpTest, AllowedInitialCredentialsDoNotEnableUnauthenticatedPasswordChanges) {
+  config::sunshine.username.clear();
+  http::origin_web_ui_allowed = net::PC;
+  SimpleWeb::CaseInsensitiveMultimap headers {{"Content-Type", "application/json"}};
+  const auto response = client->request("POST", "/api/password", R"({"newUsername":"new-admin","newPassword":"new-password","confirmNewPassword":"new-password"})", headers);
+  EXPECT_EQ(response->status_code, "200 OK");
+  EXPECT_EQ(config::sunshine.username, "new-admin");
+  EXPECT_TRUE(std::filesystem::exists(config::sunshine.credentials_file));
+  const auto denied = client->request("POST", "/api/password", R"({"newUsername":"attacker","newPassword":"password","confirmNewPassword":"password"})", headers);
+  EXPECT_EQ(denied->status_code, "401 Unauthorized");
+  EXPECT_EQ(config::sunshine.username, "new-admin");
 }

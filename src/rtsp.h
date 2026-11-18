@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 
 // local includes
 #include "crypto.h"
@@ -74,6 +75,7 @@ namespace rtsp_stream {
    */
   struct launch_session_t {
     uint32_t id;  ///< RTSP launch-session identifier assigned before stream startup.
+    std::shared_ptr<std::atomic_bool> revoked = std::make_shared<std::atomic_bool>(false);  ///< Revocation shared with accepted sockets and active streams.
 
     crypto::aes_t gcm_key;  ///< AES-GCM key negotiated for encrypted RTSP messages.
     crypto::aes_t iv;  ///< Initial RTSP AES-GCM IV supplied by the client.
@@ -100,6 +102,15 @@ namespace rtsp_stream {
     uint32_t rtsp_iv_counter;  ///< Counter value mixed into encrypted RTSP IVs.
     std::string client_cert;  ///< PEM certificate for the paired Moonlight client.
   };
+
+  /**
+   * @brief Require authenticated RTSP setup and reject a revoked launch.
+   * @param session Pending launch to check.
+   * @return True when this launch may accept authenticated RTSP messages.
+   */
+  inline bool accepts_rtsp(const launch_session_t &session) {
+    return session.rtsp_cipher.has_value() && !session.revoked->load(std::memory_order_acquire);
+  }
 
   /**
    * @brief Queue a launch session until the RTSP client connects.

@@ -320,12 +320,12 @@ namespace crypto {
       int encrypt(const std::string_view &plaintext, std::uint8_t *tagged_cipher, aes_t *iv);
 
       /**
-       * @brief Decrypt ciphertext into the supplied plaintext buffer.
+       * @brief Authenticate and decrypt a complete tag-prefixed AES-GCM message.
        *
-       * @param cipher Ciphertext bytes to decrypt or output buffer for encryption.
-       * @param plaintext Plaintext bytes to encrypt.
-       * @param iv Initialization vector for the cipher operation.
-       * @return Number of bytes written, signature bytes, or an error status depending on the overload.
+       * @param cipher Complete authentication tag followed by ciphertext.
+       * @param plaintext Receives authenticated plaintext; empty on failure.
+       * @param iv Nonempty initialization vector for the cipher operation.
+       * @return Zero on success, or -1 for invalid input or authentication failure.
        */
       int decrypt(const std::string_view &cipher, std::vector<std::uint8_t> &plaintext, aes_t *iv);
     };

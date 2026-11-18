@@ -697,6 +697,7 @@ by default. You may replace *localhost* with your internal ip address.
 
 > [!CAUTION]
 > If running for the first time, make sure to note the username and password that you created.
+> The `origin_web_ui_allowed` network restriction also applies to initial credential creation.
 
 1. Change the web-ui to your desired theme, using the dropdown menu in the navbar.
    ![Theme Selection](images/split-themes.png)
@@ -706,7 +707,9 @@ by default. You may replace *localhost* with your internal ip address.
    ![Configuration](images/configuration-search.png)
 4. Find Moonlight clients and other tools for Sunshine in the `Featured Apps` tab.
    ![Featured Apps](images/featured-apps.png)
-5. In Moonlight, you may need to add the PC manually.
+5. Use a Moonlight client that supports authenticated encrypted RTSP setup. Clients without this support cannot
+   start or resume a stream and receive an error asking them to update. This requirement applies even when
+   audio/video encryption is disabled. In Moonlight, you may need to add the PC manually.
 6. When Moonlight requests for you insert the pin:
 
    - Login to the web-ui
@@ -822,3 +825,9 @@ Tutorials and Guides are community generated. Want to contribute? Reach out to u
 
 
 [latest-release]: https://github.com/SunshineStream/Sunshine/releases/latest
+
+### Revoking client access
+
+Unpairing or disabling a client revokes its active streams and pending launches. Other paired clients remain
+permitted to connect. Re-enabling or pairing a client again requires a new launch; it does not restore an
+old connection's authorization.

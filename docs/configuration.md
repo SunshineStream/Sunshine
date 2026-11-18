@@ -1784,6 +1784,9 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
 
 ### lan_encryption_mode
 
+@note{Authenticated encrypted RTSP setup is always required. This setting controls audio/video encryption and
+cannot enable legacy plaintext RTSP setup.}
+
 <table>
     <tr>
         <td>Description</td>
@@ -1820,6 +1823,8 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
 </table>
 
 ### wan_encryption_mode
+
+@note{Authenticated encrypted RTSP setup is always required, independently of this audio/video encryption policy.}
 
 <table>
     <tr>
