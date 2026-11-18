@@ -132,7 +132,7 @@ namespace {
      * @return Verifier shared with the fixture's authorization state.
      */
     std::function<int(SSL *)> verifier() override {
-      return [this](SSL *ssl) {
+      return [this](const SSL *ssl) {
         ++verification_count;
 #if OPENSSL_VERSION_MAJOR >= 3
         crypto::x509_t certificate {SSL_get1_peer_certificate(ssl)};
@@ -247,7 +247,7 @@ namespace {
     const auto second_credentials = crypto::gen_creds("Sunshine second client", 2048);
     const auto second_cert = certificate_file.string() + ".second";
     const auto second_key = private_key_file.string() + ".second";
-    const auto cleanup = util::fail_guard([&]() {
+    const auto cleanup = util::fail_guard([&second_cert, &second_key]() {
       std::error_code ec;
       std::filesystem::remove(second_cert, ec);
       std::filesystem::remove(second_key, ec);
@@ -269,6 +269,12 @@ namespace {
     second.lowest_layer().connect({boost::asio::ip::make_address_v4("127.0.0.2"), port});
     second.handshake(boost::asio::ssl::stream_base::client);
 
+    // Finish the server-side handshake callback before observing request-local identity.
+    EXPECT_NE(request(second).find("200 OK"), std::string::npos);
+    {
+      std::lock_guard lock {identity_mutex};
+      EXPECT_EQ(last_certificate, second_credentials.x509);
+    }
     EXPECT_NE(request(first).find("200 OK"), std::string::npos);
     {
       std::lock_guard lock {identity_mutex};

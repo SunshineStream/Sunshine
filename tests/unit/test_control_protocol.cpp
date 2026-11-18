@@ -103,7 +103,7 @@ TEST(ControlEnvelopeTest, PreservesValidLegacyCiphertext) {
  * @brief Truncated decrypted secondary headers are rejected before reading their type.
  */
 TEST(ControlEnvelopeTest, RejectsMalformedSecondaryHeaders) {
-  const std::string message {"\x06\x02\x01\0x", 5};
+  const std::string message {"\x{06}\x{02}\x{01}\0x", 5};
   for (std::size_t size = 0; size < 4; ++size) {
     EXPECT_FALSE(stream::control::parse_plaintext(std::string_view(message).substr(0, size)));
   }
@@ -113,12 +113,12 @@ TEST(ControlEnvelopeTest, RejectsMalformedSecondaryHeaders) {
  * @brief Valid empty and nonempty inner messages retain their type and payload.
  */
 TEST(ControlEnvelopeTest, AcceptsValidSecondaryHeaders) {
-  const std::string empty {"\x02\x03\0\0", 4};
+  const std::string empty {"\x{02}\x{03}\0\0", 4};
   const auto parsed_empty = stream::control::parse_plaintext(empty);
   ASSERT_TRUE(parsed_empty);
   EXPECT_EQ(parsed_empty->first, 0x0302);
   EXPECT_TRUE(parsed_empty->second.empty());
-  const std::string nonempty {"\x06\x02\x01\0x", 5};
+  const std::string nonempty {"\x{06}\x{02}\x{01}\0x", 5};
   const auto parsed = stream::control::parse_plaintext(nonempty);
   ASSERT_TRUE(parsed);
   EXPECT_EQ(parsed->first, 0x0206);
@@ -129,7 +129,7 @@ TEST(ControlEnvelopeTest, AcceptsValidSecondaryHeaders) {
  * @brief Advisory secondary lengths cannot extend or truncate the authenticated payload.
  */
 TEST(ControlEnvelopeTest, BoundsSecondaryPayloadByAuthenticatedBytes) {
-  std::string message {"\x06\x02\0\0x", 5};
+  std::string message {"\x{06}\x{02}\0\0x", 5};
   for (const auto length : {0U, 1U, 2U, 65535U}) {
     message[2] = static_cast<char>(length);
     message[3] = static_cast<char>(length >> 8);

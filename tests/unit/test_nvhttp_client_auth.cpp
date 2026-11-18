@@ -231,19 +231,27 @@ TEST_F(ClientAuthorizationTest, UnpairRevokesExistingLaunchStateWithoutRevokingO
 }
 
 /**
- * @brief Re-enabling a client creates a new lifetime instead of resurrecting revoked sessions.
+ * @brief Re-enable creates a new authorization lifetime, while repeated updates preserve it.
  */
 TEST_F(ClientAuthorizationTest, ReenableDoesNotRestoreOldLaunchAuthorization) {
   const auto credentials = crypto::gen_creds("reenabled client", 2048);
   const auto uuid = nvhttp::test_support::add_client("client", credentials.x509, true);
   ASSERT_FALSE(uuid.empty());
   const auto old = nvhttp::client_revocation_state(credentials.x509);
+  EXPECT_FALSE(nvhttp::set_client_enabled("unknown client", false));
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
+  EXPECT_EQ(nvhttp::client_revocation_state(credentials.x509), old);
+  EXPECT_FALSE(old->load());
   ASSERT_TRUE(nvhttp::set_client_enabled(uuid, false));
   EXPECT_TRUE(old->load());
   EXPECT_TRUE(nvhttp::client_revocation_state(credentials.x509)->load());
   ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
   EXPECT_TRUE(old->load());
-  EXPECT_FALSE(nvhttp::client_revocation_state(credentials.x509)->load());
+  const auto current = nvhttp::client_revocation_state(credentials.x509);
+  EXPECT_FALSE(current->load());
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
+  EXPECT_EQ(nvhttp::client_revocation_state(credentials.x509), current);
+  EXPECT_FALSE(current->load());
   EXPECT_TRUE(nvhttp::client_revocation_state("unknown certificate")->load());
 }
 
@@ -279,7 +287,7 @@ TEST_F(ClientAuthorizationTest, DelayedTeardownPreservesReenabledPendingLaunch) 
   pending->revoked = nvhttp::client_revocation_state(credentials.x509);
   pending->rtsp_cipher.emplace(crypto::aes_t(16, 0), false);
   rtsp_stream::launch_session_raise(pending);
-  const auto cleanup = util::fail_guard([&]() {
+  const auto cleanup = util::fail_guard([pending]() {
     rtsp_stream::launch_session_clear(pending->id);
   });
 

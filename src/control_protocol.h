@@ -55,8 +55,7 @@ namespace stream::control {
     if (payload.size() < header_size) {
       return std::nullopt;
     }
-    const auto length = boost::endian::endian_load<std::uint32_t, 4, boost::endian::order::big>(reinterpret_cast<const unsigned char *>(payload.data()));
-    if (length < TAG_SIZE || length != payload.size() - header_size) {
+    if (const auto length = boost::endian::endian_load<std::uint32_t, 4, boost::endian::order::big>(reinterpret_cast<const unsigned char *>(payload.data())); length < TAG_SIZE || length != payload.size() - header_size) {
       return std::nullopt;
     }
     return payload.substr(header_size);

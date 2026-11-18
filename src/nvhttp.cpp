@@ -1912,18 +1912,19 @@ namespace nvhttp {
   bool set_client_enabled(const std::string_view uuid, bool enabled) {
     std::lock_guard lock {client_auth_mutex()};
     for (auto &named_cert : client_root.named_devices) {
-      if (named_cert.uuid == uuid) {
-        if (named_cert.enabled != enabled) {
-          named_cert.revoked->store(true, std::memory_order_release);
-          if (enabled) {
-            named_cert.revoked = std::make_shared<std::atomic_bool>(false);
-          }
-        }
-        named_cert.enabled = enabled;
-        rebuild_client_cert_chain();
-        save_state();
-        return true;
+      if (named_cert.uuid != uuid) {
+        continue;
       }
+      if (named_cert.enabled != enabled) {
+        named_cert.revoked->store(true, std::memory_order_release);
+        if (enabled) {
+          named_cert.revoked = std::make_shared<std::atomic_bool>(false);
+        }
+      }
+      named_cert.enabled = enabled;
+      rebuild_client_cert_chain();
+      save_state();
+      return true;
     }
     return false;
   }

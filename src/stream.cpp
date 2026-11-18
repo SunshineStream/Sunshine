@@ -1253,7 +1253,7 @@ namespace stream {
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
     });
 
-    server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
+    server->map(packetTypes[IDX_INPUT_DATA], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
       const auto message = control::parse_legacy_input(payload);
@@ -1265,9 +1265,8 @@ namespace stream {
 
       std::vector<uint8_t> plaintext;
 
-      auto &cipher = session->control.cipher;
       auto &iv = session->control.legacy_input_enc_iv;
-      if (cipher.decrypt(tagged_cipher, plaintext, &iv)) {
+      if (session->control.cipher.decrypt(tagged_cipher, plaintext, &iv)) {
         // something went wrong :(
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
@@ -1332,7 +1331,7 @@ namespace stream {
         session::stop(*session);
         return;
       }
-      const auto [type, next_payload] = *inner_message;
+      const auto &[type, next_payload] = *inner_message;
 
       if (type == packetTypes[IDX_ENCRYPTED]) {
         BOOST_LOG(error) << "Bad packet type [IDX_ENCRYPTED] found"sv;

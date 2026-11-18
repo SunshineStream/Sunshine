@@ -144,7 +144,7 @@ TEST(CryptoTest, GcmAuthenticatesEmptyAndNonemptyMessagesAndRecoversAfterFailure
     ASSERT_EQ(receiver.decrypt(valid, plaintext, &iv), 0);
     EXPECT_EQ(std::string(plaintext.begin(), plaintext.end()), message);
     auto forged = valid;
-    forged[0] ^= 1;
+    forged[0] = valid[0] == 'x' ? 'y' : 'x';
     EXPECT_EQ(receiver.decrypt(forged, plaintext, &iv), -1);
     EXPECT_TRUE(plaintext.empty());
     ASSERT_EQ(receiver.decrypt(valid, plaintext, &iv), 0);

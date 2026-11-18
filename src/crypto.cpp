@@ -161,13 +161,15 @@ namespace crypto {
       }
 
       const auto cipher = tagged_cipher.substr(tag_size);
-      const auto tag = tagged_cipher.substr(0, tag_size);
+      // OpenSSL accepts a mutable tag buffer, so retain a writable copy.
+      std::array<std::uint8_t, tag_size> tag;
+      std::copy_n(tagged_cipher.begin(), tag.size(), tag.begin());
       // Reserve a writable output byte even for an authenticated empty message.
       plaintext.resize(std::max<std::size_t>(16, round_to_pkcs7_padded(cipher.size())));
 
       int final_outlen;
       int update_outlen;
-      if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), (int) cipher.size()) != 1 || EVP_CIPHER_CTX_ctrl(decrypt_ctx.get(), EVP_CTRL_GCM_SET_TAG, (int) tag.size(), const_cast<char *>(tag.data())) != 1 || EVP_DecryptFinal_ex(decrypt_ctx.get(), plaintext.data() + update_outlen, &final_outlen) != 1) {
+      if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), (int) cipher.size()) != 1 || EVP_CIPHER_CTX_ctrl(decrypt_ctx.get(), EVP_CTRL_GCM_SET_TAG, (int) tag.size(), tag.data()) != 1 || EVP_DecryptFinal_ex(decrypt_ctx.get(), plaintext.data() + update_outlen, &final_outlen) != 1) {
         plaintext.clear();
         return -1;
       }
