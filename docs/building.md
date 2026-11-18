@@ -79,7 +79,7 @@ export CXX=clang++19
 
 #### Linux
 Dependencies vary depending on the distribution. You can reference our
-[linux_build.sh](https://github.com/LizardByte/Sunshine/blob/master/scripts/linux_build.sh) script for a list of
+[linux_build.sh](https://github.com/SunshineStream/Sunshine/blob/master/scripts/linux_build.sh) script for a list of
 dependencies we use in Debian-based, Fedora-based and Arch-based distributions. Please submit a PR if you would like to extend the
 script to support other distributions.
 
@@ -237,7 +237,7 @@ MSYS2 Node.js package is not supported because its shared runtime cannot load th
 Ensure [git](https://git-scm.com) is installed on your system, then clone the repository using the following command:
 
 ```bash
-git clone https://github.com/lizardbyte/sunshine.git --recurse-submodules
+git clone https://github.com/SunshineStream/Sunshine.git --recurse-submodules
 cd sunshine
 mkdir build
 ```
@@ -251,7 +251,7 @@ ninja -C build
 
 > [!TIP]
 > Available build options can be found in
-> [options.cmake](https://github.com/LizardByte/Sunshine/blob/master/cmake/prep/options.cmake).
+> [options.cmake](https://github.com/SunshineStream/Sunshine/blob/master/cmake/prep/options.cmake).
 
 ### Package
 

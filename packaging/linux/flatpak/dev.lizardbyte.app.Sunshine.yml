@@ -24,6 +24,7 @@ finish-args:
   - --socket=fallback-x11  # show windows using X11
   - --system-talk-name=org.freedesktop.Avahi  # talk to avahi on the system bus
   - --talk-name=org.freedesktop.Flatpak  # talk to flatpak on the session bus
+  - --talk-name=org.kde.KWin  # assign virtual touch and pen devices to the streamed output
   - --talk-name=org.kde.StatusNotifierWatcher  # talk to system tray on the session bus
 
 cleanup:

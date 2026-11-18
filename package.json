@@ -4,13 +4,13 @@
   "description": "Prebuilt web UI assets for the Sunshine game-stream host",
   "license": "GPL-3.0-only",
   "funding": "https://app.lizardbyte.dev",
-  "homepage": "https://app.lizardbyte.dev/Sunshine",
+  "homepage": "https://sunshine.lizardbyte.dev",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/LizardByte/Sunshine.git"
+    "url": "git+https://github.com/SunshineStream/Sunshine.git"
   },
   "bugs": {
-    "url": "https://github.com/LizardByte/Sunshine/issues"
+    "url": "https://github.com/SunshineStream/Sunshine/issues"
   },
   "files": [
     "build/assets/web/"
@@ -24,25 +24,25 @@
   },
   "type": "module",
   "dependencies": {
-    "@intlify/message-compiler": "11.4.18",
-    "@lucide/vue": "1.70.0",
-    "bootstrap": "5.3.8",
+    "@intlify/message-compiler": "11.4.21",
+    "@lucide/vue": "1.73.0",
+    "bootstrap": "5.3.9",
     "date-fns": "4.4.0",
     "marked": "18.0.12",
     "vue": "3.5.45",
-    "vue-i18n": "11.4.18",
-    "vue-router": "5.4.0",
+    "vue-i18n": "11.4.22",
+    "vue-router": "5.5.1",
     "vue3-simple-icons": "16.10.0"
   },
   "devDependencies": {
     "@codecov/vite-plugin": "2.0.1",
-    "@vitejs/plugin-vue": "6.0.10",
-    "@vitest/coverage-v8": "5.0.5",
-    "@vue/test-utils": "2.5.1",
-    "jsdom": "31.0.0",
-    "serve": "14.2.6",
-    "vite": "8.3.5",
-    "vitest": "5.0.5"
+    "@vitejs/plugin-vue": "6.0.11",
+    "@vitest/coverage-v8": "5.1.0",
+    "@vue/test-utils": "2.6.0",
+    "jsdom": "31.0.1",
+    "serve": "14.2.8",
+    "vite": "8.3.8",
+    "vitest": "5.1.0"
   },
   "overrides": {
     "@codecov/vite-plugin": {

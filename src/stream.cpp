@@ -17,11 +17,8 @@
 #include <openssl/err.h>
 #include <rs.h>
 
-extern "C" {
-  // clang-format off
-#include <moonlight-common-c/src/Limelight-internal.h>
-  // clang-format on
-}
+// Keep this separate so clang-format preserves the include order.
+#include "compat/moonlight.h"
 
 // local includes
 #include "config.h"

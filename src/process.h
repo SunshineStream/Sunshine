@@ -20,7 +20,7 @@
 #include "config.h"
 #include "platform/common.h"
 #include "rtsp.h"
-#include "src/boost_process_compat.h"
+#include "src/compat/boost_process.h"
 #include "utility.h"
 
 /**

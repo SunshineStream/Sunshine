@@ -13,7 +13,7 @@
 
 // local includes required before library includes
 // Boost.Process must be included before MinHook pulls in Windows.h so Boost.Asio sees WinSock2.h first.
-#include "src/boost_process_compat.h"
+#include "src/compat/boost_process.h"
 
 // lib includes
 #include <boost/algorithm/string/join.hpp>

@@ -2,7 +2,7 @@
 name = "Sunshine"
 version = "0.0.0"
 description = "Self-hosted game stream host for Moonlight."
-repository = "https://github.com/LizardByte/Sunshine"
+repository = "https://github.com/SunshineStream/Sunshine"
 logo = "sunshine.svg"
 favicon = "sunshine.ico"
 

@@ -689,6 +689,7 @@ namespace kwin {
         out_pipewire_node = screencast->out_node_id;
         out_pipewire_objectserial = screencast->out_objectserial;
         // Set/update basic stream parameters on display_t
+        this->output_name = screencast->out_params->name;
         this->offset_x = screencast->out_params->pos_x;
         this->offset_y = screencast->out_params->pos_y;
         this->width = screencast->out_params->width;

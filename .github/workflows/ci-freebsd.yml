@@ -48,7 +48,7 @@ jobs:
           echo "PROCESSOR_COUNT: $PROCESSOR_COUNT"
 
       - name: Setup FreeBSD
-        uses: vmactions/freebsd-vm@c46abacb49f09938ca4e1702d15d836285d694cc  # v1.5.9
+        uses: vmactions/freebsd-vm@811efaaac0668df8bfb8308c3ec997b5ab50037b  # v1.6.0
         with:
           arch: ${{ matrix.arch }}
           cpu: ${{ steps.processor_count.outputs.PROCESSOR_COUNT }}
@@ -217,7 +217,8 @@ jobs:
           cd "${GITHUB_WORKSPACE}/build/tests"
 
           export DISPLAY=:1
-          Xvfb ${DISPLAY} -screen 0 1024x768x24 &
+          # Do not reset the server when enumeration closes the last X11 connection.
+          Xvfb ${DISPLAY} -screen 0 1024x768x24 -noreset &
           XVFB_PID=$!
           trap 'kill "${XVFB_PID}" 2>/dev/null || true; wait "${XVFB_PID}" 2>/dev/null || true' EXIT
 

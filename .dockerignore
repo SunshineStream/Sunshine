@@ -9,7 +9,6 @@
 
 # ignore repo directories and files
 docker/
-gh-pages-template/
 scripts/
 tools/
 crowdin.yml

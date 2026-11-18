@@ -196,6 +196,11 @@ namespace confighttp {
 
   void resetPortalToken(const resp_https_t &response, const req_https_t &request);
 
+  /**
+   * @brief Save an application with optional fields normalized before persistence.
+   */
+  void saveApp(const resp_https_t &response, const req_https_t &request);
+
 #ifdef SUNSHINE_TESTS
   /**
    * @brief Replace native permission statuses for deterministic HTTP tests.

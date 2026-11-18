@@ -12,38 +12,38 @@
   <!-- Keep whitespace outside the badge links to avoid an underlined gap. -->
   <!-- Use raw HTML aliases to keep Doxygen's emitted comment delimiters balanced. -->
   <!--! @htmlonly_start -->
-  <a href="https://www.star-history.com/lizardbyte/sunshine"><picture><source
+  <a href="https://www.star-history.com/sunshinestream/sunshine"><picture><source
     media="(prefers-color-scheme: dark)"
-    srcset="https://api.star-history.com/badge?repo=LizardByte/Sunshine&type=rank&theme=dark"
+    srcset="https://api.star-history.com/badge?repo=sunshinestream/sunshine&type=rank&theme=dark"
   /><source
     media="(prefers-color-scheme: light)"
-    srcset="https://api.star-history.com/badge?repo=LizardByte/Sunshine&type=rank"
+    srcset="https://api.star-history.com/badge?repo=sunshinestream/sunshine&type=rank"
   /><img
     alt="Star History Rank"
-    src="https://api.star-history.com/badge?repo=LizardByte/Sunshine&type=rank"
+    src="https://api.star-history.com/badge?repo=sunshinestream/sunshine&type=rank"
   /></picture></a>
-  <a href="https://www.star-history.com/lizardbyte/sunshine"><picture><source
+  <a href="https://www.star-history.com/sunshinestream/sunshine"><picture><source
     media="(prefers-color-scheme: dark)"
-    srcset="https://api.star-history.com/badge?repo=LizardByte/Sunshine&type=trending&theme=dark"
+    srcset="https://api.star-history.com/badge?repo=sunshinestream/sunshine&type=trending&theme=dark"
   /><source
     media="(prefers-color-scheme: light)"
-    srcset="https://api.star-history.com/badge?repo=LizardByte/Sunshine&type=trending"
+    srcset="https://api.star-history.com/badge?repo=sunshinestream/sunshine&type=trending"
   /><img
     alt="GitHub Trending Repository of the Day"
-    src="https://api.star-history.com/badge?repo=LizardByte/Sunshine&type=trending"
+    src="https://api.star-history.com/badge?repo=sunshinestream/sunshine&type=trending"
   /></picture></a><br><br>
   <!--! @htmlonly_end -->
-  <a href="https://github.com/LizardByte/Sunshine"><img src="https://img.shields.io/github/stars/lizardbyte/sunshine.svg?logo=github&style=for-the-badge" alt="GitHub stars"></a>
-  <a href="https://github.com/LizardByte/Sunshine/releases/latest"><img src="https://img.shields.io/github/downloads/lizardbyte/sunshine/total.svg?style=for-the-badge&logo=github" alt="GitHub Releases"></a>
+  <a href="https://github.com/SunshineStream/Sunshine"><img src="https://img.shields.io/github/stars/SunshineStream/Sunshine.svg?logo=github&style=for-the-badge" alt="GitHub stars"></a>
+  <a href="https://github.com/SunshineStream/Sunshine/releases/latest"><img src="https://img.shields.io/github/downloads/SunshineStream/Sunshine/total.svg?style=for-the-badge&logo=github" alt="GitHub Releases"></a>
   <a href="https://hub.docker.com/r/lizardbyte/sunshine"><img src="https://img.shields.io/docker/pulls/lizardbyte/sunshine.svg?style=for-the-badge&logo=docker" alt="Docker"></a>
-  <a href="https://github.com/LizardByte/Sunshine/pkgs/container/sunshine"><img src="https://img.shields.io/badge/dynamic/json.svg?url=https%3A%2F%2Fipitio.github.io%2Fbackage%2FLizardByte%2FSunshine%2Fsunshine.json&query=%24.downloads&label=ghcr%20pulls&style=for-the-badge&logo=github" alt="GHCR"></a>
+  <a href="https://github.com/orgs/LizardByte/packages/container/package/sunshine"><img src="https://img.shields.io/badge/dynamic/json.svg?url=https%3A%2F%2Fipitio.github.io%2Fbackage%2FLizardByte%2FSunshine%2Fsunshine.json&query=%24.downloads&label=ghcr%20pulls&style=for-the-badge&logo=github" alt="GHCR"></a>
   <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/downloads/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub installs"></a>
   <a href="https://flathub.org/apps/dev.lizardbyte.app.Sunshine"><img src="https://img.shields.io/flathub/v/dev.lizardbyte.app.Sunshine.svg?style=for-the-badge&logo=flathub" alt="Flathub Version"></a>
   <a href="https://github.com/microsoft/winget-pkgs/tree/master/manifests/l/LizardByte/Sunshine"><img src="https://img.shields.io/winget/v/LizardByte.Sunshine.svg?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAHuSURBVFhH7ZfNTtRQGIYZiMDwN/IrCAqIhMSNKxcmymVwG+5dcDVsWHgDrtxwCYQVl+BChzDEwSnPY+eQ0sxoOz1mQuBNnpyvTdvz9jun5/SrjfxnJUkyQbMEz2ELduF1l0YUA3QyTrMAa2AnPtyOXsELeAYNyKtV2EC3k3lYgTOwg09ghy/BTp7CKBRV844BOpmmMV2+ySb4BmInG7AKY7AHH+EYqqhZo9PPBG/BVDlOizAD/XQFmnoPXzxRQX8M/CCYS48L6RIc4ygGHK9WGg9HZSZMUNRPVwNJGg5Hg2Qgqh4N3FsDsb6EmgYm07iwwvUxstdxJTwgmILf4CfZ6bb5OHANX8GN5x20IVxnG8ge94pt2xpwU3GnCwayF4Q2G2vgFLzHndFzQdk4q77nNfCdwL28qNyMtmEf3A1/QV5FjDiPWo5jrwf8TWZChTlgJvL4F9QL50/A43qVidTvLcuoM2wDQ1+IkgefgUpLcYwMVBqCKNJA2b0gKNocOIITOIef8C/F/CdMbh/GklynsSawKLHS8d9/B1x2LUqsfFyy3TMsWj5A1cLkotDbYO4JjWWZlZEGv8EbOIR1CAVN2eG8W5oNKgxaeC6DmTJjZs7ixUxpznLPLT+v4sXpoMLcLI3mzFSonDXIEI/M3QCIO4YuimBJ/gAAAABJRU5ErkJggg==" alt="Winget Version"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/ci.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/ci.yml.svg?branch=master&label=CI%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (CI)"></a>
-  <a href="https://github.com/LizardByte/Sunshine/actions/workflows/localize.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/lizardbyte/sunshine/localize.yml.svg?branch=master&label=localize%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (localize)"></a>
-  <a href="https://codecov.io/gh/LizardByte/Sunshine"><img src="https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fapp.lizardbyte.dev%2Fdashboard%2Fshields%2Fcodecov%2FSunshine.json&style=for-the-badge&logo=codecov" alt="Codecov"></a>
-  <a href="https://sonarcloud.io/project/overview?id=LizardByte_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/LizardByte_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
+  <a href="https://github.com/SunshineStream/Sunshine/actions/workflows/ci.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/SunshineStream/Sunshine/ci.yml.svg?branch=master&label=CI%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (CI)"></a>
+  <a href="https://github.com/SunshineStream/Sunshine/actions/workflows/localize.yml?query=branch%3Amaster"><img src="https://img.shields.io/github/actions/workflow/status/SunshineStream/Sunshine/localize.yml.svg?branch=master&label=localize%20build&logo=github&style=for-the-badge" alt="GitHub Workflow Status (localize)"></a>
+  <a href="https://codecov.io/gh/SunshineStream/Sunshine"><img src="https://img.shields.io/endpoint.svg?url=https%3A%2F%2Fapp.lizardbyte.dev%2Fdashboard%2Fshields%2Fcodecov%2FSunshine.json&style=for-the-badge&logo=codecov" alt="Codecov"></a>
+  <a href="https://sonarcloud.io/project/overview?id=SunshineStream_Sunshine"><img src="https://img.shields.io/sonar/quality_gate/SunshineStream_Sunshine.svg?server=https%3A%2F%2Fsonarcloud.io&style=for-the-badge&logo=sonarqubecloud&label=sonarcloud" alt="SonarCloud"></a>
 </div>
 
 ## ℹ️ About
@@ -53,6 +53,8 @@ Offering low-latency, cloud gaming server capabilities with support for AMD, Int
 encoding. Software encoding is also available. You can connect to Sunshine from any Moonlight client on a variety of
 devices. A web UI is provided to allow configuration, and client pairing, from your favorite web browser. Pair from
 the local server or any mobile device.
+
+Visit the [Sunshine website](https://sunshine.lizardbyte.dev/) for downloads and an overview.
 
 LizardByte has the full documentation hosted on [Read the Docs](https://docs.lizardbyte.dev/projects/sunshine)
 

@@ -795,6 +795,7 @@ namespace input {
       touch_port.logical_height,
       touch_port.env_offset_x,
       touch_port.env_offset_y,
+      touch_port.output_name,
     };
   }
 
@@ -1445,14 +1446,15 @@ namespace input {
   }
 
   /**
-   * @brief Normalizes coordinates to monitor-local logical touch dimensions.
+   * @brief Normalize coordinates within the streamed monitor, excluding client letterboxing.
+   *
    * @param touch_port The current touch port metadata.
    * @param coords The in/out coordinate pair to normalize.
    * @return The monitor-local touch port, or std::nullopt if dimensions are invalid.
    */
   std::optional<platf::touch_port_t> monitor_touch_port(const input::touch_port_t &touch_port, std::pair<float, float> &coords) {
-    const float monitor_logical_w = (touch_port.width * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
-    const float monitor_logical_h = (touch_port.height * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
+    const float monitor_logical_w = ((touch_port.width - 2.0f * touch_port.client_offsetX) * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
+    const float monitor_logical_h = ((touch_port.height - 2.0f * touch_port.client_offsetY) * touch_port.scalar_inv) / touch_port.scalar_tpcoords;
     if (monitor_logical_w <= 0.0f || monitor_logical_h <= 0.0f) {
       BOOST_LOG(warning) << "Ignoring touch/pen input due to invalid logical touch dimensions"sv;
       return std::nullopt;
@@ -1468,6 +1470,9 @@ namespace input {
       static_cast<int>(monitor_logical_h),
       static_cast<int>(monitor_logical_w),
       static_cast<int>(monitor_logical_h),
+      touch_port.env_offset_x,
+      touch_port.env_offset_y,
+      touch_port.output_name,
     };
   }
 
@@ -2539,6 +2544,10 @@ namespace input {
       terminate_gamepads();
       platf_input = std::move(input);
       gamepadMask.reset();
+    }
+
+    platf::client_input_t *client_context(const std::shared_ptr<input_t> &input) {
+      return input->client_context.get();
     }
 
     int alloc_gamepad(std::shared_ptr<input_t> &input, std::uint8_t client_index, const platf::gamepad_arrival_t &metadata) {

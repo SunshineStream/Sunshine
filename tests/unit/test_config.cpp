@@ -324,3 +324,107 @@ TEST_F(ConfigPersistenceTest, ParsesNvencTwoPassModesAndDefaultsUnknownValues) {
     EXPECT_EQ(config::video.nv.two_pass, expected) << setting;
   }
 }
+
+/**
+ * @brief Verify resolution-cap parsing rejects malformed values without changing the configured dimensions.
+ */
+TEST_F(ConfigPersistenceTest, ParsesMaxStreamResolutionAndRejectsMalformedValues) {
+  const auto original_video = config::video;
+  const auto restore_video = util::fail_guard([original_video]() {
+    config::video = original_video;
+  });
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  config::video.max_stream_width = 0;
+  config::video.max_stream_height = 0;
+  config::apply_config_for_test("max_stream_resolution = 2560x1440\n");
+  EXPECT_EQ(config::video.max_stream_width, 2560);
+  EXPECT_EQ(config::video.max_stream_height, 1440);
+
+  constexpr std::array malformed {
+    "2560"sv,
+    "2560x"sv,
+    "x1440"sv,
+    "0x1440"sv,
+    "2560x0"sv,
+    "1x1440"sv,
+    "2560x1"sv,
+    "-2560x1440"sv,
+    "2560x1440x"sv,
+    "2560 x 1440"sv,
+    "widthxheight"sv,
+  };
+  for (const auto setting : malformed) {
+    config::video.max_stream_width = 1;
+    config::video.max_stream_height = 1;
+    config::apply_config_for_test(std::string {"max_stream_resolution = "} + std::string {setting} + "\n");
+    EXPECT_EQ(config::video.max_stream_width, 1) << setting;
+    EXPECT_EQ(config::video.max_stream_height, 1) << setting;
+  }
+}
+
+/**
+ * @brief Expected outcome of capping one client-requested resolution.
+ */
+struct StreamResolutionCapCase {
+  int max_width;  ///< Configured maximum width.
+  int max_height;  ///< Configured maximum height.
+  int width;  ///< Client-requested width.
+  int height;  ///< Client-requested height.
+  bool capped;  ///< Whether the cap applies.
+  int expected_width;  ///< Width after capping.
+  int expected_height;  ///< Height after capping.
+};
+
+/**
+ * @brief Parameterized fixture for config::cap_stream_resolution.
+ */
+struct StreamResolutionCapTest: testing::TestWithParam<StreamResolutionCapCase> {};
+
+/**
+ * @brief Verify resolution caps preserve aspect ratio and produce even dimensions while leaving uncapped requests unchanged.
+ */
+TEST_P(StreamResolutionCapTest, CapsPreservingAspectRatioWithEvenDimensions) {
+  const auto original_video = config::video;
+  const auto restore_video = util::fail_guard([original_video]() {
+    config::video = original_video;
+  });
+  const auto &param = GetParam();
+  config::video.max_stream_width = param.max_width;
+  config::video.max_stream_height = param.max_height;
+
+  int width = param.width;
+  int height = param.height;
+  EXPECT_EQ(config::cap_stream_resolution(width, height), param.capped);
+  EXPECT_EQ(width, param.expected_width);
+  EXPECT_EQ(height, param.expected_height);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  ConfigCapStreamResolution,
+  StreamResolutionCapTest,
+  testing::Values(
+    // Disabled cap
+    StreamResolutionCapCase {0, 0, 3840, 2160, false, 3840, 2160},
+    StreamResolutionCapCase {2560, 0, 3840, 2160, false, 3840, 2160},
+    // Requests within the cap are untouched
+    StreamResolutionCapCase {2560, 1440, 2560, 1440, false, 2560, 1440},
+    StreamResolutionCapCase {2560, 1440, 1920, 1080, false, 1920, 1080},
+    // Invalid requests are untouched
+    StreamResolutionCapCase {2560, 1440, 0, 2160, false, 0, 2160},
+    // Same aspect ratio lands exactly on the cap
+    StreamResolutionCapCase {2560, 1440, 3840, 2160, true, 2560, 1440},
+    // Width-limited ultrawide: 1440 * 2560 / 3440 = 1071.6, rounded down to even
+    StreamResolutionCapCase {2560, 1440, 3440, 1440, true, 2560, 1070},
+    // Height-limited portrait request
+    StreamResolutionCapCase {2560, 1440, 2160, 3840, true, 810, 1440},
+    // A single dimension over the cap still scales both
+    StreamResolutionCapCase {1920, 1080, 1920, 1200, true, 1728, 1080},
+    // Floating-point scaling used to land two pixels short of the cap here
+    StreamResolutionCapCase {1280, 720, 640, 1142, true, 402, 720},
+    // Extreme aspect ratios never collapse to zero
+    StreamResolutionCapCase {100, 100, 10000, 2, true, 100, 2}
+  )
+);

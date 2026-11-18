@@ -738,6 +738,17 @@ namespace wl {
   };
 
   /**
+   * @brief Copy a monitor's geometry onto the display that captures it.
+   *
+   * Capture initialization uses this, so a reinitialization picks up the monitor's current transform for absolute
+   * input.
+   *
+   * @param display Capture display to update.
+   * @param monitor Monitor selected for capture.
+   */
+  void apply_monitor_geometry(platf::display_t &display, const monitor_t &monitor);
+
+  /**
    * @brief Wayland registry state for screencopy, DMA-BUF, and output globals.
    */
   class interface_t {

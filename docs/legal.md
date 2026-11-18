@@ -5,7 +5,7 @@
 > any legal questions or concerns about using Sunshine, we recommend consulting with a lawyer.
 
 Sunshine is licensed under the GPL-3.0 license, which allows for free use and modification of the software.
-The full text of the license can be reviewed [here](https://github.com/LizardByte/Sunshine/blob/master/LICENSE).
+The full text of the license can be reviewed [here](https://github.com/SunshineStream/Sunshine/blob/master/LICENSE).
 
 ## Commercial Use
 Sunshine can be used in commercial applications without any limitations. This means that businesses and organizations

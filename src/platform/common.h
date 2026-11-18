@@ -20,7 +20,7 @@
 
 // local includes
 #ifndef _WIN32
-  #include "src/boost_process_compat.h"
+  #include "src/compat/boost_process.h"
 #endif
 #include "src/config.h"
 #include "src/logging.h"
@@ -395,6 +395,7 @@ namespace platf {
     int logical_height;  ///< Logical height after display scaling.
     int env_offset_x {};  ///< Horizontal origin of the full input environment in native desktop coordinates.
     int env_offset_y {};  ///< Vertical origin of the full input environment in native desktop coordinates.
+    std::string output_name {};  ///< Native connector name used to assign compositor-managed touch and pen devices.
     int transform {};  ///< Wayland output transform (rotation) of the display.
   };
 
@@ -686,6 +687,38 @@ namespace platf {
   };
 
   /**
+   * @brief A single encoded frame produced by a native VideoToolbox encoder.
+   */
+  struct vt_encoded_frame {
+    std::vector<uint8_t> data;  ///< Annex-B elementary stream for exactly one frame.
+    uint64_t frame_index = 0;  ///< Frame index the data corresponds to.
+    bool idr = false;  ///< Whether the frame is an IDR frame.
+  };
+
+  /**
+   * @brief Native VideoToolbox-backed encode device state.
+   */
+  struct vt_encode_device_t: encode_device_t {
+    /**
+     * @brief Initialize the platform encoder for the client stream configuration.
+     *
+     * @param client_config Client stream configuration negotiated for this session.
+     * @param colorspace Colorimetry information used for conversion or encoding.
+     * @return True when the backend successfully completes the requested action.
+     */
+    virtual bool init_encoder(const video::config_t &client_config, const video::sunshine_colorspace_t &colorspace) = 0;
+
+    /**
+     * @brief Encode the frame most recently supplied via convert().
+     *
+     * @param frame_index Frame index to associate with the encoded output.
+     * @param force_idr Whether the frame must be encoded as an IDR frame.
+     * @return Encoded frame, or one with empty data on failure.
+     */
+    virtual vt_encoded_frame encode_frame(uint64_t frame_index, bool force_idr) = 0;
+  };
+
+  /**
    * @brief Enumerates supported capture options.
    */
   enum class capture_e : int {
@@ -771,6 +804,16 @@ namespace platf {
     }
 
     /**
+     * @brief Create a native VideoToolbox encode device.
+     *
+     * @param pix_fmt Sunshine pixel format to convert or allocate for.
+     * @return Constructed VideoToolbox encode device object.
+     */
+    virtual std::unique_ptr<vt_encode_device_t> make_vt_encode_device(pix_fmt_e pix_fmt) {
+      return nullptr;
+    }
+
+    /**
      * @brief Report whether the active display mode is HDR.
      *
      * @return True when the active display mode is HDR.
@@ -803,6 +846,7 @@ namespace platf {
     virtual ~display_t() = default;
 
     // Offsets for when streaming a specific monitor. By default, they are 0.
+    std::string output_name;  ///< Native connector name of the captured display for absolute input assignment.
     int offset_x {0};  ///< Horizontal capture offset in physical pixels.
     int offset_y {0};  ///< Vertical capture offset in physical pixels.
     int env_offset_x {0};  ///< Horizontal origin of the full capture environment in native desktop coordinates.

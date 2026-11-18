@@ -15,6 +15,13 @@ const config = ref(props.config)
     <div class="form-text">{{ $t("config.max_bitrate_desc") }}</div>
   </div>
 
+  <!--max_stream_resolution-->
+  <div class="mb-3">
+    <label for="max_stream_resolution" class="form-label">{{ $t("config.max_stream_resolution") }}</label>
+    <input type="text" class="form-control" id="max_stream_resolution" placeholder="2560x1440" v-model="config.max_stream_resolution" />
+    <div class="form-text">{{ $t("config.max_stream_resolution_desc") }}</div>
+  </div>
+
   <!--minimum_fps_target-->
   <div class="mb-3">
     <label for="minimum_fps_target" class="form-label">{{ $t("config.minimum_fps_target") }}</label>

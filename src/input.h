@@ -94,6 +94,14 @@ namespace input {
     void set_platform_input(platf::input_t input);
 
     /**
+     * @brief Access a retained stream's platform client devices in a unit test.
+     *
+     * @param input Retained input state.
+     * @return Borrowed platform client input context.
+     */
+    platf::client_input_t *client_context(const std::shared_ptr<input_t> &input);
+
+    /**
      * @brief Allocate a gamepad directly in retained input state for a unit test.
      *
      * @param input Retained input state.

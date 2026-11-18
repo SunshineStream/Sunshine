@@ -31,6 +31,11 @@ For absolute-positioning problems, set **Configuration > Advanced > Log Level** 
 Sunshine forwards libvirtualhid diagnostics with a `[libvirtualhid]` prefix, including the streamed display viewport and
 full desktop bounds used for mouse coordinate mapping.
 
+For native touch or pen input on KDE Wayland, Sunshine maps its virtual devices to the streamed display.
+Use Plasma 6.5.1 or later, which fixes changing a device's assigned output. Display layouts with monitors
+left of or above the desktop origin are supported. Other Wayland compositors retain their device mapping
+settings; assign Sunshine's virtual touchscreen and pen tablet through the compositor's input configuration.
+
 ### Web UI Access
 Can't access the web UI?
 
@@ -238,10 +243,16 @@ If needed, you can override it manually in your systemd service file or shell en
 
 When the seat is not `seat0`, Sunshine appends the seat name to its virtual device names, for example:
 
-- Keyboard passthrough (seat1)
-- Sunshine (libvirtualhid) PS5 Controller (seat1)
+- libvirtualhid Keyboard (seat1)
+- libvirtualhid Mouse (seat1)
+- libvirtualhid Mouse (seat1) (Absolute)
+- Sunshine (libvirtualhid) X-Box 360 Controller (seat1)
 
 Sunshine creates two mouse devices: a relative one and an absolute one.
+
+> [!NOTE]
+> PlayStation gamepads always use Sony's native product name (`Wireless Controller`) so that Steam recognizes them,
+> so they do not carry a seat suffix.
 
 To assign Sunshine's virtual devices to the correct seat, create this udev rules file
 (/etc/udev/rules.d/72-sunshine-virtual-seat.rules):

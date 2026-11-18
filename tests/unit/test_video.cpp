@@ -15,6 +15,9 @@
 #include <utility>
 #include <vector>
 
+// lib includes
+#include <display_device/types.h>
+
 // ffmpeg includes
 extern "C" {
 #include <libavutil/frame.h>
@@ -52,6 +55,26 @@ TEST(VideoPacketReplacementTest, CopiesViewsWithoutCopyingTheirBackingBytes) {
   EXPECT_EQ(rule._new, "New");
 }
 
+TEST(VideoEncoderProbingTest, AllowsProbingWhenNoDevicesAreEnumerated) {
+  EXPECT_TRUE(video::allow_encoder_probing({}));
+}
+
+TEST(VideoEncoderProbingTest, AllowsProbingWithAnActiveDevice) {
+  std::vector<display_device::EnumeratedDevice> devices(2);
+  devices[1].m_info = display_device::EnumeratedDevice::Info {};
+  EXPECT_TRUE(video::allow_encoder_probing(devices));
+}
+
+TEST(VideoEncoderProbingTest, InactiveDevicesBlockProbingOnlyOnWindows) {
+  // A sleeping display enumerates without additional info, i.e. as inactive.
+  const std::vector<display_device::EnumeratedDevice> devices(2);
+#ifdef _WIN32
+  EXPECT_FALSE(video::allow_encoder_probing(devices));
+#else
+  EXPECT_TRUE(video::allow_encoder_probing(devices));
+#endif
+}
+
 TEST(VideoFormatMappingTest, MapsSupportedHardwareDevicesAndRejectsUnsupportedOnes) {
   using enum platf::mem_type_e;
   const std::array cases {
@@ -59,13 +82,13 @@ TEST(VideoFormatMappingTest, MapsSupportedHardwareDevicesAndRejectsUnsupportedOn
     std::pair {AV_HWDEVICE_TYPE_VAAPI, vaapi},
     std::pair {AV_HWDEVICE_TYPE_CUDA, cuda},
     std::pair {AV_HWDEVICE_TYPE_NONE, system},
-    std::pair {AV_HWDEVICE_TYPE_VIDEOTOOLBOX, videotoolbox},
 #ifdef SUNSHINE_BUILD_VULKAN
     std::pair {AV_HWDEVICE_TYPE_VULKAN, vulkan},
 #else
     std::pair {AV_HWDEVICE_TYPE_VULKAN, unknown},
 #endif
     std::pair {AV_HWDEVICE_TYPE_DXVA2, unknown},
+    std::pair {AV_HWDEVICE_TYPE_VIDEOTOOLBOX, unknown},
   };
 
   for (const auto &[format, expected] : cases) {
@@ -547,4 +570,96 @@ TEST(SoftwareEncoderConversion, Bgr0AndNv12) {
   fallback_nv12_img.height = h;
   fallback_nv12_img.row_pitch = w;
   EXPECT_EQ(device.convert(fallback_nv12_img), 0);
+}
+
+/**
+ * @brief Fixture for the frame timestamp bookkeeping helpers.
+ */
+struct FrameTimestampQueueTest: testing::Test {
+  /**
+   * @brief Produce a distinct timestamp for a frame number.
+   *
+   * @param frame_nr Frame number to derive the timestamp from.
+   * @return Timestamp unique to the frame number.
+   */
+  static std::chrono::steady_clock::time_point ts(int64_t frame_nr) {
+    return std::chrono::steady_clock::time_point {std::chrono::milliseconds {frame_nr}};
+  }
+
+  video::frame_timestamp_queue_t queue;
+};
+
+TEST_F(FrameTimestampQueueTest, MatchesInOrder) {
+  for (int64_t frame = 1; frame <= 4; ++frame) {
+    video::remember_frame_timestamp(queue, frame, ts(frame));
+    EXPECT_EQ(ts(frame), video::match_frame_timestamp(queue, frame));
+  }
+  EXPECT_TRUE(queue.empty());
+}
+
+TEST_F(FrameTimestampQueueTest, MatchesDelayedPackets) {
+  // Encoders may deliver packets several frames behind submission.
+  video::remember_frame_timestamp(queue, 1, ts(1));
+  video::remember_frame_timestamp(queue, 2, ts(2));
+  video::remember_frame_timestamp(queue, 3, ts(3));
+
+  EXPECT_EQ(ts(1), video::match_frame_timestamp(queue, 1));
+
+  video::remember_frame_timestamp(queue, 4, ts(4));
+
+  EXPECT_EQ(ts(2), video::match_frame_timestamp(queue, 2));
+  EXPECT_EQ(ts(3), video::match_frame_timestamp(queue, 3));
+  EXPECT_EQ(ts(4), video::match_frame_timestamp(queue, 4));
+}
+
+TEST_F(FrameTimestampQueueTest, DiscardsDroppedPts) {
+  // Frames whose packets never surface must be discarded, and a stale pts
+  // must never be paired with another frame's timestamp.
+  video::remember_frame_timestamp(queue, 1, ts(1));
+  video::remember_frame_timestamp(queue, 2, ts(2));
+  video::remember_frame_timestamp(queue, 3, ts(3));
+
+  EXPECT_EQ(ts(3), video::match_frame_timestamp(queue, 3));
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 1));
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 2));
+}
+
+TEST_F(FrameTimestampQueueTest, IgnoresUnknownPts) {
+  video::remember_frame_timestamp(queue, 5, ts(5));
+
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 6));
+  EXPECT_TRUE(queue.empty());
+}
+
+TEST_F(FrameTimestampQueueTest, SkipsMissingTimestamps) {
+  // Duplicate or synthesized frames carry no capture timestamp; they must not
+  // enqueue anything or disturb their neighbors.
+  video::remember_frame_timestamp(queue, 1, std::nullopt);
+  video::remember_frame_timestamp(queue, 2, ts(2));
+
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 1));
+  EXPECT_EQ(ts(2), video::match_frame_timestamp(queue, 2));
+}
+
+TEST_F(FrameTimestampQueueTest, EvictsOldestBeyondCap) {
+  // A wedged encoder must not grow the queue without bound.
+  for (int64_t frame = 1; frame <= 200; ++frame) {
+    video::remember_frame_timestamp(queue, frame, ts(frame));
+  }
+
+  EXPECT_EQ(128u, queue.size());
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 1));  // evicted
+  EXPECT_EQ(ts(73), video::match_frame_timestamp(queue, 73));  // oldest survivor
+  EXPECT_EQ(ts(200), video::match_frame_timestamp(queue, 200));
+}
+
+TEST_F(FrameTimestampQueueTest, EmptyQueueYieldsNothing) {
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 1));
+}
+
+TEST_F(FrameTimestampQueueTest, ConsumesEntriesOnce) {
+  video::remember_frame_timestamp(queue, 1, ts(1));
+
+  EXPECT_EQ(ts(1), video::match_frame_timestamp(queue, 1));
+  EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 1));
 }

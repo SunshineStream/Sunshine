@@ -29,9 +29,9 @@ flatpak = [
 ]
 
 [project.urls]
-Homepage = "https://app.lizardbyte.dev/Sunshine"
-Repository = "https://github.com/LizardByte/Sunshine"
-Issues = "https://github.com/LizardByte/Sunshine/issues"
+Homepage = "https://sunshine.lizardbyte.dev"
+Repository = "https://github.com/SunshineStream/Sunshine"
+Issues = "https://github.com/SunshineStream/Sunshine/issues"
 
 [tool.setuptools]
 py-modules = []
