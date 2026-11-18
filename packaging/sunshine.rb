@@ -40,11 +40,6 @@ class Sunshine < Formula
 
   bottle do
     root_url "https://ghcr.io/v2/lizardbyte/homebrew"
-    sha256 arm64_tahoe:   "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 arm64_sequoia: "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 arm64_sonoma:  "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 arm64_linux:   "0000000000000000000000000000000000000000000000000000000000000000"
-    sha256 x86_64_linux:  "0000000000000000000000000000000000000000000000000000000000000000"
   end
 
   option "with-docs", "Enable docs build"
@@ -160,7 +155,7 @@ class Sunshine < Formula
     # to prevent cmake from trying to install Python dependencies again.
     # Follows https://docs.brew.sh/Formula-Cookbook#python-dependencies
     venv = virtualenv_create(buildpath/"venv", "python3")
-    venv.pip_install resources
+    venv.pip_install [resource("markupsafe"), resource("jinja2")]
     @glad_python = (buildpath/"venv/bin/python3").to_s
   end
 
