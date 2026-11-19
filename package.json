@@ -25,7 +25,7 @@
   "type": "module",
   "dependencies": {
     "@intlify/message-compiler": "11.4.22",
-    "@lucide/vue": "1.75.0",
+    "@lucide/vue": "1.76.0",
     "bootstrap": "5.3.9",
     "date-fns": "4.4.0",
     "marked": "18.0.12",
