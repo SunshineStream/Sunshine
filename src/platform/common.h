@@ -11,7 +11,6 @@
 #include <mutex>
 #include <optional>
 #include <string>
-#include <string_view>
 
 // lib includes
 #include <boost/core/noncopyable.hpp>
@@ -993,10 +992,9 @@ namespace platf {
    * @brief List display names accepted by the selected capture backend.
    *
    * @param hwdevice_type Hardware device type requested for capture or encode.
-   * @param requested_output Configured output to diagnose when selecting a display for a new stream.
    * @return Display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type, std::string_view requested_output = {});
+  std::vector<std::string> display_names(mem_type_e hwdevice_type);
 
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.

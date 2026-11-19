@@ -1557,7 +1557,7 @@ namespace video {
 
     // Refresh the display names
     auto old_display_names = std::move(display_names);
-    display_names = platf::display_names(dev_type, current_display_name.empty() ? std::string_view {output_name} : std::string_view {});
+    display_names = platf::display_names(dev_type);
 
     // If we now have no displays, let's put the old display array back and fail
     if (display_names.empty() && !old_display_names.empty()) {
