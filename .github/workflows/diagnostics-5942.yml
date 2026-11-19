@@ -80,7 +80,9 @@ jobs:
           set -euo pipefail
           kit="$(cygpath "$RUNNER_TEMP")/sunshine-5942"
           mkdir "$kit"
-          cp .github/diagnostics/sunshine-5942/{build-ab.sh,persistence.patch,README.md} "$kit"
+          cp .github/diagnostics/sunshine-5942/{build-ab.sh,README.md} "$kit"
+          # Do not copy the Windows worktree representation of the patch.
+          git show HEAD:.github/diagnostics/sunshine-5942/persistence.patch > "$kit/persistence.patch"
           bash "$kit/build-ab.sh"
 
       - name: Upload matching diagnostic ZIPs and provenance

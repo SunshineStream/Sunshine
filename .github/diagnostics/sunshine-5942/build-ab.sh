@@ -20,11 +20,17 @@ done
 for dir in "$src" "$build" "$out"; do
   [[ ! -e "$dir" ]] || { echo "Use a fresh kit directory; already exists: $dir" >&2; exit 1; }
 done
-git clone --branch "$tag" --depth=1 --recurse-submodules https://github.com/SunshineStream/Sunshine.git "$src"
+git clone --config core.autocrlf=false --branch "$tag" --depth=1 --recurse-submodules https://github.com/SunshineStream/Sunshine.git "$src"
 [[ "$(git -C "$src" rev-parse HEAD)" == "$base" ]]
 [[ "$(git -C "$src/third-party/libdisplaydevice" rev-parse HEAD)" == "$lib" ]]
 git -C "$src" submodule status --recursive | awk 'substr($0,1,1) != " " {failed=1} END {exit failed}'
 git -C "$src" diff --exit-code
+# The patch comes from the LF Git blob; require the pinned source file bytes.
+if [[ "$(git -C "$src" hash-object --no-filters src/display_device.cpp)" != "$(git -C "$src" rev-parse HEAD:src/display_device.cpp)" ]]; then
+  git -C "$src" ls-files --eol -- src/display_device.cpp >&2
+  echo "display_device.cpp checkout differs from the pinned Git blob." >&2
+  exit 1
+fi
 git -C "$src" apply --check "$patch"
 mkdir -p "$out"
 cp "$root/README.md" "$out/TESTING.md"
