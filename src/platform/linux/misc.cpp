@@ -57,6 +57,7 @@
 #endif
 
 // local includes
+#include "display_output_selection.h"
 #include "graphics.h"
 #include "misc.h"
 #include "src/compat/boost_process.h"
@@ -1215,11 +1216,16 @@ namespace platf {
 #endif
 
 #ifdef SUNSHINE_BUILD_DRM
-  std::vector<std::string> kms_display_names(mem_type_e hwdevice_type);
+  std::vector<std::string> kms_display_names(
+    mem_type_e hwdevice_type,
+    std::string_view preferred_output,
+    std::optional<std::size_t> &preferred_index
+  );
   std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
   bool verify_kms() {
-    return !kms_display_names(mem_type_e::unknown).empty();
+    std::optional<std::size_t> preferred_index;
+    return !kms_display_names(mem_type_e::unknown, {}, preferred_index).empty();
   }
 #endif
 
@@ -1323,7 +1329,7 @@ namespace platf {
   /**
    * @brief List display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+  std::vector<std::string> display_names(mem_type_e hwdevice_type, [[maybe_unused]] std::string_view preferred_output, [[maybe_unused]] std::optional<std::size_t> &preferred_index) {
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1332,12 +1338,14 @@ namespace platf {
 #endif
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (sources[source::WAYLAND]) {
-      return wl_display_names();
+      auto names = wl_display_names();
+      preferred_index = display_output::wl_output_index(names, preferred_output);
+      return names;
     }
 #endif
 #ifdef SUNSHINE_BUILD_DRM
     if (sources[source::KMS]) {
-      return kms_display_names(hwdevice_type);
+      return kms_display_names(hwdevice_type, preferred_output, preferred_index);
     }
 #endif
 #ifdef SUNSHINE_BUILD_X11

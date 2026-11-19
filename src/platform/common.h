@@ -6,11 +6,13 @@
 
 // standard includes
 #include <bitset>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 
 // lib includes
 #include <boost/core/noncopyable.hpp>
@@ -992,9 +994,11 @@ namespace platf {
    * @brief List display names accepted by the selected capture backend.
    *
    * @param hwdevice_type Hardware device type requested for capture or encode.
+   * @param preferred_output Configured display name or legacy selector.
+   * @param preferred_index If set by the backend, the preferred position in the returned list.
    * @return Display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type);
+  std::vector<std::string> display_names(mem_type_e hwdevice_type, std::string_view preferred_output, std::optional<std::size_t> &preferred_index);
 
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.

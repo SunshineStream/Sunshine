@@ -1049,6 +1049,8 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             @endcode
             It is recommended to use the stable display connector name (text right before the parenthesis, e.g. DP-0) for this value.
             For wlgrab/x11grab and kmsgrab the numeric id value can also be used.
+            For kmsgrab, use the zero-based capture index from the KMS debug log, not the number in the connector name.
+            For wlgrab, use the zero-based monitor index from the Wayland monitor list in the log.
             <br>
             <br>
             **macOS:**

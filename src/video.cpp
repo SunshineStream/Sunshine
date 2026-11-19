@@ -1557,7 +1557,8 @@ namespace video {
 
     // Refresh the display names
     auto old_display_names = std::move(display_names);
-    display_names = platf::display_names(dev_type);
+    std::optional<std::size_t> preferred_index;
+    display_names = platf::display_names(dev_type, output_name, preferred_index);
 
     // If we now have no displays, let's put the old display array back and fail
     if (display_names.empty() && !old_display_names.empty()) {
@@ -1582,6 +1583,8 @@ namespace video {
 
       // The old display was removed, so we'll start back at the first display again
       BOOST_LOG(warning) << "Previous active display ["sv << current_display_name << "] is no longer present"sv;
+    } else if (preferred_index) {
+      current_display_index = *preferred_index;
     } else {
       for (int x = 0; x < display_names.size(); ++x) {
         if (display_names[x] == output_name) {

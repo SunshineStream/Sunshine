@@ -25,6 +25,7 @@
 // local includes
 #include "cuda.h"
 #include "display_geometry.h"
+#include "display_output_selection.h"
 #include "graphics.h"
 #include "kms_plane.h"
 #include "src/config.h"
@@ -2293,15 +2294,20 @@ namespace platf {
     BOOST_LOG(info) << "--------- End of KMS monitor list ---------"sv;
   }
 
-  // A list of names of displays accepted as display_name
   /**
-   * @brief Enumerate display names accepted by the KMS backend.
-   *
-   * @param hwdevice_type Hardware device type requested for capture or encode.
-   * @return KMS display names, or an empty list when KMS capture is unavailable.
+   * @brief Enumerate usable KMS displays and resolve a legacy capture index if requested.
+   * @param hwdevice_type Hardware device type requested for capture.
+   * @param preferred_output Configured connector name or capture index.
+   * @param preferred_index Selected list position if a usable output matches the capture index.
+   * @return Enumerated connector names.
    */
-  std::vector<std::string> kms_display_names(mem_type_e hwdevice_type) {
-    int count = 0;
+  std::vector<std::string> kms_display_names(
+    mem_type_e hwdevice_type,
+    std::string_view preferred_output,
+    std::optional<std::size_t> &preferred_index
+  ) {
+    const auto requested_index = display_output::parse_output_index(preferred_output);
+    std::uint32_t count = 0;
 
     if (!fs::exists("/dev/dri")) {
       BOOST_LOG(warning) << "Couldn't find /dev/dri, kmsgrab won't be enabled"sv;
@@ -2353,6 +2359,7 @@ namespace platf {
 
       auto crtc_to_monitor = kms::map_crtc_to_monitor(card.monitors(conn_type_count));
 
+      bool can_probe_card = true;
       auto end = std::end(card);
       for (auto plane = std::begin(card); plane != end; ++plane) {
         // Skip unused planes
@@ -2361,6 +2368,12 @@ namespace platf {
         }
 
         if (card.is_cursor(plane->plane_id)) {
+          continue;
+        }
+
+        // Capture advances over every active non-cursor plane, even if this probe cannot use it.
+        const auto capture_index = count++;
+        if (!can_probe_card) {
           continue;
         }
 
@@ -2376,7 +2389,8 @@ namespace platf {
           BOOST_LOG((config::video.capture == "kms") ? fatal : error)
             << "AppImage and Flatpak do not support KMS capture. Use another capture method."sv;
 #endif
-          break;
+          can_probe_card = false;
+          continue;
         }
 
         // This appears to return the offset of the monitor
@@ -2387,20 +2401,23 @@ namespace platf {
         }
 
         auto it = crtc_to_monitor.find(plane->crtc_id);
-        if (it != std::end(crtc_to_monitor)) {
-          it->second.viewport = platf::touch_port_t {
-            .offset_x = (int) crtc->x,
-            .offset_y = (int) crtc->y,
-            .width = (int) crtc->width,
-            .height = (int) crtc->height,
-          };
-          it->second.monitor_index = count;
+        if (it == std::end(crtc_to_monitor)) {
+          continue;
         }
+
+        it->second.viewport = platf::touch_port_t {
+          .offset_x = (int) crtc->x,
+          .offset_y = (int) crtc->y,
+          .width = (int) crtc->width,
+          .height = (int) crtc->height,
+        };
+        it->second.monitor_index = capture_index;
 
         kms::print(plane.get(), fb.get(), crtc.get());
         it->second.viewport.output_name = std::format("{}-{}", drmModeGetConnectorTypeName(it->second.type), it->second.index);
+        BOOST_LOG(debug) << "KMS capture index " << capture_index << ": " << it->second.viewport.output_name;
+        display_output::match_output_index(requested_index, capture_index, display_names.size(), preferred_index);
         display_names.emplace_back(it->second.viewport.output_name);
-        count++;
       }
 
       cds.emplace_back(kms::card_descriptor_t {
