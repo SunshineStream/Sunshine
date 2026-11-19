@@ -6,7 +6,6 @@
 
 // standard includes
 #include <bitset>
-#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -994,11 +993,10 @@ namespace platf {
    * @brief List display names accepted by the selected capture backend.
    *
    * @param hwdevice_type Hardware device type requested for capture or encode.
-   * @param preferred_output Configured display name or legacy selector.
-   * @param preferred_index If set by the backend, the preferred position in the returned list.
+   * @param requested_output Configured output to diagnose when selecting a display for a new stream.
    * @return Display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type, std::string_view preferred_output, std::optional<std::size_t> &preferred_index);
+  std::vector<std::string> display_names(mem_type_e hwdevice_type, std::string_view requested_output = {});
 
   /**
    * @brief Check if GPUs/drivers have changed since the last call to this function.

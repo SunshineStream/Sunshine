@@ -592,7 +592,7 @@ namespace platf {
     return display;
   }
 
-  std::vector<std::string> display_names(mem_type_e hwdevice_type, std::string_view, std::optional<std::size_t> &) {
+  std::vector<std::string> display_names(mem_type_e hwdevice_type, std::string_view) {
     std::vector<std::string> display_names;
     if (hwdevice_type != platf::mem_type_e::system && hwdevice_type != platf::mem_type_e::videotoolbox) {
       return display_names;

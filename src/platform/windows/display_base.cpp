@@ -1063,7 +1063,7 @@ namespace platf {
     return nullptr;
   }
 
-  std::vector<std::string> display_names(mem_type_e, std::string_view, std::optional<std::size_t> &) {
+  std::vector<std::string> display_names(mem_type_e, std::string_view) {
     std::vector<std::string> display_names;
 
     HRESULT status;

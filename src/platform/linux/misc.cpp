@@ -57,7 +57,7 @@
 #endif
 
 // local includes
-#include "display_output_selection.h"
+#include "display_output_warning.h"
 #include "graphics.h"
 #include "misc.h"
 #include "src/compat/boost_process.h"
@@ -1216,16 +1216,11 @@ namespace platf {
 #endif
 
 #ifdef SUNSHINE_BUILD_DRM
-  std::vector<std::string> kms_display_names(
-    mem_type_e hwdevice_type,
-    std::string_view preferred_output,
-    std::optional<std::size_t> &preferred_index
-  );
+  std::vector<std::string> kms_display_names(mem_type_e hwdevice_type);
   std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
 
   bool verify_kms() {
-    std::optional<std::size_t> preferred_index;
-    return !kms_display_names(mem_type_e::unknown, {}, preferred_index).empty();
+    return !kms_display_names(mem_type_e::unknown).empty();
   }
 #endif
 
@@ -1327,9 +1322,21 @@ namespace platf {
 #endif
 
   /**
-   * @brief List display names accepted by the selected capture backend.
+   * @brief List display names and flag legacy numeric settings that will fall back.
+   * @param hwdevice_type Hardware device type requested for capture or encode.
+   * @param requested_output Configured output to diagnose when selecting a display for a new stream.
+   * @return Display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type, [[maybe_unused]] std::string_view preferred_output, [[maybe_unused]] std::optional<std::size_t> &preferred_index) {
+  std::vector<std::string> display_names(mem_type_e hwdevice_type, [[maybe_unused]] std::string_view requested_output) {
+#if defined(SUNSHINE_BUILD_WAYLAND) || defined(SUNSHINE_BUILD_DRM)
+    const auto warn_if_numeric_falls_back = [requested_output](const auto &names, std::string_view backend) {
+      if (needs_output_name_migration_warning(names, requested_output)) {
+        BOOST_LOG(warning) << backend << " could not match numeric output_name ["sv << requested_output
+                           << "]. Use a connector name from the monitor list in the log, such as DP-1. "
+                           << "Using the first available display ["sv << names.front() << "]."sv;
+      }
+    };
+#endif
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1339,13 +1346,15 @@ namespace platf {
 #ifdef SUNSHINE_BUILD_WAYLAND
     if (sources[source::WAYLAND]) {
       auto names = wl_display_names();
-      preferred_index = display_output::wl_output_index(names, preferred_output);
+      warn_if_numeric_falls_back(names, "wlgrab"sv);
       return names;
     }
 #endif
 #ifdef SUNSHINE_BUILD_DRM
     if (sources[source::KMS]) {
-      return kms_display_names(hwdevice_type, preferred_output, preferred_index);
+      auto names = kms_display_names(hwdevice_type);
+      warn_if_numeric_falls_back(names, "KMS"sv);
+      return names;
     }
 #endif
 #ifdef SUNSHINE_BUILD_X11
