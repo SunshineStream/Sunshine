@@ -18,6 +18,9 @@
 #include <string_view>
 #include <utility>
 
+// lib includes
+#include <lizardbyte/common/env.h>
+
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
@@ -101,6 +104,15 @@ namespace platf::virtualhid {
           BOOST_LOG(error) << "[libvirtualhid] "sv << message;
           break;
       }
+    }
+
+    /**
+     * @brief Scope a libvirtualhid profile name to the target seat.
+     *
+     * @param profile Profile whose advertised device name is updated.
+     */
+    void apply_target_seat(lvh::DeviceProfile &profile) {
+      profile.name = device_name_for_seat(profile.name, target_seat());
     }
 
     /**
@@ -533,6 +545,7 @@ namespace platf::virtualhid {
 
     lvh::CreateKeyboardOptions options;
     options.profile = lvh::profiles::keyboard();
+    apply_target_seat(options.profile);
     options.stable_id = "sunshine-keyboard";
     auto created = runtime->create_keyboard(options);
     if (created) {
@@ -556,6 +569,7 @@ namespace platf::virtualhid {
 
     lvh::CreateMouseOptions options;
     options.profile = lvh::profiles::mouse();
+    apply_target_seat(options.profile);
     options.stable_id = "sunshine-mouse";
     options.desktop = desktop;
     options.viewport = viewport;
@@ -586,6 +600,7 @@ namespace platf::virtualhid {
     if (capabilities.supports_touchscreen) {
       lvh::CreateTouchscreenOptions options;
       options.profile = lvh::profiles::touchscreen();
+      apply_target_seat(options.profile);
       options.stable_id = "sunshine-touchscreen";
       auto created = global->runtime->create_touchscreen(options);
       if (created) {
@@ -597,6 +612,7 @@ namespace platf::virtualhid {
     if (capabilities.supports_pen_tablet) {
       lvh::CreatePenTabletOptions options;
       options.profile = lvh::profiles::pen_tablet();
+      apply_target_seat(options.profile);
       options.stable_id = "sunshine-pen-tablet";
       auto created = global->runtime->create_pen_tablet(options);
       if (created) {
@@ -701,6 +717,7 @@ namespace platf::virtualhid {
     const auto &selection = profile_for_metadata(metadata);
     auto profile = selection.profile();
     profile.name = std::format("Sunshine {}", profile.name);
+    apply_target_seat(profile);
     if (config::input.gamepad != "auto"sv) {
       BOOST_LOG(info) << "Gamepad "sv << id.globalIndex << " will be "sv << profile.name << " (manual selection)"sv;
     } else {
@@ -1093,6 +1110,18 @@ namespace platf::virtualhid {
     const auto profile = profile_for_name(config::input.gamepad).profile();
     const auto &support = lvh::gamepad_profile_support(profile);
     return support.supports_touchpad || support.supports_motion;
+  }
+
+  std::string target_seat() {
+    return lizardbyte::common::get_env("XDG_SEAT");
+  }
+
+  std::string device_name_for_seat(std::string_view base_name, std::string_view seat) {
+    if (seat.empty() || seat == "seat0"sv) {
+      return std::string {base_name};
+    }
+
+    return std::format("{} ({})", base_name, seat);
   }
 
 }  // namespace platf::virtualhid

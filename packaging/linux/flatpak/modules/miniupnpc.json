@@ -14,8 +14,8 @@
     {
       "type": "git",
       "url": "https://github.com/miniupnp/miniupnp.git",
-      "tag": "miniupnpc_2_3_3",
-      "commit": "bf4215a7574f88aa55859db9db00e3ae58cf42d6",
+      "tag": "miniupnpc_2_3_4",
+      "commit": "ca489177b12004b8fe5992d5229ae76e802ced14",
       "x-checker-data": {
         "type": "anitya",
         "project-id": 1986,

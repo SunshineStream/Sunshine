@@ -96,6 +96,18 @@ namespace portal {
    * @return Path of the selected test token.
    */
   std::filesystem::path get_saved_token_path_for_testing(const std::filesystem::path &directory, const std::string &desktop);
+
+  /**
+   * @brief Override the token path used by portal persistence in unit tests.
+   *
+   * @param path Token path used by load, save, clear and existence checks.
+   */
+  void set_saved_token_path_for_testing(const std::filesystem::path &path);
+
+  /**
+   * @brief Restore the production token path after a unit test.
+   */
+  void reset_saved_token_path_for_testing();
   #endif
 
   /**
