@@ -15,6 +15,7 @@
 
 // local includes
 #include <src/config.h>
+#include <src/config_file.h>
 #include <src/file_handler.h>
 #include <src/utility.h>
 
@@ -158,6 +159,44 @@ namespace {
   };
 
 }  // namespace
+
+/**
+ * @brief An explicit empty CLI argument is not a valid config file.
+ */
+TEST(ConfigFileLoadingTest, RejectsAnExplicitEmptyPath) {
+  const auto loaded = config::read_explicit_config_file("");
+  EXPECT_TRUE(loaded.contents.empty());
+  EXPECT_NE(loaded.warning.find("path argument is empty"), std::string::npos);
+}
+
+/**
+ * @brief A valid new path still creates a config that can subsequently be loaded.
+ */
+TEST_F(ConfigPersistenceTest, CreatesAndReadsExplicitConfigurationFile) {
+  const auto created = config::read_explicit_config_file(config_file().string());
+  EXPECT_TRUE(created.warning.empty());
+  EXPECT_TRUE(created.contents.empty());
+  EXPECT_TRUE(std::filesystem::is_regular_file(config_file()));
+
+  ASSERT_EQ(file_handler::write_file(config_file().string().c_str(), "encoder = software"), 0);
+  const auto loaded = config::read_explicit_config_file(config_file().string());
+  EXPECT_TRUE(loaded.warning.empty());
+  EXPECT_EQ(loaded.contents, "encoder = software");
+}
+
+/**
+ * @brief Paths that cannot provide a config are distinct from valid empty files.
+ */
+TEST_F(ConfigPersistenceTest, RejectsADirectoryAndAMissingConfigParent) {
+  const auto directory = config_file().parent_path().string();
+  const auto missing_parent = (config_file() / "sunshine.conf").string();
+  for (const auto &path : {directory, missing_parent}) {
+    const auto loaded = config::read_explicit_config_file(path);
+    EXPECT_TRUE(loaded.contents.empty());
+    EXPECT_NE(loaded.warning.find(path), std::string::npos);
+  }
+  EXPECT_FALSE(std::filesystem::exists(config_file()));
+}
 
 TEST_F(ConfigPersistenceTest, AppendsMissingOptionWithoutReplacingExistingText) {
   ASSERT_EQ(file_handler::write_file(config_file().string().c_str(), "# retained comment"), 0);

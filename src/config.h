@@ -431,9 +431,10 @@ namespace config {
    *
    * @param argc Number of command-line arguments.
    * @param argv Command-line argument vector.
+   * @param config_warning Warning to log after initialization if an explicit config path was unusable.
    * @return 0 on success; nonzero when command-line or configuration parsing fails.
    */
-  int parse(int argc, char *argv[]);
+  int parse(int argc, char *argv[], std::string &config_warning);
   /**
    * @brief Parse Sunshine configuration text into key-value entries.
    *

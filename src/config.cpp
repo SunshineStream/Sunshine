@@ -24,6 +24,7 @@
 
 // local includes
 #include "config.h"
+#include "config_file.h"
 #include "entry_handler.h"
 #include "file_handler.h"
 #include "logging.h"
@@ -2024,11 +2025,10 @@ namespace config {
   }
 #endif
 
-  /**
-   * @brief Parse serialized text into the corresponding runtime representation.
-   */
-  int parse(int argc, char *argv[]) {
+  int parse(int argc, char *argv[], std::string &config_warning) {
+    config_warning.clear();
     config_map_t cmd_vars;
+    bool explicit_config_file = false;
 #ifdef _WIN32
     bool shortcut_launch = false;
     bool service_admin_launch = false;
@@ -2066,6 +2066,7 @@ namespace config {
         auto pos = std::find(line, line_end, '=');
         if (pos == line_end) {
           sunshine.config_file = line;
+          explicit_config_file = true;
         } else {
           TUPLE_EL(var, 1, parse_option(line, line_end));
           if (!var) {
@@ -2090,13 +2091,20 @@ namespace config {
       // Create appdata folder if it does not exist
       file_handler::make_directory(platf::appdata().string());
 
-      // Create empty config file if it does not exist
-      if (!fs::exists(sunshine.config_file)) {
-        std::ofstream {sunshine.config_file};
+      std::string file_content;
+      if (explicit_config_file) {
+        auto result = read_explicit_config_file(sunshine.config_file);
+        file_content = std::move(result.contents);
+        config_warning = std::move(result.warning);
+      } else {
+        // Preserve the default config creation and loading behavior.
+        if (!fs::exists(sunshine.config_file)) {
+          std::ofstream {sunshine.config_file};
+        }
+        file_content = file_handler::read_file(sunshine.config_file.c_str());
       }
 
-      // Read config file
-      auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
+      auto vars = parse_config(file_content);
 
       for (auto &[name, value] : cmd_vars) {
         vars.insert_or_assign(name, std::move(value));
