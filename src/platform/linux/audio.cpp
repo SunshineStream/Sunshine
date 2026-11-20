@@ -319,6 +319,27 @@ namespace platf {
     }
 
     /**
+     * @brief Make sure one of Sunshine's virtual sinks exists, loading it if it isn't listed.
+     *
+     * A sink defined natively in PipeWire (e.g. a `support.null-audio-sink` in pipewire.conf.d)
+     * has no owner module, so it is listed with PA_INVALID_INDEX as its module. It is used as it
+     * is: loading another sink with the same name would leave two of them.
+     *
+     * @param found Whether the sink is in the sink list.
+     * @param module Index of the module that owns the sink; set when the sink is loaded here.
+     * @param load Loads the sink and returns its module index, or PA_INVALID_INDEX on failure.
+     * @return `true` when the sink exists afterwards.
+     */
+    bool ensure_null_sink(bool found, std::uint32_t &module, const std::function<std::uint32_t()> &load) {
+      if (found) {
+        return true;
+      }
+
+      module = load();
+      return module != PA_INVALID_INDEX;
+    }
+
+    /**
      * @brief PulseAudio server controller that creates and removes Sunshine sinks.
      */
     class server_t: public audio_control_t {
@@ -472,8 +493,12 @@ namespace platf {
 
         sink_t sink;
 
-        // Count of all virtual sinks that are created by us
-        int nullcount = 0;
+        // The owner module alone can't tell whether a sink exists: native PipeWire sinks have none
+        struct {
+          bool stereo = false;
+          bool surround51 = false;
+          bool surround71 = false;
+        } found;
 
         cb_t<pa_sink_info *> f = [&](ctx_t::pointer callback_ctx, const pa_sink_info *sink_info, int eol) {
           if (!sink_info) {
@@ -490,16 +515,13 @@ namespace platf {
           // Ensure Sunshine won't create a sink that already exists.
           if (!std::strcmp(sink_info->name, stereo)) {
             index.stereo = sink_info->owner_module;
-
-            ++nullcount;
+            found.stereo = true;
           } else if (!std::strcmp(sink_info->name, surround51)) {
             index.surround51 = sink_info->owner_module;
-
-            ++nullcount;
+            found.surround51 = true;
           } else if (!std::strcmp(sink_info->name, surround71)) {
             index.surround71 = sink_info->owner_module;
-
-            ++nullcount;
+            found.surround71 = true;
           }
         };
 
@@ -520,38 +542,29 @@ namespace platf {
         auto sink_name = get_default_sink_name();
         sink.host = sink_name;
 
-        if (index.stereo == PA_INVALID_INDEX) {
-          index.stereo = load_null(stereo, speaker::map_stereo.data(), static_cast<int>(speaker::map_stereo.size()));
-          if (index.stereo == PA_INVALID_INDEX) {
-            BOOST_LOG(warning) << "Couldn't create virtual sink for stereo: "sv << pa_strerror(pa_context_errno(ctx.get()));
-          } else {
-            ++nullcount;
+        auto load = [this](const char *name, const auto &channel_mapping, const char *layout) {
+          auto module = static_cast<std::uint32_t>(load_null(name, channel_mapping.data(), static_cast<int>(channel_mapping.size())));
+          if (module == PA_INVALID_INDEX) {
+            BOOST_LOG(warning) << "Couldn't create virtual sink for "sv << layout << ": "sv << pa_strerror(pa_context_errno(ctx.get()));
           }
-        }
+          return module;
+        };
 
-        if (index.surround51 == PA_INVALID_INDEX) {
-          index.surround51 = load_null(surround51, speaker::map_surround51.data(), static_cast<int>(speaker::map_surround51.size()));
-          if (index.surround51 == PA_INVALID_INDEX) {
-            BOOST_LOG(warning) << "Couldn't create virtual sink for surround-51: "sv << pa_strerror(pa_context_errno(ctx.get()));
-          } else {
-            ++nullcount;
-          }
-        }
-
-        if (index.surround71 == PA_INVALID_INDEX) {
-          index.surround71 = load_null(surround71, speaker::map_surround71.data(), static_cast<int>(speaker::map_surround71.size()));
-          if (index.surround71 == PA_INVALID_INDEX) {
-            BOOST_LOG(warning) << "Couldn't create virtual sink for surround-71: "sv << pa_strerror(pa_context_errno(ctx.get()));
-          } else {
-            ++nullcount;
-          }
-        }
+        const bool has_stereo = ensure_null_sink(found.stereo, index.stereo, [&]() {
+          return load(stereo, speaker::map_stereo, "stereo");
+        });
+        const bool has_surround51 = ensure_null_sink(found.surround51, index.surround51, [&]() {
+          return load(surround51, speaker::map_surround51, "surround-51");
+        });
+        const bool has_surround71 = ensure_null_sink(found.surround71, index.surround71, [&]() {
+          return load(surround71, speaker::map_surround71, "surround-71");
+        });
 
         if (sink_name.empty()) {
           BOOST_LOG(warning) << "Couldn't find an active default sink. Continuing with virtual audio only."sv;
         }
 
-        if (nullcount == 3) {
+        if (has_stereo && has_surround51 && has_surround71) {
           sink.null = std::make_optional(sink_t::null_t {stereo, surround51, surround71});
         }
 
