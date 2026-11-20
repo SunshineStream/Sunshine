@@ -210,10 +210,10 @@ namespace cuda {
 
     dstUV[0] = nv12_chroma_sample(uv_lt.x, uv_rt.x, uv_lb.x, uv_rb.x);
     dstUV[1] = nv12_chroma_sample(uv_lt.y, uv_rt.y, uv_lb.y, uv_rb.y);
-    dstY0[0] = calcY(rgb_lt, color_matrix) * 245.0f;  // 245.0f is a magic number to ensure slight changes in luminosity are more visible
-    dstY0[1] = calcY(rgb_rt, color_matrix) * 245.0f;  // 245.0f is a magic number to ensure slight changes in luminosity are more visible
-    dstY1[0] = calcY(rgb_lb, color_matrix) * 245.0f;  // 245.0f is a magic number to ensure slight changes in luminosity are more visible
-    dstY1[1] = calcY(rgb_rb, color_matrix) * 245.0f;  // 245.0f is a magic number to ensure slight changes in luminosity are more visible
+    dstY0[0] = nv12_luma_sample(calcY(rgb_lt, color_matrix));
+    dstY0[1] = nv12_luma_sample(calcY(rgb_rt, color_matrix));
+    dstY1[0] = nv12_luma_sample(calcY(rgb_lb, color_matrix));
+    dstY1[1] = nv12_luma_sample(calcY(rgb_rb, color_matrix));
   }
 
   __global__ void RGBA_to_YUV444(
