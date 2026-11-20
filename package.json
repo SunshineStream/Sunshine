@@ -29,7 +29,7 @@
     "bootstrap": "5.3.9",
     "date-fns": "4.4.0",
     "marked": "18.0.12",
-    "vue": "3.5.45",
+    "vue": "3.5.46",
     "vue-i18n": "11.4.22",
     "vue-router": "5.5.1",
     "vue3-simple-icons": "16.10.0"
