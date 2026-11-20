@@ -1803,51 +1803,6 @@ namespace cuda {
           return platf::capture_e::capture_error;
         }
 
-        // If trying to capture directly, test if it actually does.
-        if (capture_params.bAllowDirectCapture) {
-          CUdeviceptr device_ptr;
-          NVFBC_FRAME_GRAB_INFO grab_info;
-
-          NVFBC_TOCUDA_GRAB_FRAME_PARAMS grab {
-            NVFBC_TOCUDA_GRAB_FRAME_PARAMS_VER,
-            NVFBC_TOCUDA_GRAB_FLAGS_NOWAIT,
-            &device_ptr,
-            &grab_info,
-            0,
-          };
-
-          // Direct Capture may fail the first few times, even if it's possible
-          for (int x = 0; x < 3; ++x) {
-            if (auto status = func.nvFBCToCudaGrabFrame(handle.handle, &grab)) {
-              if (status == NVFBC_ERR_MUST_RECREATE) {
-                return platf::capture_e::reinit;
-              }
-
-              BOOST_LOG(error) << "Couldn't capture nvFramebuffer: "sv << handle.last_error();
-
-              return platf::capture_e::capture_error;
-            }
-
-            if (grab_info.bDirectCapture) {
-              break;
-            }
-
-            BOOST_LOG(debug) << "Direct capture failed attempt ["sv << x << ']';
-          }
-
-          if (!grab_info.bDirectCapture) {
-            BOOST_LOG(debug) << "Direct capture failed, trying the extra copy method"sv;
-            // Direct capture failed
-            capture_params.bPushModel = nv_bool(false);
-            capture_params.bWithCursor = nv_bool(false);
-            capture_params.bAllowDirectCapture = nv_bool(false);
-
-            if (handle.stop() || handle.capture(capture_params)) {
-              return platf::capture_e::capture_error;
-            }
-          }
-        }
-
         return platf::capture_e::ok;
       }
 
