@@ -428,3 +428,81 @@ INSTANTIATE_TEST_SUITE_P(
     StreamResolutionCapCase {100, 100, 10000, 2, true, 100, 2}
   )
 );
+
+/**
+ * @brief Verify the keep_default_sink option parses into the audio configuration.
+ */
+TEST(KeepDefaultSinkConfigTest, ParsesEnabledAndDisabledValues) {
+  const bool original_keep_default_sink = config::audio.keep_default_sink;
+
+  config::apply_config_for_test("keep_default_sink = enabled\n");
+  EXPECT_TRUE(config::audio.keep_default_sink);
+
+  config::apply_config_for_test("keep_default_sink = disabled\n");
+  EXPECT_FALSE(config::audio.keep_default_sink);
+
+  config::audio.keep_default_sink = original_keep_default_sink;
+}
+
+/**
+ * @brief Verify a missing keep_default_sink key leaves the current value unchanged.
+ */
+TEST(KeepDefaultSinkConfigTest, MissingKeyLeavesValueUnchanged) {
+  const bool original_keep_default_sink = config::audio.keep_default_sink;
+
+  config::audio.keep_default_sink = true;
+  config::apply_config_for_test("");
+  EXPECT_TRUE(config::audio.keep_default_sink);
+
+  config::audio.keep_default_sink = false;
+  config::apply_config_for_test("");
+  EXPECT_FALSE(config::audio.keep_default_sink);
+
+  config::audio.keep_default_sink = original_keep_default_sink;
+}
+
+/**
+ * @brief Verify the deprecated external_audio key migrates only in its original scope.
+ *
+ * The legacy key only ever took effect on Windows with an explicit
+ * `audio_sink`, so the migration enables keep_default_sink only there.
+ */
+TEST(KeepDefaultSinkConfigTest, LegacyExternalAudioEnablesKeepDefaultSink) {
+  const bool original_keep_default_sink = config::audio.keep_default_sink;
+  const std::string original_sink = config::audio.sink;
+
+  config::audio.keep_default_sink = false;
+  config::apply_config_for_test("audio_sink = pinned-sink\nexternal_audio = enabled\n");
+#ifdef _WIN32
+  EXPECT_TRUE(config::audio.keep_default_sink);
+#else
+  EXPECT_FALSE(config::audio.keep_default_sink);
+#endif
+
+  config::audio.keep_default_sink = false;
+  config::audio.sink.clear();
+  config::apply_config_for_test("external_audio = enabled\n");
+  EXPECT_FALSE(config::audio.keep_default_sink);
+
+  config::audio.keep_default_sink = false;
+  config::apply_config_for_test("audio_sink = pinned-sink\nexternal_audio = disabled\n");
+  EXPECT_FALSE(config::audio.keep_default_sink);
+
+  config::audio.keep_default_sink = original_keep_default_sink;
+  config::audio.sink = original_sink;
+}
+
+/**
+ * @brief Verify an explicit keep_default_sink value wins over the legacy external_audio key.
+ */
+TEST(KeepDefaultSinkConfigTest, ExplicitKeepDefaultSinkWinsOverLegacyExternalAudio) {
+  const bool original_keep_default_sink = config::audio.keep_default_sink;
+
+  config::apply_config_for_test("external_audio = enabled\nkeep_default_sink = disabled\n");
+  EXPECT_FALSE(config::audio.keep_default_sink);
+
+  config::apply_config_for_test("external_audio = disabled\nkeep_default_sink = enabled\n");
+  EXPECT_TRUE(config::audio.keep_default_sink);
+
+  config::audio.keep_default_sink = original_keep_default_sink;
+}

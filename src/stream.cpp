@@ -2254,7 +2254,7 @@ namespace stream {
     session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, config::stream.dscp_tagging && session->config.audioQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Audio"sv;
-    audio::capture(session->mail, session->config.audio, session);
+    audio::capture(session->mail, session->config.audio, session, proc::app_process_identity_provider(proc::proc));
   }
 
   namespace session {
