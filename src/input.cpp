@@ -754,6 +754,31 @@ namespace input {
   }
 
   /**
+   * @brief Turn a point on a rotated output into the output's own orientation.
+   * @details A rotated output is captured in its native orientation, so a point read off the stream is in that
+   * orientation. Absolute input targets the output's logical (rotated) coordinates.
+   *
+   * @param point Point relative to the output's top-left corner, in the output's native orientation.
+   * @param output Output geometry; `logical_width` and `logical_height` are the rotated logical size.
+   * @return The point relative to the output's top-left corner, in its logical orientation.
+   */
+  std::pair<float, float> rotate_to_output(const std::pair<float, float> &point, const platf::touch_port_t &output) {
+    const auto [x, y] = point;
+    const auto width = static_cast<float>(output.logical_width);
+    const auto height = static_cast<float>(output.logical_height);
+    switch (output.transform) {
+      case 1:  // 90
+        return {width - y, x};
+      case 2:  // 180
+        return {width - x, height - y};
+      case 3:  // 270
+        return {y, height - x};
+      default:
+        return point;
+    }
+  }
+
+  /**
    * @brief Convert stream touch geometry to platform pointer bounds.
    *
    * @param touch_port Stream touch geometry.
@@ -920,7 +945,8 @@ namespace input {
 
     auto &touch_port = input->touch_port;
 
-    platf::abs_mouse(platf_input, platform_touch_port(touch_port), tpcoords->first, tpcoords->second);
+    const auto [x_out, y_out] = rotate_to_output({tpcoords->first - touch_port.offset_x, tpcoords->second - touch_port.offset_y}, touch_port);
+    platf::abs_mouse(platf_input, platform_touch_port(touch_port), x_out + touch_port.offset_x, y_out + touch_port.offset_y);
   }
 
   /**
@@ -2571,6 +2597,18 @@ namespace input {
       packet.header.magic = util::endian::little<std::uint32_t>(MOUSE_MOVE_REL_MAGIC_GEN5);
       packet.deltaX = util::endian::big(delta_x);
       packet.deltaY = util::endian::big(delta_y);
+
+      ::input::passthrough(input, &packet);
+    }
+
+    void send_absolute_mouse_packet(std::shared_ptr<input_t> &input, std::int16_t x, std::int16_t y, std::int16_t width, std::int16_t height) {
+      NV_ABS_MOUSE_MOVE_PACKET packet {};
+      packet.header.size = util::endian::big<std::uint32_t>(sizeof(packet) - sizeof(packet.header.size));
+      packet.header.magic = util::endian::little<std::uint32_t>(MOUSE_MOVE_ABS_MAGIC);
+      packet.x = util::endian::big(x);
+      packet.y = util::endian::big(y);
+      packet.width = util::endian::big(width);
+      packet.height = util::endian::big(height);
 
       ::input::passthrough(input, &packet);
     }

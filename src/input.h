@@ -182,6 +182,17 @@ namespace input {
     void send_relative_mouse_packet(std::shared_ptr<input_t> &input, std::int16_t delta_x, std::int16_t delta_y);
 
     /**
+     * @brief Process one client absolute-mouse packet on the calling thread.
+     *
+     * @param input Retained input state.
+     * @param x Horizontal position on the client surface.
+     * @param y Vertical position on the client surface.
+     * @param width Width of the client surface.
+     * @param height Height of the client surface.
+     */
+    void send_absolute_mouse_packet(std::shared_ptr<input_t> &input, std::int16_t x, std::int16_t y, std::int16_t width, std::int16_t height);
+
+    /**
      * @brief Forget every key Sunshine tracks as pressed and cancel any pending key repeat.
      */
     void reset_keyboard_state();

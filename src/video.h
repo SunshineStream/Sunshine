@@ -870,6 +870,25 @@ namespace video {
   }
 
   /**
+   * @brief Scale from logical to physical pixels for the touch port.
+   * @details A rotated output (odd transform) is captured in its native orientation, so its logical size is compared
+   * with the physical size swapped.
+   *
+   * @param width Physical width of the captured display.
+   * @param height Physical height of the captured display.
+   * @param logical_width Logical width of the display, as rotated.
+   * @param logical_height Logical height of the display, as rotated.
+   * @param transform Wayland output transform of the display.
+   * @return Physical pixels per logical pixel.
+   */
+  inline float touch_port_scale(float width, float height, float logical_width, float logical_height, int transform) {
+    if (transform % 2 == 1) {
+      std::swap(logical_width, logical_height);
+    }
+    return std::fminf(width / logical_width, height / logical_height);
+  }
+
+  /**
    * @brief Capture frame interval for the requested framerate.
    * Uses the exact fractional rate when the client provided an X100 value.
    *

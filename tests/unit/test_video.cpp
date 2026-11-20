@@ -33,6 +33,14 @@ using namespace std::literals;
 /**
  * @brief Packet replacement rules retain the original non-owning byte views.
  */
+TEST(VideoTouchPortTest, ScalesRotatedOutputsByTheirRotatedLogicalSize) {
+  // 3000x1920 native pixels at scale 2: 1500x960 logical, or 960x1500 when rotated by 90 or 270 degrees.
+  EXPECT_FLOAT_EQ(video::touch_port_scale(3000.0F, 1920.0F, 1500.0F, 960.0F, 0), 2.0F);
+  EXPECT_FLOAT_EQ(video::touch_port_scale(3000.0F, 1920.0F, 960.0F, 1500.0F, 1), 2.0F);
+  EXPECT_FLOAT_EQ(video::touch_port_scale(3000.0F, 1920.0F, 1500.0F, 960.0F, 2), 2.0F);
+  EXPECT_FLOAT_EQ(video::touch_port_scale(3000.0F, 1920.0F, 960.0F, 1500.0F, 3), 2.0F);
+}
+
 TEST(VideoPacketReplacementTest, CopiesViewsWithoutCopyingTheirBackingBytes) {
   std::string original = "__old__";
   std::string replacement = "__new__";

@@ -139,6 +139,7 @@ TEST(WaylandMonitorTest, ListenerIgnoresPhysicalGeometryScaleAndDone) {
   EXPECT_EQ(monitor.viewport.width, 2560);
   EXPECT_EQ(monitor.viewport.height, 1440);
   EXPECT_EQ(monitor.refresh_mhz, 120000);
+  EXPECT_EQ(monitor.viewport.transform, WL_OUTPUT_TRANSFORM_90);
   EXPECT_EQ(monitor.name, "DP-1");
   EXPECT_EQ(monitor.description, "Logical monitor");
 }
@@ -152,6 +153,15 @@ TEST(WaylandCaptureTest, UsesDamageCaptureOnlyOnAFasterOutput) {
   EXPECT_FALSE(wl::use_damage_capture(3, 60.0, 60000));
   EXPECT_FALSE(wl::use_damage_capture(3, 60.0, 89999));
   EXPECT_FALSE(wl::use_damage_capture(3, 120.0, 120000));
+}
+
+TEST(WaylandCaptureTest, ReinitializesWhenTheOutputTurnsWithoutChangingSize) {
+  // Turning from 90 to 270 degrees keeps both the native 3000x1920 and the logical 960x1500 size.
+  EXPECT_TRUE(wl::capture_needs_reinit(3000, 1920, 3000, 1920, WL_OUTPUT_TRANSFORM_270, WL_OUTPUT_TRANSFORM_90));
+  EXPECT_FALSE(wl::capture_needs_reinit(3000, 1920, 3000, 1920, WL_OUTPUT_TRANSFORM_90, WL_OUTPUT_TRANSFORM_90));
+
+  // A new frame size still reinitializes, whatever the transform.
+  EXPECT_TRUE(wl::capture_needs_reinit(1920, 1080, 3000, 1920, WL_OUTPUT_TRANSFORM_NORMAL, WL_OUTPUT_TRANSFORM_NORMAL));
 }
 
 TEST(WaylandCaptureTest, KeepsPacedCaptureWithoutProtocolOrRates) {

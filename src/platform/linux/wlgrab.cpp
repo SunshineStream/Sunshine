@@ -264,6 +264,21 @@ namespace wl {
     return screencopy_version >= 2 && stream_fps > 0 && refresh_mhz / 1000.0 >= stream_fps * 1.5;
   }
 
+  bool capture_needs_reinit(int frame_width, int frame_height, int width, int height, int output_transform, int transform) {
+    return frame_width != width || frame_height != height || output_transform != transform;
+  }
+
+  void apply_monitor_geometry(platf::display_t &display, const monitor_t &monitor) {
+    display.offset_x = monitor.viewport.offset_x;
+    display.offset_y = monitor.viewport.offset_y;
+    display.width = monitor.viewport.width;
+    display.height = monitor.viewport.height;
+    display.output_name = monitor.name;
+    display.logical_width = monitor.viewport.logical_width;
+    display.logical_height = monitor.viewport.logical_height;
+    display.transform = monitor.viewport.transform;
+  }
+
   std::chrono::steady_clock::time_point next_damage_request(
     std::chrono::steady_clock::time_point next_request,
     std::chrono::steady_clock::time_point frame_time,
@@ -416,14 +431,8 @@ namespace wl {
       event_driven = use_damage_capture(interface.screencopy_version, stream_fps, monitor->refresh_mhz);
       BOOST_LOG(info) << "[wlgrab] Frame capture: "sv << (event_driven ? "event-driven"sv : "paced"sv) << " (output "sv << output_fps << " Hz, stream "sv << stream_fps << " fps)"sv;
 
-      offset_x = monitor->viewport.offset_x;
-      offset_y = monitor->viewport.offset_y;
-      width = monitor->viewport.width;
-      height = monitor->viewport.height;
-
-      this->output_name = monitor->name;
-      this->logical_width = monitor->viewport.logical_width;
-      this->logical_height = monitor->viewport.logical_height;
+      apply_monitor_geometry(*this, *monitor);
+      this->monitor = monitor;
 
       platf::desktop_geometry_t desktop;
       for (const auto &monitor_entry : interface.monitors) {
@@ -493,8 +502,7 @@ namespace wl {
 
       if (
         dmabuf.status == dmabuf_t::REINIT ||
-        current_frame->sd.width != width ||
-        current_frame->sd.height != height
+        capture_needs_reinit(current_frame->sd.width, current_frame->sd.height, width, height, monitor->viewport.transform, transform)
       ) {
         return platf::capture_e::reinit;
       }
@@ -597,6 +605,7 @@ namespace wl {
     dmabuf_t dmabuf;  ///< DMA-BUF feedback and format state advertised by the compositor.
 
     wl_output *output;  ///< Wayland output selected for capture.
+    wl::monitor_t *monitor {};  ///< Monitor selected for capture.
   };
 
   /**

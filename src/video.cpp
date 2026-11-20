@@ -2643,9 +2643,7 @@ namespace video {
     int display_env_logical_width = 0;
     int display_env_logical_height = 0;
     if (display->logical_width > 0 && display->logical_height > 0 && display->env_logical_width > 0 && display->env_logical_height > 0) {
-      float lwd = display->logical_width;
-      float lhd = display->logical_height;
-      scalar_tpcoords = std::fminf(wd / lwd, hd / lhd);
+      scalar_tpcoords = touch_port_scale(wd, hd, display->logical_width, display->logical_height, display->transform);
       display_env_logical_width = display->env_logical_width;
       display_env_logical_height = display->env_logical_height;
     }
@@ -2667,6 +2665,7 @@ namespace video {
         display->env_offset_x,
         display->env_offset_y,
         display->output_name,
+        display->transform,
       },
       display->env_width,
       display->env_height,

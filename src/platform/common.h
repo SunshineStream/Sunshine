@@ -396,6 +396,7 @@ namespace platf {
     int env_offset_x {};  ///< Horizontal origin of the full input environment in native desktop coordinates.
     int env_offset_y {};  ///< Vertical origin of the full input environment in native desktop coordinates.
     std::string output_name {};  ///< Native connector name used to assign compositor-managed touch and pen devices.
+    int transform {};  ///< Wayland output transform (rotation) of the display.
   };
 
   // These values must match Limelight-internal.h's SS_FF_* constants!
@@ -858,6 +859,7 @@ namespace platf {
     int height {0};  ///< Height of the captured display in physical pixels.
     int logical_width {0};  ///< Width of the captured display after display scaling.
     int logical_height {0};  ///< Height of the captured display after display scaling.
+    int transform {0};  ///< Wayland output transform (rotation) of the captured display.
 
   protected:
     // collect capture timing data (at loglevel debug)
