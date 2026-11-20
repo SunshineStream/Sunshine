@@ -166,7 +166,7 @@ namespace {
 TEST(ConfigFileLoadingTest, RejectsAnExplicitEmptyPath) {
   const auto loaded = config::read_explicit_config_file("");
   EXPECT_TRUE(loaded.contents.empty());
-  EXPECT_NE(loaded.warning.find("path argument is empty"), std::string::npos);
+  EXPECT_NE(loaded.diagnostic.find("path argument is empty"), std::string::npos);
 }
 
 /**
@@ -174,13 +174,13 @@ TEST(ConfigFileLoadingTest, RejectsAnExplicitEmptyPath) {
  */
 TEST_F(ConfigPersistenceTest, CreatesAndReadsExplicitConfigurationFile) {
   const auto created = config::read_explicit_config_file(config_file().string());
-  EXPECT_TRUE(created.warning.empty());
+  EXPECT_TRUE(created.diagnostic.empty());
   EXPECT_TRUE(created.contents.empty());
   EXPECT_TRUE(std::filesystem::is_regular_file(config_file()));
 
   ASSERT_EQ(file_handler::write_file(config_file().string().c_str(), "encoder = software"), 0);
   const auto loaded = config::read_explicit_config_file(config_file().string());
-  EXPECT_TRUE(loaded.warning.empty());
+  EXPECT_TRUE(loaded.diagnostic.empty());
   EXPECT_EQ(loaded.contents, "encoder = software");
 }
 
@@ -193,7 +193,7 @@ TEST_F(ConfigPersistenceTest, RejectsADirectoryAndAMissingConfigParent) {
   for (const auto &path : {directory, missing_parent}) {
     const auto loaded = config::read_explicit_config_file(path);
     EXPECT_TRUE(loaded.contents.empty());
-    EXPECT_NE(loaded.warning.find(path), std::string::npos);
+    EXPECT_NE(loaded.diagnostic.find(path), std::string::npos);
   }
   EXPECT_FALSE(std::filesystem::exists(config_file()));
 }

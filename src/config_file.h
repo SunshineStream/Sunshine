@@ -17,7 +17,7 @@ namespace config {
    */
   struct explicit_config_file_t {
     std::string contents;  ///< Configuration text; may be empty even on success.
-    std::string warning;  ///< Nonempty when the explicit path could not supply a file.
+    std::string diagnostic;  ///< Nonempty when the explicit path could not supply a file.
   };
 
   /**
@@ -37,15 +37,14 @@ namespace config {
     };
 
     const std::filesystem::path config_path {path};
-    std::error_code error;
-    const auto status = std::filesystem::status(config_path, error);
-    if (status.type() == std::filesystem::file_type::not_found) {
+    std::error_code status_error;
+    if (const auto status = std::filesystem::status(config_path, status_error); status.type() == std::filesystem::file_type::not_found) {
       std::ofstream file {config_path, std::ios::app};
       file.close();
       if (!file) {
         return unavailable();
       }
-    } else if (error || !std::filesystem::is_regular_file(status)) {
+    } else if (status_error || std::filesystem::is_directory(status)) {
       return unavailable();
     }
 
