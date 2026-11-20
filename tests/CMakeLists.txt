@@ -183,6 +183,9 @@ list(REMOVE_ITEM SUNSHINE_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 add_executable(${PROJECT_NAME}
         ${TEST_SOURCES}
         ${SUNSHINE_SOURCES})
+# TODO: Use proper gtest integration from GoogleTest module
+add_test(NAME ${PROJECT_NAME}
+        COMMAND ${PROJECT_NAME})
 
 # Copy integration-test fixtures to the build directory.
 # Preserve repository-relative paths for source and installed-test layouts.
