@@ -136,6 +136,21 @@ TEST_F(ClientAuthorizationTest, MultipleClientsPersistAndUnpairIndependently) {
   EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(expired_credentials.x509));
 }
 
+TEST_F(ClientAuthorizationTest, ClientListReportsCertificateFingerprints) {
+  const auto first_credentials = test_utils::certificates::generate_ca_credentials("Sunshine First Client");
+  const auto second_credentials = crypto::gen_creds("Sunshine Second Client", 2048);
+  ASSERT_FALSE(nvhttp::test_support::add_client("first", first_credentials.x509, true).empty());
+  ASSERT_FALSE(nvhttp::test_support::add_client("second", second_credentials.x509, false).empty());
+
+  const auto clients = nvhttp::get_all_clients();
+  ASSERT_EQ(clients.size(), 2);
+  for (const auto &client : clients) {
+    const auto &credentials = client.at("name") == "first" ? first_credentials : second_credentials;
+    EXPECT_EQ(client.at("fingerprint"), crypto::fingerprint256(credentials.x509));
+  }
+  EXPECT_NE(clients[0].at("fingerprint"), clients[1].at("fingerprint"));
+}
+
 TEST_F(ClientAuthorizationTest, DuplicateCertificateIdentityFailsClosed) {
   const auto credentials = test_utils::certificates::generate_ca_credentials();
   const auto uuid = nvhttp::test_support::add_client("first", credentials.x509, true);

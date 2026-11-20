@@ -7,6 +7,7 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -692,6 +693,26 @@ TEST_F(PairingSessionRegistryTest, PinApprovalTargetsExplicitPairingId) {
   ASSERT_EQ(pending.size(), 1);
   EXPECT_EQ(pending.front().id, attacker_pairing_id);
   EXPECT_EQ(pending.front().address, "192.0.2.20");
+}
+
+TEST_F(PairingSessionRegistryTest, PendingPairingReportsClientCertificateFingerprint) {
+  auto session = pending_session("fingerprinted", "Phone", "192.0.2.30");
+  session.client.cert = PUBLIC_CERT;
+  std::string pairing_id;
+  ASSERT_EQ(insert_pair_session(std::move(session), pairing_id), pair_session_insert_e::ADDED);
+  std::string invalid_pairing_id;
+  ASSERT_EQ(insert_pair_session(pending_session("no-cert", "Tablet", "192.0.2.31"), invalid_pairing_id), pair_session_insert_e::ADDED);
+
+  const auto pending = get_pending_pairings();
+  ASSERT_EQ(pending.size(), 2);
+  const auto find = [&](const std::string &id) {
+    return std::ranges::find(pending, id, &pending_pairing_t::id);
+  };
+  ASSERT_NE(find(pairing_id), pending.end());
+  EXPECT_FALSE(find(pairing_id)->fingerprint.empty());
+  EXPECT_EQ(find(pairing_id)->fingerprint, crypto::fingerprint256(PUBLIC_CERT));
+  ASSERT_NE(find(invalid_pairing_id), pending.end());
+  EXPECT_TRUE(find(invalid_pairing_id)->fingerprint.empty());
 }
 
 TEST_F(PairingSessionRegistryTest, InvalidApprovalCannotConsumePendingSession) {

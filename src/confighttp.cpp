@@ -1410,6 +1410,20 @@ namespace confighttp {
    * @brief Get the list of paired clients.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
+   * The response is JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "named_certs": [
+   *     {
+   *       "name": "My Phone",
+   *       "uuid": "<uuid>",
+   *       "enabled": true,
+   *       "fingerprint": "<SHA-256 of the client certificate, uppercase hex>"
+   *     }
+   *   ],
+   *   "status": true
+   * }
+   * @endcode
    *
    * @api_examples{/api/clients/list|:| GET|:| null}
    */
@@ -1894,6 +1908,21 @@ namespace confighttp {
 
   /**
    * @brief List client pairing requests that are waiting for PIN approval.
+   * The response is JSON serialized in the following format:
+   * @code{.json}
+   * {
+   *   "pairings": [
+   *     {
+   *       "id": "<pairing_id>",
+   *       "name": "<device name reported by the client>",
+   *       "address": "192.0.2.10",
+   *       "fingerprint": "<SHA-256 of the client certificate, uppercase hex>"
+   *     }
+   *   ]
+   * }
+   * @endcode
+   * The fingerprint matches the one `/api/clients/list` reports once the request is paired, so a request
+   * can be attributed to a device that is already paired elsewhere.
    *
    * @api_examples{/api/pin|:| GET|:| null}
    */
@@ -1911,6 +1940,7 @@ namespace confighttp {
         {"id", pairing.id},
         {"name", pairing.name},
         {"address", pairing.address},
+        {"fingerprint", pairing.fingerprint},
       });
     }
     send_response(response, output_tree);
