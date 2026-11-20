@@ -85,6 +85,19 @@ namespace platf {
    * @return True when Sunshine can capture the screen.
    */
   bool is_screen_capture_allowed();
+
+  /**
+   * @brief Install AppKit event compatibility fixes for macOS.
+   *
+   * On macOS 15 and newer, menu bar status item tracking delivers events routed
+   * through FrontBoardServices as KitDefined (NSEventTypeAppKitDefined) events.
+   * Qt's Cocoa platform plugin (libqcocoa) accesses NSEvent.clickCount without
+   * verifying that the current event is a mouse event, triggering an
+   * NSInternalInconsistencyException that crashes the application.
+   * This installs a method swizzle on -[NSEvent clickCount] to safely return
+   * a single-click fallback for non-mouse events instead of throwing.
+   */
+  void install_event_compatibility_fixes();
 }  // namespace platf
 
 namespace dyn {

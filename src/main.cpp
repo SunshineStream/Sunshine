@@ -188,6 +188,8 @@ int main(int argc, char *argv[]) {
 #endif
 
 #ifdef __APPLE__
+  platf::install_event_compatibility_fixes();
+
   // Bundle assets are referenced relative to the executable
   // (e.g. ../Resources/assets), so anchor cwd to Contents/MacOS.
   {
