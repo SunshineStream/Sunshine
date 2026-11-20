@@ -595,7 +595,6 @@ Sunshine supports native system audio capture on macOS 14.0 (Sonoma) and newer v
 To use it, simply leave the **Audio Sink** setting blank.
 
 If you prefer to manage your own loopback device, you can still use
-[Soundflower](https://github.com/mattingalls/Soundflower) or
 [BlackHole](https://github.com/ExistentialAudio/BlackHole)
 and enter its device name in the [audio_sink](configuration.md#audio_sink) field.
 

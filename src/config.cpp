@@ -803,7 +803,7 @@ namespace config {
     {},  // virtual_sink
     true,  // stream audio
     true,  // install_steam_drivers
-    false,  // external_audio
+    false,  // keep_default_sink
   };
 
   /**
@@ -1810,7 +1810,20 @@ namespace config {
     string_f(vars, "virtual_sink", audio.virtual_sink);
     bool_f(vars, "stream_audio", audio.stream);
     bool_f(vars, "install_steam_audio_drivers", audio.install_steam_drivers);
-    bool_f(vars, "external_audio", audio.external_audio);
+    // One-time upgrade migration, not a supported option: parse the legacy key
+    // before keep_default_sink so an explicit new key below always wins. The
+    // legacy key only ever took effect on Windows with an explicit
+    // `audio_sink`, so the migration keeps that exact scope instead of
+    // changing routing on other platforms or without a pinned sink.
+    bool legacy_external_audio = false;
+    bool_f(vars, "external_audio", legacy_external_audio);
+#ifdef _WIN32
+    if (legacy_external_audio && !audio.sink.empty()) {
+      audio.keep_default_sink = true;
+      BOOST_LOG(warning) << "external_audio is deprecated; use keep_default_sink instead"sv;
+    }
+#endif
+    bool_f(vars, "keep_default_sink", audio.keep_default_sink);
 
     string_restricted_f(vars, "origin_web_ui_allowed", nvhttp.origin_web_ui_allowed, {"pc"sv, "lan"sv, "wan"sv});
 
