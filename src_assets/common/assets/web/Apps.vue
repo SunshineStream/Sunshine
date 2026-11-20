@@ -295,6 +295,15 @@
                       v-model="editForm['wait-all']"
                       default="true"
             ></Checkbox>
+            <div class="mb-3">
+              <label for="captureCursor" class="form-label">{{ $t('apps.capture_cursor') }}</label>
+              <select id="captureCursor" class="form-select" v-model="editForm['capture-cursor']">
+                <option :value="null">{{ $t('apps.capture_cursor_default') }}</option>
+                <option :value="true">{{ $t('apps.capture_cursor_on') }}</option>
+                <option :value="false">{{ $t('apps.capture_cursor_off') }}</option>
+              </select>
+              <div class="form-text">{{ $t('apps.capture_cursor_desc') }}</div>
+            </div>
             <!-- exit timeout -->
             <div class="mb-3">
               <label for="exitTimeout" class="form-label">{{ $t('apps.exit_timeout') }}</label>
@@ -801,6 +810,7 @@
           elevated: false,
           "auto-detach": true,
           "wait-all": true,
+          "capture-cursor": null,
           "exit-timeout": 5,
           "prep-cmd": [],
           detached: [],
@@ -824,6 +834,7 @@
           elevated: false,
           "auto-detach": true,
           "wait-all": true,
+          "capture-cursor": null,
           "exit-timeout": 5,
           cmd: "",
           output: "",
@@ -1038,6 +1049,10 @@
           const modalBody = this.$refs.editModal.querySelector('.modal-body');
           if (modalBody) modalBody.scrollTop = 0;
           return;
+        }
+
+        if (this.editForm["capture-cursor"] === null) {
+          delete this.editForm["capture-cursor"];
         }
 
         apiFetch("./api/apps", {

@@ -2351,6 +2351,33 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### capture_cursor
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Default cursor capture for applications. An application can override it with Capture mouse cursor in
+            the Applications tab, or with the optional boolean <code>capture-cursor</code> field in apps.json.
+            Disable cursor capture to allow NvFBC direct capture of a suitable fullscreen application; the other
+            NvFBC conditions must also be met. The Ctrl+Alt+Shift+N shortcut still toggles cursor capture during
+            a session. Restart Sunshine after changing this setting in the configuration file.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            capture_cursor = disabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### fp16_sdr_gamma_encoded
 
 <table>

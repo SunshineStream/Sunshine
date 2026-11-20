@@ -27,6 +27,7 @@
 #endif
 
 // local includes
+#include <src/globals.h>
 #include <src/process.h>
 #include <src/utility.h>
 
@@ -196,6 +197,48 @@ TEST(ProcessTest, UrlCommandsDoNotResolveAnExecutableWorkingDirectory) {
   EXPECT_TRUE(proc::find_working_directory("https://example.com", env).empty());
   EXPECT_TRUE(proc::find_working_directory("steam://run/123", env).empty());
   EXPECT_TRUE(proc::find_working_directory("custom+scheme://host/path", env).empty());
+}
+
+TEST(ProcessTest, AppCursorCaptureOverridesGlobalDefault) {
+  EXPECT_TRUE(proc::initial_cursor_capture(std::nullopt, true));
+  EXPECT_FALSE(proc::initial_cursor_capture(std::nullopt, false));
+  EXPECT_TRUE(proc::initial_cursor_capture(true, false));
+  EXPECT_FALSE(proc::initial_cursor_capture(false, true));
+}
+
+TEST(ProcessTest, TemporaryAppManagerDoesNotResetCursorCapture) {
+  const bool original_cursor = display_cursor;
+  const bool original_default = config::video.capture_cursor;
+  const auto restore = util::fail_guard([original_cursor, original_default]() {
+    display_cursor = original_cursor;
+    config::video.capture_cursor = original_default;
+  });
+
+  config::video.capture_cursor = true;
+  display_cursor = false;
+  {
+    proc::proc_t manager {boost::this_process::environment(), {}};
+  }
+  EXPECT_FALSE(display_cursor);
+}
+
+TEST(ProcessTest, ParsesOptionalAppCursorCapture) {
+  const auto path = fs::temp_directory_path() / "sunshine_process_cursor_apps.json";
+  const auto cleanup = util::fail_guard([&path]() {
+    fs::remove(path);
+  });
+  {
+    std::ofstream file(path);
+    file << R"({"env":{},"apps":[{"name":"Desktop"},{"name":"Steam","capture-cursor":false},{"name":"Other","capture-cursor":true}]})";
+  }
+
+  auto parsed = proc::parse(path.string());
+  ASSERT_TRUE(parsed.has_value());
+  const auto &apps = parsed->get_apps();
+  ASSERT_EQ(apps.size(), 3);
+  EXPECT_FALSE(apps[0].capture_cursor.has_value());
+  EXPECT_EQ(apps[1].capture_cursor, false);
+  EXPECT_EQ(apps[2].capture_cursor, true);
 }
 
 #ifndef _WIN32

@@ -31,6 +31,17 @@
 
 namespace proc {
   /**
+   * @brief Select an application's initial cursor-capture state.
+   *
+   * @param app_override Per-app choice, if one was configured.
+   * @param global_default Default from sunshine.conf.
+   * @return The state to use when launching the application.
+   */
+  inline bool initial_cursor_capture(std::optional<bool> app_override, bool global_default) {
+    return app_override.value_or(global_default);
+  }
+
+  /**
    * @brief Boost.Process pipe stream used for child-process I/O.
    */
   using file_t = util::safe_ptr_v2<FILE, int, &fclose>;
@@ -78,6 +89,7 @@ namespace proc {
     bool elevated;  ///< Whether the process should be launched elevated.
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.
+    std::optional<bool> capture_cursor;  ///< Per-app cursor-capture override; unset uses the global default.
     std::chrono::seconds exit_timeout;  ///< Exit timeout.
   };
 

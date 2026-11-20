@@ -26,6 +26,7 @@
 #include "config.h"
 #include "entry_handler.h"
 #include "file_handler.h"
+#include "globals.h"
 #include "logging.h"
 #include "nvhttp.h"
 #include "platform/common.h"
@@ -792,7 +793,8 @@ namespace config {
     },  // display_device
 
     0,  // max_bitrate
-    0  // minimum_fps_target (0 = framerate)
+    0,  // minimum_fps_target (0 = framerate)
+    true  // capture_cursor
   };
 
   /**
@@ -1764,6 +1766,8 @@ namespace config {
     }
 
     string_f(vars, "capture", video.capture);
+    bool_f(vars, "capture_cursor", video.capture_cursor);
+    display_cursor = video.capture_cursor;
     bool_f(vars, "fp16_sdr_gamma_encoded", video.fp16_sdr_gamma_encoded);
     string_f(vars, "encoder", video.encoder);
     string_f(vars, "adapter_name", video.adapter_name);

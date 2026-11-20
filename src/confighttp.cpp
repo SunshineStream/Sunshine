@@ -1098,7 +1098,8 @@ namespace confighttp {
         "exclude-global-prep-cmd",
         "elevated",
         "auto-detach",
-        "wait-all"
+        "wait-all",
+        "capture-cursor"
       };
 
       // List of keys to convert to integers
@@ -1246,6 +1247,7 @@ namespace confighttp {
    *   "elevated": false,
    *   "auto-detach": true,
    *   "wait-all": true,
+   *   "capture-cursor": false,
    *   "exit-timeout": 5,
    *   "prep-cmd": [
    *     {
