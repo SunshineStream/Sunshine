@@ -326,17 +326,17 @@ namespace platf {
      * is: loading another sink with the same name would leave two of them.
      *
      * @param found Whether the sink is in the sink list.
-     * @param module Index of the module that owns the sink; set when the sink is loaded here.
+     * @param module_index Index of the module that owns the sink; set when the sink is loaded here.
      * @param load Loads the sink and returns its module index, or PA_INVALID_INDEX on failure.
      * @return `true` when the sink exists afterwards.
      */
-    bool ensure_null_sink(bool found, std::uint32_t &module, const std::function<std::uint32_t()> &load) {
+    bool ensure_null_sink(bool found, std::uint32_t &module_index, const std::function<std::uint32_t()> &load) {  // NOSONAR(cpp:S5213): Not a template so the unit tests can declare and call it.
       if (found) {
         return true;
       }
 
-      module = load();
-      return module != PA_INVALID_INDEX;
+      module_index = load();
+      return module_index != PA_INVALID_INDEX;
     }
 
     /**
@@ -543,11 +543,11 @@ namespace platf {
         sink.host = sink_name;
 
         auto load = [this](const char *name, const auto &channel_mapping, const char *layout) {
-          auto module = static_cast<std::uint32_t>(load_null(name, channel_mapping.data(), static_cast<int>(channel_mapping.size())));
-          if (module == PA_INVALID_INDEX) {
+          auto module_index = static_cast<std::uint32_t>(load_null(name, channel_mapping.data(), static_cast<int>(channel_mapping.size())));
+          if (module_index == PA_INVALID_INDEX) {
             BOOST_LOG(warning) << "Couldn't create virtual sink for "sv << layout << ": "sv << pa_strerror(pa_context_errno(ctx.get()));
           }
-          return module;
+          return module_index;
         };
 
         const bool has_stereo = ensure_null_sink(found.stereo, index.stereo, [&]() {
