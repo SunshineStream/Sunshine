@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "Workaround ad alto contrasto per HDR",
     "ds4_back_as_touchpad_click": "Mappa Indietro/Select come Clic Touchpad",
     "ds4_back_as_touchpad_click_desc": "Quando si forza l'emulazione DS4, mappa Indietro/Select come Clic Touchpad",
+    "dscp_tagging": "Marcatura DSCP",
+    "dscp_tagging_desc": "Contrassegna pacchetti audio e video con tag di priorità DSCP quando richiesto dal client. Disabilitare questo può aiutare se l'audio crepe o stutter su Wi-Fi, come alcuni router gestiscono male il traffico etichettato.",
     "virtualhid_randomize_mac": "Casuale MAC del controller virtuale",
     "virtualhid_randomize_mac_desc": "Usa un indirizzo MAC casuale per controller virtuali in stile PlayStation invece di uno basato sull'indice del controllore. Questo evita di miscelare le impostazioni per controllore quando i controllori vengono scambiati sul client.",
     "encoder": "Forza un encoder specifico",

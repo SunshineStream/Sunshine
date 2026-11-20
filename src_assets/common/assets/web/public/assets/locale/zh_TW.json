@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "HDR 的高對比度解決方案",
     "ds4_back_as_touchpad_click": "地圖 Back/Select 至觸控板點選",
     "ds4_back_as_touchpad_click_desc": "當強制啟用 DS4 模擬時，將返回/選擇按鈕映射為觸控板點擊",
+    "dscp_tagging": "DSCP 標記",
+    "dscp_tagging_desc": "當客戶端提出要求時，請為音訊和視訊封包標記 DSCP 優先級標籤。若在 Wi-Fi 連線時出現音訊雜音或卡頓，停用此功能可能會有所幫助，因為部分路由器對帶標籤的流量處理不佳。",
     "virtualhid_randomize_mac": "隨機化虛擬控制器 MAC 位址",
     "virtualhid_randomize_mac_desc": "對於 PlayStation 風格的虛擬控制器，請使用隨機的 MAC 位址，而非基於控制器索引的 MAC 位址。這樣一來，當客戶端更換控制器時，即可避免各控制器的設定相互混淆。",
     "encoder": "強制指定編碼器",

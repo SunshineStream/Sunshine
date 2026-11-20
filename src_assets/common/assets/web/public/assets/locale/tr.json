@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "HDR için yüksek kontrastlı geçici çözüm",
     "ds4_back_as_touchpad_click": "Geri/Seçimi Dokunmatik Yüzeye Eşle Tıklama",
     "ds4_back_as_touchpad_click_desc": "DS4 emülasyonunu zorlarken, Geri/Seç'i Dokunmatik Yüzey Tıklaması ile eşleyin",
+    "dscp_tagging": "DSCP Etiketleme",
+    "dscp_tagging_desc": "İstemci tarafından talep edildiğinde ses ve video paketlerini DSCP öncelik etiketleriyle işaretleyin. Bazı yönlendiriciler etiketli trafiği iyi işleyemediğinden, Wi-Fi bağlantısında sesde cızırtı veya takılma olması durumunda bu seçeneği devre dışı bırakmak yardımcı olabilir.",
     "virtualhid_randomize_mac": "Sanal denetleyicinin MAC adresini rastgele belirle",
     "virtualhid_randomize_mac_desc": "PlayStation tarzı sanal denetleyiciler için, denetleyici dizinine dayalı bir adres yerine rastgele bir MAC adresi kullanın. Bu, istemcide denetleyiciler değiştirildiğinde denetleyici başına ayarların karışmasını önler.",
     "encoder": "Belirli Bir Kodlayıcıyı Zorla",

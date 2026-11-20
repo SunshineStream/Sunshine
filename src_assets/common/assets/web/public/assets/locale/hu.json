@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "Magas kontrasztú megoldás a HDR-hez",
     "ds4_back_as_touchpad_click": "Back/Select leképezése érintőpad kattintásra",
     "ds4_back_as_touchpad_click_desc": "DS4 emuláció kikényszerítésekor a Back/Select leképzése érintőpad kattintásra",
+    "dscp_tagging": "DSCP-címkézés",
+    "dscp_tagging_desc": "Az ügyfél kérésére jelöld meg az audio- és videocsomagokat DSCP prioritási címkékkel. Ennek kikapcsolása segíthet, ha az audio Wi-Fi-n recseg vagy akadozik, mivel egyes útválasztók nem kezelik megfelelően a címkézett forgalmat.",
     "virtualhid_randomize_mac": "A virtuális vezérlő MAC-címének véletlenszerűsítése",
     "virtualhid_randomize_mac_desc": "A PlayStation-típusú virtuális vezérlők esetében a vezérlőindexen alapuló MAC-cím helyett véletlenszerű MAC-címet használj. Ezzel elkerülhető, hogy a vezérlők cseréje során az egyes vezérlőkhöz tartozó beállítások összekeveredjenek az ügyfél oldalon.",
     "encoder": "Egy adott kódoló kényszerítése",

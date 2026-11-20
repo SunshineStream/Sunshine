@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "Giải pháp thay thế cho HDR có độ tương phản cao",
     "ds4_back_as_touchpad_click": "Quay lại bản đồ/Chọn bằng cách nhấp chuột vào bàn di chuột",
     "ds4_back_as_touchpad_click_desc": "Khi ép buộc mô phỏng DS4, gán nút Back/Select cho thao tác nhấp chuột trên bàn di chuột.",
+    "dscp_tagging": "Gán nhãn DSCP",
+    "dscp_tagging_desc": "Đánh dấu các gói tin âm thanh và video bằng thẻ ưu tiên DSCP khi có yêu cầu từ máy khách. Việc tắt tính năng này có thể giúp khắc phục hiện tượng âm thanh bị rè hoặc giật khi sử dụng Wi-Fi, do một số bộ định tuyến xử lý lưu lượng có gắn thẻ không hiệu quả.",
     "virtualhid_randomize_mac": "Xáo trộn địa chỉ MAC của bộ điều khiển ảo",
     "virtualhid_randomize_mac_desc": "Sử dụng địa chỉ MAC ngẫu nhiên cho các bộ điều khiển ảo kiểu PlayStation thay vì địa chỉ dựa trên chỉ số bộ điều khiển. Điều này giúp tránh việc trộn lẫn các cài đặt riêng cho từng bộ điều khiển khi các bộ điều khiển được thay đổi trên máy khách.",
     "encoder": "Bắt buộc sử dụng bộ mã hóa cụ thể",
