@@ -204,7 +204,7 @@ namespace nvprefs {
 
     // Restore global profile settings with undo data
     if (pimpl->driver_settings.restore_global_profile_to_undo(*pimpl->undo_data) && pimpl->driver_settings.save_settings()) {
-      // Global profile settings sucessfully restored, can delete undo file
+      // Global profile settings successfully restored, can delete undo file
       if (!pimpl->undo_file->delete_file()) {
         error_message("Couldn't delete undo file");
         return false;
