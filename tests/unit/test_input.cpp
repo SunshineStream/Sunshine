@@ -724,6 +724,7 @@ TEST_F(InputGamepadSessionTest, FollowsAWlrOutputThroughARotationOnlyReinit) {
   wl::monitor_t monitor {nullptr};
   monitor.name = "TABLET";
   monitor.wl_mode(nullptr, WL_OUTPUT_MODE_CURRENT, 3000, 1920, 120000);
+  monitor.xdg_position(nullptr, 0, 0);
   monitor.xdg_size(nullptr, 960, 1500);
   monitor.wl_listener.geometry(&monitor, nullptr, 0, 0, 0, 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, "", "", WL_OUTPUT_TRANSFORM_90);
 
