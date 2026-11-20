@@ -1032,7 +1032,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Select the display number you want to stream.
+            Select the display you want to stream.
             @tip{To find the appropriate values follow these instructions.
             <br>
             <br>
@@ -1048,7 +1048,10 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             Info: Detected display: DVI-D-1 (id: 4) connected: false
             @endcode
             It is recommended to use the stable display connector name (text right before the parenthesis, e.g. DP-0) for this value.
-            For wlgrab/x11grab and kmsgrab the numeric id value can also be used.
+            With KMS (kmsgrab) or wlroots (wlgrab), use the exact connector name from the capture backend's monitor list
+            in the Sunshine log. If a numeric setting does not match an enumerated output, Sunshine selects the first
+            detected display instead. Replace the number with the connector name of the intended display.
+            With X11 (x11grab), the numeric id can also be used.
             <br>
             <br>
             **macOS:**
@@ -1124,7 +1127,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>Example (FreeBSD/Linux)</td>
         <td colspan="2">@code{}
-            output_name = 0
+            output_name = DP-1
             @endcode</td>
     </tr>
     <tr>
