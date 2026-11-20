@@ -140,6 +140,7 @@ namespace {
   struct quality_context_t {
     decltype(config::video.vk) saved_settings = config::video.vk;  ///< Settings restored after each scenario.
     quality_driver_t driver;  ///< Fake driver and query observations.
+    std::array<const char *, 1> video_encode_extensions {VK_KHR_VIDEO_ENCODE_QUEUE_EXTENSION_NAME};  ///< Device extensions FFmpeg enabled.
     AVVulkanDeviceContext vulkan {};  ///< Vulkan handles and fake entry point resolver.
     AVHWDeviceContext hardware {};  ///< FFmpeg hardware device wrapping Vulkan.
     AVBufferRef device_buffer {};  ///< Non-owning reference to the hardware device.
@@ -162,6 +163,8 @@ namespace {
       vulkan.inst = std::bit_cast<VkInstance>(&driver);
       vulkan.phys_dev = std::bit_cast<VkPhysicalDevice>(&driver);
       vulkan.get_proc_addr = &quality_driver_t::get_proc_addr;
+      vulkan.enabled_dev_extensions = video_encode_extensions.data();
+      vulkan.nb_enabled_dev_extensions = static_cast<int>(video_encode_extensions.size());
       hardware.hwctx = &vulkan;
       device_buffer.data = static_cast<decltype(device_buffer.data)>(static_cast<void *>(&hardware));
       frames.device_ref = &device_buffer;
@@ -351,4 +354,20 @@ TEST(VulkanEncodeDeviceTest, ClearsMinimumBitrateOnlyForVbr) {
   }
 }
 
+/**
+ * @brief A device without video encode support (Mesa's lavapipe) is never asked for video capabilities.
+ *
+ * The loader resolves the capability entry point for any instance; calling it on such a device reached a null
+ * driver function and crashed Sunshine during encoder probing.
+ */
+TEST(VulkanEncodeDeviceTest, SkipsQualityQueryWithoutVideoEncodeSupport) {
+  for (const auto &codec : quality_codecs) {
+    quality_context_t context {codec, 2};
+    context.vulkan.enabled_dev_extensions = nullptr;
+    context.vulkan.nb_enabled_dev_extensions = 0;
+    EXPECT_EQ(context.initialize(), std::nullopt);
+    EXPECT_EQ(context.driver.capability_calls, 0);
+    EXPECT_TRUE(context.driver.queried_levels.empty());
+  }
+}
 #endif  // SUNSHINE_BUILD_VULKAN
