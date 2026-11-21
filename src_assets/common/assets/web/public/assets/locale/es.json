@@ -482,11 +482,7 @@
     "wan_encryption_mode": "Modo de cifrado WAN",
     "wan_encryption_mode_1": "Activado para clientes compatibles (por defecto)",
     "wan_encryption_mode_2": "Requerido para todos los clientes",
-    "wan_encryption_mode_desc": "Esto determina cuándo se utilizará el cifrado al transmitir a través de Internet. El cifrado puede reducir el rendimiento de la transmisión, especialmente en hosts y clientes menos poderosos.",
-    "audio_format": "Formato de audio de la transmisión",
-    "audio_format_fallback_desc": "Si el cliente no acepta el formato de audio Dolby seleccionado, Sunshine utilizará automáticamente Opus.",
-    "high_quality_audio": "Audio de alta calidad",
-    "high_quality_audio_desc": "Usa una tasa de bits superior para AC-3 o E-AC-3 a costa de un mayor consumo de ancho de banda de red. Esta opción no tiene efecto cuando se selecciona Opus."
+    "wan_encryption_mode_desc": "Esto determina cuándo se utilizará el cifrado al transmitir a través de Internet. El cifrado puede reducir el rendimiento de la transmisión, especialmente en hosts y clientes menos poderosos."
   },
   "index": {
     "permissions_missing_title": "Sunshine necesita permisos",
