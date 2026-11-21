@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <cstddef>
 #include <utility>
 
 // lib includes
@@ -21,6 +22,9 @@ namespace stream {
   constexpr auto AUDIO_STREAM_PORT = 11;  ///< GameStream base-port offset used for the audio UDP stream.
 
   struct session_t;
+
+  /** Return whether an audio payload fits the shared transport limit, including CBC padding. */
+  bool audio_packet_fits(std::size_t plaintext_size, bool encrypted, std::size_t destination_capacity);
 
   /**
    * @brief Stream configuration shared by capture and network senders.

@@ -23,6 +23,7 @@ extern "C" {
 #include <boost/bind.hpp>
 
 // local includes
+#include "audio.h"
 #include "config.h"
 #include "globals.h"
 #include "input.h"
@@ -832,13 +833,39 @@ namespace rtsp_stream {
   /**
    * @brief Handle an unsupported RTSP command.
    */
+  /**
+   * @brief Send the successful ANNOUNCE response, preserving legacy Opus headers.
+   *
+   * @param sock Socket used to write the response.
+   * @param session Launch session associated with the request.
+   * @param seqn ANNOUNCE request sequence number.
+   * @param selected_audio_codec Codec accepted during negotiation.
+   */
+  void respond_announce_success(tcp::socket &sock, launch_session_t &session, int seqn, audio::dolby_codec_e selected_audio_codec) {
+    OPTION_ITEM cseq_option {};
+    std::string cseq_header {"CSeq"};
+    auto seqn_str = std::to_string(seqn);
+    cseq_option.option = cseq_header.data();
+    cseq_option.content = seqn_str.data();
+
+    OPTION_ITEM audio_codec_option {};
+    std::string audio_codec_header {"X-SS-Audio-Codec"};
+    std::string audio_codec_name {audio::dolby_codec_name(selected_audio_codec)};
+    if (selected_audio_codec != audio::dolby_codec_e::opus) {
+      audio_codec_option.option = audio_codec_header.data();
+      audio_codec_option.content = audio_codec_name.data();
+      cseq_option.next = &audio_codec_option;
+    }
+
+    respond(sock, session, &cseq_option, 200, "OK", seqn, {});
+  }
+
   void cmd_not_found(tcp::socket &sock, launch_session_t &session, msg_t &&req) {
     respond(sock, session, nullptr, 404, "NOT FOUND", req->sequenceNumber, {});
   }
 
   /**
    * @brief Handle RTSP OPTIONS requests.
-   * @details The common command signature supplies a server pointer that this handler does not need.
    *
    * @param sock Socket used to read or write the protocol message.
    * @param session Active streaming or pairing session for the request.
@@ -848,32 +875,45 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    std::string cseq_header {"CSeq"};
+    option.option = cseq_header.data();
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
   }
 
   /**
-   * @brief Handle RTSP DESCRIBE requests.
-   * @details The common command signature supplies a server pointer that this handler does not need.
+   * @brief Build the RTSP DESCRIBE response, including any supported Dolby codec offer.
    *
-   * @param sock Client socket.
-   * @param session Launch session.
-   * @param req RTSP request message.
+   * @param sock Socket used to read or write the protocol message.
+   * @param session Active streaming or pairing session for the request.
+   * @param req Parsed RTSP request being handled.
    */
   void cmd_describe(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    std::string cseq_header {"CSeq"};
+    option.option = cseq_header.data();
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     std::stringstream ss;
+
+    // Offer only the configured Dolby codec when its optional FFmpeg encoder is available.
+    // Clients that do not explicitly accept the offer will continue to use Opus.
+    session.audio_negotiation.codec_offered.clear();
+    if (config::audio.format == "ac3"sv && audio::ac3_available()) {
+      session.audio_negotiation.codec_offered = "AC3";
+    } else if (config::audio.format == "eac3"sv && audio::eac3_available()) {
+      session.audio_negotiation.codec_offered = "EAC3";
+    }
+    if (!session.audio_negotiation.codec_offered.empty()) {
+      ss << "a=x-ss-audio-codec-offer:" << session.audio_negotiation.codec_offered << std::endl;
+    }
 
     // Tell the client about our supported features
     ss << "a=x-ss-general.featureFlags:" << (uint32_t) platf::get_capabilities() << std::endl;
@@ -1165,6 +1205,50 @@ namespace rtsp_stream {
       return;
     }
 
+    // A Dolby codec is selected only when the client explicitly accepts the exact offer.
+    // All other cases keep the existing Opus behavior.
+    const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
+    const std::string_view accepted_audio_codec = audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
+    const bool client_accepted_audio_codec =
+      !session.audio_negotiation.codec_offered.empty() &&
+      audio_accept != args.end() &&
+      audio_accept->second == session.audio_negotiation.codec_offered;
+    const bool ac3_encoder_available = session.audio_negotiation.codec_offered == "AC3"sv && audio::ac3_available();
+    const bool eac3_encoder_available = session.audio_negotiation.codec_offered == "EAC3"sv && audio::eac3_available();
+    const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
+    const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
+    const auto selected_audio_codec = audio::configure_dolby_audio(
+      config.audio,
+      session.audio_negotiation.codec_offered,
+      accepted_audio_codec,
+      ac3_encoder_available,
+      eac3_encoder_available,
+      config::audio.high_quality_audio
+    );
+
+    if (config::audio.format != "opus"sv && session.audio_negotiation.codec_offered.empty()) {
+      BOOST_LOG(warning) << "Dolby audio format ["sv << config::audio.format
+                         << "] was selected, but its compatible FFmpeg encoder is unavailable; using Opus"sv;
+    } else if (!session.audio_negotiation.codec_offered.empty() && !client_accepted_audio_codec) {
+      BOOST_LOG(info) << "Client did not accept "sv << session.audio_negotiation.codec_offered << "; falling back to Opus"sv;
+    } else if (client_accepted_audio_codec && !selected_encoder_available) {
+      BOOST_LOG(warning) << "The selected Dolby encoder is no longer available; falling back to Opus"sv;
+    } else if (client_accepted_audio_codec && !supported_dolby_channel_count) {
+      BOOST_LOG(info) << "The selected Dolby encoder does not support the requested channel count ["
+                      << config.audio.channels << "]; falling back to Opus"sv;
+    }
+
+    if (selected_audio_codec != audio::dolby_codec_e::opus) {
+      const auto codec_name = selected_audio_codec == audio::dolby_codec_e::eac3 ? "E-AC-3"sv : "AC-3"sv;
+      const auto bitrate_kbps = audio::dolby_bitrate_kbps(
+        config.audio.use_eac3,
+        config.audio.high_quality_dolby,
+        config.audio.channels
+      );
+      BOOST_LOG(info) << "Using "sv << codec_name << " audio: "sv << config.audio.channels
+                      << " channels, 48 kHz, "sv << bitrate_kbps << " kbit/s"sv;
+    }
+
     // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
     // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
     // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
@@ -1199,7 +1283,11 @@ namespace rtsp_stream {
       }
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
     }
-    if (session.continuous_audio) {
+    // AC-3 uses the standard 5.1 speaker order, not an Opus-specific custom mapping.
+    if (config.audio.use_ac3 || config.audio.use_eac3) {
+      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = false;
+    }
+    if (session.audio_negotiation.continuous_audio) {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
     }
@@ -1218,8 +1306,17 @@ namespace rtsp_stream {
       }
 
       // Adjust the bitrate to account for audio traffic bandwidth usage (capped at 20% reduction).
-      // The bitrate per channel is 256 Kbps for high quality mode and 96 Kbps for normal quality.
-      auto audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+      // Dolby uses its selected channel-aware bitrate; keep the Opus calculation unchanged.
+      int audioBitrateAdjustment {};
+      if (config.audio.use_ac3 || config.audio.use_eac3) {
+        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
+          config.audio.use_eac3,
+          config.audio.high_quality_dolby,
+          config.audio.channels
+        );
+      } else {
+        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+      }
       configuredBitrateKbps -= std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
 
       // Reduce it by another 500Kbps to account for A/V packet overhead and control data
@@ -1264,12 +1361,11 @@ namespace rtsp_stream {
       return;
     }
 
-    respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
+    respond_announce_success(sock, session, req->sequenceNumber, selected_audio_codec);
   }
 
   /**
    * @brief Handle RTSP PLAY requests and start streaming.
-   * @details The common command signature supplies a server pointer that this handler does not need.
    *
    * @param sock Socket used to read or write the protocol message.
    * @param session Active streaming or pairing session for the request.
@@ -1279,10 +1375,11 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    std::string cseq_header {"CSeq"};
+    option.option = cseq_header.data();
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
   }

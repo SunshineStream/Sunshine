@@ -10,13 +10,17 @@
 #include "utility.h"
 
 #include <array>
+#include <cstddef>
 #include <bitset>
+#include <string_view>
+#include <vector>
 
 namespace stream {
   struct session_t;
 }
 
 namespace audio {
+  constexpr std::size_t MAX_DOLBY_PACKET_SIZE = 2560;  ///< Maximum 640 kbit/s AC-3 access unit at 48 kHz.
   /**
    * @brief Supported Opus channel layouts advertised to Moonlight clients.
    */
@@ -79,6 +83,10 @@ namespace audio {
     stream_params_t customStreamParams;  ///< Custom Opus layout used when CUSTOM_SURROUND_PARAMS is enabled.
 
     std::bitset<MAX_FLAGS> flags;  ///< Enabled audio feature flags.
+
+    bool use_ac3 {false};  ///< Encode audio as AC-3 instead of Opus for this streaming session.
+    bool use_eac3 {false};  ///< Encode audio as E-AC-3 instead of Opus for this streaming session.
+    bool high_quality_dolby {false};  ///< Higher bitrate for Dolby only; ignored for Opus.
   };
 
   /**
@@ -144,4 +152,80 @@ namespace audio {
    * @param ctx Native context object used by the operation or callback.
    */
   bool is_audio_ctx_sink_available(const audio_ctx_t &ctx);
+
+  /**
+   * @brief Check whether a compatible optional FFmpeg AC-3 encoder is available.
+   * @return True when the required FFmpeg DLLs and AC-3 encoder are available.
+   */
+  bool ac3_available();
+
+  /**
+   * @brief Check whether a compatible optional FFmpeg E-AC-3 encoder is available.
+   * @return True when the required FFmpeg DLLs and E-AC-3 encoder are available.
+   */
+  bool eac3_available();
+
+  /**
+   * @brief Audio codec selected by RTSP Dolby offer/accept negotiation.
+   */
+  enum class dolby_codec_e {
+    opus,  ///< Default Opus audio codec.
+    ac3,  ///< Dolby Digital AC-3 bitstream.
+    eac3  ///< Dolby Digital Plus E-AC-3 bitstream.
+  };
+
+  /**
+   * @brief Configure a Dolby stream only for an exact, supported client acceptance.
+   * @param config Audio configuration to update for the negotiated stream.
+   * @param offered Codec offered by Sunshine, or empty when using Opus.
+   * @param accepted Codec explicitly accepted by the client.
+   * @param ac3_encoder_available Whether the AC-3 encoder is available.
+   * @param eac3_encoder_available Whether the E-AC-3 encoder is available.
+   * @param high_quality Whether the higher Dolby bitrate was requested.
+   * @return Selected codec, falling back to Opus when negotiation is unsupported.
+   */
+  dolby_codec_e configure_dolby_audio(
+    config_t &config,
+    std::string_view offered,
+    std::string_view accepted,
+    bool ac3_encoder_available,
+    bool eac3_encoder_available,
+    bool high_quality
+  );
+
+  /**
+   * @brief Return the codec label for the RTSP audio-codec response header.
+   * @param codec Selected audio codec.
+   * @return RTSP codec label.
+   */
+  std::string_view dolby_codec_name(dolby_codec_e codec);
+
+#ifdef SUNSHINE_TESTS
+  /**
+   * @brief Encode a Dolby frame directly for unit testing without audio capture.
+   * @param eac3 Whether to use E-AC-3 instead of AC-3.
+   * @param high_quality Whether to use the higher bitrate.
+   * @param channels Number of channels to encode.
+   * @param interleaved Interleaved float PCM samples.
+   * @param output Caller-provided output packet buffer.
+   * @return Encoded packet size, or -1 when initialization or encoding fails.
+   */
+  int encode_dolby_frame_for_testing(
+    bool eac3,
+    bool high_quality,
+    int channels,
+    const std::vector<float> &interleaved,
+    buffer_t &output
+  );
+#endif
+
+  /**
+   * @brief Select a channel-aware bitrate for Dolby audio encoding.
+   *
+   * @param eac3 True to select E-AC-3; false to select AC-3.
+   * @param high_quality Whether to use the higher Dolby bitrate.
+   * @param channels Number of output audio channels (stereo or 5.1).
+   * @return The selected bitrate in kbit/s, or 0 for unsupported channel layouts.
+   */
+  int dolby_bitrate_kbps(bool eac3, bool high_quality, int channels);
 }  // namespace audio

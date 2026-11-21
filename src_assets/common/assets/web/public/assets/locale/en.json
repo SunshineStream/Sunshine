@@ -483,7 +483,11 @@
     "wan_encryption_mode": "WAN Encryption Mode",
     "wan_encryption_mode_1": "Enabled for supported clients (default)",
     "wan_encryption_mode_2": "Required for all clients",
-    "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients."
+    "wan_encryption_mode_desc": "This determines when encryption will be used when streaming over the Internet. Encryption can reduce streaming performance, particularly on less powerful hosts and clients.",
+    "audio_format": "Audio stream format",
+    "audio_format_fallback_desc": "If the client does not accept the selected Dolby audio format, Sunshine will automatically fall back to Opus.",
+    "high_quality_audio": "High quality audio",
+    "high_quality_audio_desc": "Use a higher bitrate for AC-3 or E-AC-3 at the cost of increased network bandwidth. This setting has no effect when Opus is selected."
   },
   "index": {
     "permissions_missing_title": "Sunshine needs permissions",

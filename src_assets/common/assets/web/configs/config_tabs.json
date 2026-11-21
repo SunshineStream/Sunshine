@@ -41,6 +41,8 @@
       "audio_sink": "",
       "virtual_sink": "",
       "stream_audio": "enabled",
+      "audio_format": "opus",
+      "high_quality_audio": "disabled",
       "install_steam_audio_drivers": "enabled",
       "external_audio": "disabled",
       "adapter_name": "",

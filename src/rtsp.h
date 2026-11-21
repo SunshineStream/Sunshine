@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // local includes
 #include "crypto.h"
@@ -73,6 +74,14 @@ namespace rtsp_stream {
    * @brief RTSP launch session state shared with stream setup.
    */
   struct launch_session_t {
+    /**
+     * @brief Audio-related capabilities and codec choice exchanged during RTSP setup.
+     */
+    struct audio_negotiation_t {
+      bool continuous_audio {};  ///< Whether audio packets continue during silence.
+      std::string codec_offered;  ///< Dolby codec offered to the client, or empty when using Opus.
+    };
+
     uint32_t id;  ///< RTSP launch-session identifier assigned before stream startup.
 
     crypto::aes_t gcm_key;  ///< AES-GCM key negotiated for encrypted RTSP messages.
@@ -90,7 +99,7 @@ namespace rtsp_stream {
     int appid;  ///< Application ID requested for launch or resume.
     int surround_info;  ///< Encoded GameStream surround-sound capability flags.
     std::string surround_params;  ///< Client-provided surround-sound layout parameters.
-    bool continuous_audio;  ///< Whether audio packets continue during silence.
+    audio_negotiation_t audio_negotiation;  ///< Audio stream negotiation state.
     bool enable_hdr;  ///< Whether HDR streaming is requested.
     bool enable_sops;  ///< Whether sequence output protection is requested.
     std::string client_name;  ///< Friendly client name from initial pairing.
