@@ -99,7 +99,8 @@
       <inputs
         v-if="currentTab === 'input'"
         :config="config"
-        :platform="platform">
+        :platform="platform"
+        :open-vhf-supported="openVhfSupported">
       </inputs>
 
       <!-- Audio/Video Tab -->
@@ -203,6 +204,7 @@
         saved: false,
         restarted: false,
         config: null,
+        openVhfSupported: false,
         currentTab: "general",
         searchQuery: "",
         tabs: [ // TODO: Move the options to each Component instead, encapsulate.
@@ -425,6 +427,7 @@
         .then((r) => {
           this.config = r;
           this.platform = this.config.platform;
+          this.openVhfSupported = this.config.open_vhf_supported === true;
 
           var app = document.getElementById("app");
           if (this.platform === "windows") {
@@ -447,6 +450,7 @@
           delete this.config.platform;
           delete this.config.status;
           delete this.config.version;
+          delete this.config.open_vhf_supported;
 
           // TODO: let each tab's Component handle it's own data instead of doing it here
 

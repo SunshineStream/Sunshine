@@ -455,6 +455,20 @@ TEST_F(SystemTrayTest, VigembusSelectionSuppressesVirtualHidNotifications) {
   EXPECT_EQ(tray_data.notification_cb, nullptr);
 }
 
+TEST_F(SystemTrayTest, OpenVhfSelectionSuppressesVirtualHidNotifications) {
+  lvh::LicenseStatus license;
+  license.service_available = true;
+  license.state = lvh::LicenseState::invalid;
+  config::input.gamepad_driver = config::GAMEPAD_DRIVER_OPEN_VHF;
+
+  system_tray::update_tray_virtualhid_license(license, true);
+  EXPECT_EQ(system_tray::tray_data_for_testing().notification_title, nullptr);
+
+  const auto supported_versions = std::format(">= {}", LIBVIRTUALHID_MINIMUM_VERSION);
+  system_tray::update_tray_virtualhid_driver(true, "0.1.0", false, supported_versions);
+  EXPECT_EQ(system_tray::tray_data_for_testing().notification_title, nullptr);
+}
+
 /**
  * @brief License-state fixture for the Windows Virtual HID Driver tray menu.
  */

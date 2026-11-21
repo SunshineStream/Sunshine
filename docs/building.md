@@ -209,6 +209,11 @@ To use dynamic Qt instead, configure with `-DSUNSHINE_USE_STATIC_QT=OFF` and ens
 available through the normal toolchain prefix.
 
 To create a WiX installer, you also need to install [.NET](https://dotnet.microsoft.com/download).
+For a portable ZIP build, configure with `-DSUNSHINE_ENABLE_WIX=OFF` and package with `cpack -G ZIP`.
+
+Windows builds of this branch include the libvirtualgamepad client by default. Install a compatible signed Open VHF
+driver on the host, then select **Open VHF (libvirtualgamepad)** under **Configuration → Input** to use it exclusively.
+Set `-DSUNSHINE_OPEN_VHF_SDK=` to build without this backend.
 
 To build the frontend, install native [Node.js](https://nodejs.org/en/download) for the target architecture. The
 MSYS2 Node.js package is not supported because its shared runtime cannot load the native binding required by Rolldown.

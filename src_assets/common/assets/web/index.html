@@ -235,6 +235,10 @@
 
         const vigembusUsable = this.vigembus.installed && this.vigembus.version_compatible;
 
+        if (this.gamepadDriver === 'open_vhf') {
+          return null;
+        }
+
         if (!this.gamepadDriver) {
           return this.buildVirtualInputNotice(false, 'index.gamepad_driver_choice_title', [{
             key: 'index.gamepad_driver_choice_desc',

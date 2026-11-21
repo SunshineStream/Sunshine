@@ -1431,6 +1431,11 @@ namespace confighttp {
       output_tree[name] = std::move(value);
     }
 
+#ifdef SUNSHINE_OPEN_VHF
+    output_tree["open_vhf_supported"] = true;
+#else
+    output_tree["open_vhf_supported"] = false;
+#endif
     send_response(response, output_tree);
   }
 

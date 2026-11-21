@@ -32,6 +32,9 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/virtualhid_input.h"
+#ifdef SUNSHINE_OPEN_VHF
+  #include "open_vhf_input.h"
+#endif
 
 namespace platf {
   using namespace std::literals;
@@ -522,6 +525,9 @@ namespace platf {
   struct input_raw_t {
     virtualhid::input_context_t virtualhid;  ///< libvirtualhid input context.
     std::unique_ptr<vigem_t> vigem;  ///< ViGEm fallback context.
+#ifdef SUNSHINE_OPEN_VHF
+    open_vhf_input_t open_vhf;
+#endif
   };
 
   /**
@@ -665,6 +671,18 @@ namespace platf {
 
   int alloc_gamepad(input_t &input, const gamepad_id_t &id, const gamepad_arrival_t &metadata, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
+#ifdef SUNSHINE_OPEN_VHF
+    const auto open_vhf_only = config::input.gamepad_driver == config::GAMEPAD_DRIVER_OPEN_VHF;
+    if (open_vhf_only || config::input.gamepad_driver == config::GAMEPAD_DRIVER_ALL) {
+      if (raw->open_vhf.allocate(id, metadata, feedback_queue)) {
+        return 0;
+      }
+      if (open_vhf_only) {
+        BOOST_LOG(warning) << "Open VHF could not allocate a virtual controller for profile '"sv << config::input.gamepad << "'"sv;
+        return -1;
+      }
+    }
+#endif
     const auto use_virtualhid = should_use_virtualhid_gamepads(*raw);
 
     if (use_virtualhid && virtualhid::alloc_gamepad(raw->virtualhid, id, metadata, feedback_queue) == 0) {
@@ -729,6 +747,11 @@ namespace platf {
   int rebind_gamepad(input_t &input, const gamepad_id_t &id, feedback_queue_t feedback_queue) {
     auto raw = (input_raw_t *) input.get();
 
+#ifdef SUNSHINE_OPEN_VHF
+    if (raw->open_vhf.owns(id.globalIndex)) {
+      return raw->open_vhf.rebind(id, std::move(feedback_queue));
+    }
+#endif
     if (virtualhid::has_gamepad(raw->virtualhid, id.globalIndex)) {
       return virtualhid::rebind_gamepad(raw->virtualhid, id, std::move(feedback_queue));
     }
@@ -743,6 +766,12 @@ namespace platf {
   void free_gamepad(input_t &input, int nr) {
     auto raw = (input_raw_t *) input.get();
 
+#ifdef SUNSHINE_OPEN_VHF
+    if (raw->open_vhf.owns(nr)) {
+      raw->open_vhf.destroy(nr);
+      return;
+    }
+#endif
     if (virtualhid::has_gamepad(raw->virtualhid, nr)) {
       virtualhid::free_gamepad(raw->virtualhid, nr);
       return;
@@ -1007,6 +1036,12 @@ namespace platf {
    */
   void gamepad_update(input_t &input, int nr, const gamepad_state_t &gamepad_state) {
     auto raw = (input_raw_t *) input.get();
+#ifdef SUNSHINE_OPEN_VHF
+    if (raw->open_vhf.owns(nr)) {
+      raw->open_vhf.update(nr, gamepad_state);
+      return;
+    }
+#endif
     if (virtualhid::has_gamepad(raw->virtualhid, nr)) {
       virtualhid::gamepad_update(raw->virtualhid, nr, gamepad_state);
       return;
@@ -1045,6 +1080,12 @@ namespace platf {
    */
   void gamepad_touch(input_t &input, const gamepad_touch_t &touch) {
     auto raw = (input_raw_t *) input.get();
+#ifdef SUNSHINE_OPEN_VHF
+    if (raw->open_vhf.owns(touch.id.globalIndex)) {
+      raw->open_vhf.touch(touch);
+      return;
+    }
+#endif
     if (virtualhid::has_gamepad(raw->virtualhid, touch.id.globalIndex)) {
       virtualhid::gamepad_touch(raw->virtualhid, touch);
       return;
@@ -1157,6 +1198,12 @@ namespace platf {
    */
   void gamepad_motion(input_t &input, const gamepad_motion_t &motion) {
     auto raw = (input_raw_t *) input.get();
+#ifdef SUNSHINE_OPEN_VHF
+    if (raw->open_vhf.owns(motion.id.globalIndex)) {
+      raw->open_vhf.motion(motion);
+      return;
+    }
+#endif
     if (virtualhid::has_gamepad(raw->virtualhid, motion.id.globalIndex)) {
       virtualhid::gamepad_motion(raw->virtualhid, motion);
       return;
@@ -1190,6 +1237,12 @@ namespace platf {
    */
   void gamepad_battery(input_t &input, const gamepad_battery_t &battery) {
     auto raw = (input_raw_t *) input.get();
+#ifdef SUNSHINE_OPEN_VHF
+    if (raw->open_vhf.owns(battery.id.globalIndex)) {
+      raw->open_vhf.battery(battery);
+      return;
+    }
+#endif
     if (virtualhid::has_gamepad(raw->virtualhid, battery.id.globalIndex)) {
       virtualhid::gamepad_battery(raw->virtualhid, battery);
       return;
@@ -1274,6 +1327,27 @@ namespace platf {
     }
 
     const auto raw = (input_raw_t *) input->get();
+#ifdef SUNSHINE_OPEN_VHF
+    if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_OPEN_VHF) {
+      gps = virtualhid::static_supported_gamepads();
+      for (auto &gamepad : gps) {
+        gamepad.is_enabled = raw->open_vhf.available(gamepad.name);
+        gamepad.reason_disabled = gamepad.is_enabled ? "" : "gamepads.open-vhf-not-available";
+      }
+      return gps;
+    }
+    if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_ALL && raw->open_vhf.available("auto")) {
+      const auto licensed = should_use_virtualhid_gamepads(*raw);
+      gps = virtualhid::supported_gamepads(raw->virtualhid.runtime.get(), raw->vigem != nullptr, licensed);
+      for (auto &gamepad : gps) {
+        if (!gamepad.is_enabled && raw->open_vhf.available(gamepad.name)) {
+          gamepad.is_enabled = true;
+          gamepad.reason_disabled.clear();
+        }
+      }
+      return gps;
+    }
+#endif
     if (config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS) {
       gps = vigembus_supported_gamepads(raw->vigem != nullptr);
       return gps;

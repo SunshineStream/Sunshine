@@ -5,20 +5,24 @@ import Checkbox from "../../Checkbox.vue";
 
 const props = defineProps([
   'platform',
-  'config'
+  'config',
+  'openVhfSupported'
 ])
 
 const config = ref(props.config)
 
 const vigembusGamepads = new Set(['auto', 'x360', 'ds4'])
+const openVhfGamepads = new Set(['auto', 'xone', 'xseries', 'ds4', 'ds5', 'switch'])
 
 watch(
   () => config.value.gamepad_driver,
   (gamepadDriver) => {
-    if (props.platform === 'windows' && gamepadDriver === 'vigembus' && !vigembusGamepads.has(config.value.gamepad)) {
+    const supported = gamepadDriver === 'vigembus' ? vigembusGamepads : gamepadDriver === 'open_vhf' ? openVhfGamepads : null
+    if (props.platform === 'windows' && supported && !supported.has(config.value.gamepad)) {
       config.value.gamepad = 'auto'
     }
   },
+  { immediate: true },
 )
 </script>
 
@@ -38,10 +42,11 @@ watch(
       <select id="gamepad_driver" class="form-select" v-model="config.gamepad_driver" required>
         <option value="" disabled>{{ $t('config.gamepad_driver_select') }}</option>
         <option value="all">{{ $t('config.gamepad_driver_all') }}</option>
+        <option v-if="openVhfSupported" value="open_vhf">{{ $t('config.gamepad_driver_open_vhf') }}</option>
         <option value="virtualhid">{{ $t('config.gamepad_driver_virtualhid') }}</option>
         <option value="vigembus">{{ $t('config.gamepad_driver_vigembus') }}</option>
       </select>
-      <div class="form-text">{{ $t('config.gamepad_driver_desc') }}</div>
+      <div class="form-text">{{ $t(openVhfSupported ? 'config.gamepad_driver_open_vhf_desc' : 'config.gamepad_driver_desc') }}</div>
     </div>
 
     <!-- Emulated Gamepad Type -->
@@ -72,8 +77,8 @@ watch(
           </template>
 
           <template #windows>
-            <option v-if="config.gamepad_driver !== 'vigembus'" value="generic">{{ $t("config.gamepad_generic") }}</option>
-            <option value="x360">{{ $t('config.gamepad_x360') }}</option>
+            <option v-if="config.gamepad_driver !== 'vigembus' && config.gamepad_driver !== 'open_vhf'" value="generic">{{ $t("config.gamepad_generic") }}</option>
+            <option v-if="config.gamepad_driver !== 'open_vhf'" value="x360">{{ $t('config.gamepad_x360') }}</option>
             <option v-if="config.gamepad_driver !== 'vigembus'" value="xone">{{ $t("config.gamepad_xone") }}</option>
             <option v-if="config.gamepad_driver !== 'vigembus'" value="xseries">{{ $t("config.gamepad_xseries") }}</option>
             <option value="ds4">{{ $t('config.gamepad_ds4') }}</option>
@@ -126,7 +131,7 @@ watch(
                   ></Checkbox>
                 </template>
                 <!-- Virtual HID option: Controller MAC randomization -->
-                <template v-if="config.gamepad_driver !== 'vigembus' && (config.gamepad === 'ds4' || config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform !== 'macos'))">
+                <template v-if="config.gamepad_driver !== 'vigembus' && config.gamepad_driver !== 'open_vhf' && (config.gamepad === 'ds4' || config.gamepad === 'ds5' || (config.gamepad === 'auto' && platform !== 'macos'))">
                   <Checkbox class="mb-3"
                             id="virtualhid_randomize_mac"
                             locale-prefix="config"

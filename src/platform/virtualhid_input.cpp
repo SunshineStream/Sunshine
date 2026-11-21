@@ -582,7 +582,7 @@ namespace platf::virtualhid {
     const std::string_view gamepad_driver,
     const bool virtualhid_licensed
   ) {
-    return gamepad_driver != config::GAMEPAD_DRIVER_VIGEMBUS && capabilities.supports_gamepad &&
+    return gamepad_driver != config::GAMEPAD_DRIVER_VIGEMBUS && gamepad_driver != config::GAMEPAD_DRIVER_OPEN_VHF && capabilities.supports_gamepad &&
            (!capabilities.requires_installed_driver || virtualhid_licensed);
   }
 
@@ -591,7 +591,7 @@ namespace platf::virtualhid {
     const bool virtualhid_selected,
     const std::string_view gamepad_driver
   ) {
-    if (gamepad_driver == config::GAMEPAD_DRIVER_VIRTUALHID) {
+    if (gamepad_driver == config::GAMEPAD_DRIVER_VIRTUALHID || gamepad_driver == config::GAMEPAD_DRIVER_OPEN_VHF) {
       return false;
     }
     if (gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS || !virtualhid_selected) {

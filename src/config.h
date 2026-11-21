@@ -34,6 +34,7 @@ namespace config {
   constexpr int PACKETSIZE_LARGE = 1456;  ///< Default large packet size that avoids common MTU fragmentation.
 
   inline constexpr std::string_view GAMEPAD_DRIVER_ALL = "all";  ///< Allow every available Windows virtual gamepad driver.
+  inline constexpr std::string_view GAMEPAD_DRIVER_OPEN_VHF = "open_vhf";  ///< Allow only the open-source libvirtualgamepad driver.
   inline constexpr std::string_view GAMEPAD_DRIVER_VIRTUALHID = "virtualhid";  ///< Allow only Virtual HID Driver for Windows gamepads.
   inline constexpr std::string_view GAMEPAD_DRIVER_VIGEMBUS = "vigembus";  ///< Allow only ViGEmBus for Windows gamepads.
 

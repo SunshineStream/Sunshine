@@ -1826,6 +1826,9 @@ namespace config {
 
     string_restricted_f(vars, "gamepad_driver", input.gamepad_driver, {
                                                                         GAMEPAD_DRIVER_ALL,
+#ifdef SUNSHINE_OPEN_VHF
+                                                                        GAMEPAD_DRIVER_OPEN_VHF,
+#endif
                                                                         GAMEPAD_DRIVER_VIRTUALHID,
                                                                         GAMEPAD_DRIVER_VIGEMBUS,
                                                                       });
@@ -1833,6 +1836,12 @@ namespace config {
 #ifdef _WIN32
     if (input.gamepad_driver == GAMEPAD_DRIVER_VIGEMBUS && input.gamepad != "auto"sv && input.gamepad != "x360"sv && input.gamepad != "ds4"sv) {
       BOOST_LOG(warning) << "Gamepad type '"sv << input.gamepad << "' is not supported by ViGEmBus; using automatic selection"sv;
+      input.gamepad = "auto";
+    }
+#endif
+#ifdef SUNSHINE_OPEN_VHF
+    if (input.gamepad_driver == GAMEPAD_DRIVER_OPEN_VHF && (input.gamepad == "generic"sv || input.gamepad == "x360"sv)) {
+      BOOST_LOG(warning) << "Gamepad type '"sv << input.gamepad << "' is not supported by Open VHF; using automatic selection"sv;
       input.gamepad = "auto";
     }
 #endif

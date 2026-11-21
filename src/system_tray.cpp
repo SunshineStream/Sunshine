@@ -490,7 +490,7 @@ namespace system_tray {
       tray.notification_cb = []() {
         launch_ui("/config#gamepad_driver");
       };
-    } else if (config::input.gamepad_driver != config::GAMEPAD_DRIVER_VIGEMBUS && notify_if_unlicensed && !license.licensed()) {
+    } else if (config::input.gamepad_driver != config::GAMEPAD_DRIVER_VIGEMBUS && config::input.gamepad_driver != config::GAMEPAD_DRIVER_OPEN_VHF && notify_if_unlicensed && !license.licensed()) {
       tray.notification_title = "Virtual HID Driver License";
       tray.notification_text =
         "Get or manage a license, or use the limited, end-of-life ViGEmBus driver.";
@@ -516,7 +516,8 @@ namespace system_tray {
     const bool version_compatible,
     const std::string_view supported_versions
   ) {
-    if (config::input.gamepad_driver.empty() || config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS || !installed || version_compatible) {
+    if (config::input.gamepad_driver.empty() || config::input.gamepad_driver == config::GAMEPAD_DRIVER_VIGEMBUS ||
+        config::input.gamepad_driver == config::GAMEPAD_DRIVER_OPEN_VHF || !installed || version_compatible) {
       return;
     }
 

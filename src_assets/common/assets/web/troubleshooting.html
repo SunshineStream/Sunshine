@@ -560,11 +560,11 @@
       },
       computed: {
         showVirtualhid() {
-          return this.gamepadDriver !== 'vigembus';
+          return this.gamepadDriver !== 'vigembus' && this.gamepadDriver !== 'open_vhf';
         },
 
         showVigembus() {
-          return this.gamepadDriver !== 'virtualhid';
+          return this.gamepadDriver !== 'virtualhid' && this.gamepadDriver !== 'open_vhf';
         },
 
         showVirtualhidBenefits() {
@@ -577,6 +577,9 @@
           }
           if (this.gamepadDriver === 'vigembus') {
             return 'troubleshooting.virtual_gamepad_vigembus_desc';
+          }
+          if (this.gamepadDriver === 'open_vhf') {
+            return 'troubleshooting.virtual_gamepad_open_vhf_desc';
           }
           if (this.virtualhid.installed && this.virtualhidLicense.licensed) {
             return this.gamepadDriver === 'all' ?
