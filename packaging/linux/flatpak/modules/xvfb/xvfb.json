@@ -141,10 +141,10 @@
           "x-renovate": {
             "datasource": "github-tags",
             "depName": "libtirpc",
-            "packageName": "LizardByte-infrastructure/libtirpc",
+            "packageName": "linux-nfs/libtirpc",
             "versioning": "regex:^libtirpc-(?<major>[0-9]+)-(?<minor>[0-9]+)-(?<patch>[0-9]+)$"
           },
-          "url": "https://github.com/LizardByte-infrastructure/libtirpc.git",
+          "url": "https://github.com/linux-nfs/libtirpc.git",
           "tag": "libtirpc-1-3-4",
           "commit": "e86eef35f3628b3adf388a522ab5731bb4487f34",
           "x-checker-data": {
