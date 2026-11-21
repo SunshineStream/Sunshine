@@ -67,6 +67,7 @@ function cuda_target_dir() {
 }
 
 function use_cuda_redistributables() {
+  # Use archives only for the AppImage fallback with a verified set of pins.
   [[ "$appimage_build" == 1 && "$force_cuda_runfile" == 0 && "$cuda_system_package" == 0 &&
      "$cuda_version" == "13.5.0" && ( "$architecture" == "x86_64" || "$architecture" == "$AARCH64" ) ]]
 }
@@ -155,6 +156,7 @@ function detect_nvcc_path() {
     echo "${build_dir}/cuda/bin/nvcc"
     return 0
   fi
+  # Keep archive and runfile installs separate so --cuda-runfile can override.
   if use_cuda_redistributables && [[ -f "${build_dir}/cuda/redistributables/bin/nvcc" ]]; then
     echo "${build_dir}/cuda/redistributables/bin/nvcc"
     return 0
@@ -585,7 +587,9 @@ function install_cuda_redistributables() (
     url="${cuda_base_url}/${name}/${cuda_redist_arch}/${archive}"
     echo "CUDA component URL: ${url}"
     wget "$url" --max-redirect=0 --progress=bar:force:noscroll -q --show-progress -O "${staging_dir}/${archive}"
-    printf '%s  %s\n' "$sha" "${staging_dir}/${archive}" | sha256sum --check
+    if ! printf '%s  %s\n' "$sha" "${staging_dir}/${archive}" | sha256sum --check; then
+      exit 1
+    fi
     tar -xJf "${staging_dir}/${archive}" --directory="$extract_dir" --strip-components=1
     rm -- "${staging_dir}/${archive}"
   done
@@ -618,6 +622,17 @@ function install_cuda() {
     return 1
   fi
 
+  local cuda_override_args=()
+  if [[ "$distro" == "$DISTRO_FEDORA" ]]; then
+    cuda_override_args+=(--override)
+  fi
+
+  local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
+  local cuda_suffix=""
+  if [[ "$architecture" == "${AARCH64}" ]]; then
+    local cuda_suffix="_sbsa"
+  fi
+
   if [[ "$architecture" == "${AARCH64}" ]]; then
     # we need to patch the math-vector.h file for aarch64 fedora
     # back up /usr/include/bits/math-vector.h
@@ -642,17 +657,6 @@ function install_cuda() {
   if use_cuda_redistributables; then
     install_cuda_redistributables
     return
-  fi
-
-  local cuda_override_args=()
-  if [[ "$distro" == "$DISTRO_FEDORA" ]]; then
-    cuda_override_args+=(--override)
-  fi
-
-  local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
-  local cuda_suffix=""
-  if [[ "$architecture" == "${AARCH64}" ]]; then
-    cuda_suffix="_sbsa"
   fi
 
   local url="${cuda_prefix}${cuda_version}/local_installers/cuda_${cuda_version}_linux${cuda_suffix}.run"
