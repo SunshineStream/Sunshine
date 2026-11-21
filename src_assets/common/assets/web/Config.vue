@@ -270,6 +270,7 @@
         .then((r) => {
           this.config = r;
           this.platform = this.config.platform;
+
           if (this.platform === "windows") {
             this.tabs = this.tabs.filter((el) => {
               return el.id !== "vt" && el.id !== "vaapi" && el.id !== "vulkan";
