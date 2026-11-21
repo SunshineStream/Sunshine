@@ -837,7 +837,7 @@ namespace rtsp_stream {
   }
 
   /**
-   * @brief Handle the RTSP OPTIONS response without the unused server parameter.
+   * @brief Handle RTSP OPTIONS requests.
    *
    * @param sock Socket used to read or write the protocol message.
    * @param session Active streaming or pairing session for the request.
@@ -1343,7 +1343,7 @@ namespace rtsp_stream {
   }
 
   /**
-   * @brief Build the RTSP PLAY response without the unused server parameter.
+   * @brief Handle RTSP PLAY requests and start streaming.
    *
    * @param sock Socket used to read or write the protocol message.
    * @param session Active streaming or pairing session for the request.
