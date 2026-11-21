@@ -10,5 +10,5 @@
 
 // lib includes
 extern "C" {
-#include <Limelight-internal.h>
+#include <moonlight-common-c/src/Limelight-internal.h>
 }

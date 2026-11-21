@@ -22,7 +22,7 @@
 
 // lib includes
 extern "C" {
-#include <Input.h>
+#include <moonlight-common-c/src/Input.h>
 }
 
 // local includes

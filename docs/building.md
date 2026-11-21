@@ -15,10 +15,7 @@ It is recommended to use one of the following compilers:
 ### Dependencies
 
 CMake fetches pinned source dependencies through CPM on the first configure. Initialize the remaining Git submodules
-with `git submodule update --init --recursive` before configuring. Flatpak Builder stages the sources listed in
-`packaging/linux/flatpak/modules/sunshine/` before the sandboxed build. Update those pins alongside
-`package-lock.cmake` when changing a dependency used by Flatpak. Match the Flatpak Vulkan-Headers pin to the
-version selected by build-deps.
+with `git submodule update --init --recursive` before configuring.
 
 Boost `1.89.0` or newer can be supplied as a system package. When a compatible system package is unavailable, CMake
 downloads the project-locked Boost release through CPM. Static Boost libraries are preferred on every platform by

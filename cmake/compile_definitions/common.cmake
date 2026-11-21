@@ -216,8 +216,7 @@ include_directories(
         "${moonlight-common-c_SOURCE_DIR}/enet/include"
         "${moonlight-common-c_SOURCE_DIR}/nanors"
         "${moonlight-common-c_SOURCE_DIR}/nanors/deps/obl"
-        "${moonlight-common-c_SOURCE_DIR}/src"
-        "${simple_web_server_SOURCE_DIR}"
+        "${SUNSHINE_DEPENDENCY_INCLUDE_DIR}"
         ${OPENSSL_INCLUDE_DIR}
         ${Opus_INCLUDE_DIR}
         ${FFMPEG_INCLUDE_DIRS}

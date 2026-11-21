@@ -110,7 +110,7 @@ CPMDeclarePackage(plasma_wayland_protocols
 )
 
 # Simple-Web-Server
-# renovate: datasource=git-refs depName=LizardByte-infrastructure/Simple-Web-Server
+# renovate: datasource=git-refs depName=eidheim/Simple-Web-Server
 # ref=master
 set(SIMPLE_WEB_SERVER_COMMIT 546895a93a29062bb178367b46c7afb72da9881e)
 CPMDeclarePackage(simple_web_server
@@ -164,7 +164,7 @@ CPMDeclarePackage(wayland_protocols
 )
 
 # wlroots protocols
-# renovate: datasource=git-refs depName=LizardByte-infrastructure/wlr-protocols
+# renovate: datasource=git-refs depName=wlroots/wlr-protocols
 # ref=master
 set(WLR_PROTOCOLS_COMMIT 1106a4a1c57562ddd438c547da4c0d6dc150d624)
 CPMDeclarePackage(wlr_protocols

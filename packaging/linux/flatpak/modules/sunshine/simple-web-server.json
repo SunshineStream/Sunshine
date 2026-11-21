@@ -3,7 +3,8 @@
     "type": "git",
     "x-renovate": {
       "datasource": "git-refs",
-      "depName": "LizardByte-infrastructure/Simple-Web-Server",
+      "depName": "eidheim/Simple-Web-Server",
+      "packageName": "https://github.com/LizardByte-infrastructure/Simple-Web-Server.git",
       "versioning": "exact",
       "ref": "master"
     },

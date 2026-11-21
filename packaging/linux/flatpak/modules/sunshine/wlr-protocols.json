@@ -3,7 +3,8 @@
     "type": "git",
     "x-renovate": {
       "datasource": "git-refs",
-      "depName": "LizardByte-infrastructure/wlr-protocols",
+      "depName": "wlroots/wlr-protocols",
+      "packageName": "https://github.com/LizardByte-infrastructure/wlr-protocols.git",
       "versioning": "exact",
       "ref": "master"
     },

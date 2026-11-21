@@ -15,8 +15,8 @@
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/xml_parser.hpp>
 #include <curl/curl.h>
-#include <server_http.hpp>
-#include <server_https.hpp>
+#include <Simple-Web-Server/server_http.hpp>
+#include <Simple-Web-Server/server_https.hpp>
 
 // local includes
 #include "config.h"

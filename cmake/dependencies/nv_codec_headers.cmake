@@ -11,7 +11,7 @@ set(CPM_PACKAGE_LOCK_ENABLED OFF)
 if(NOT APPLE)
     if(EXISTS "${SUNSHINE_PREPARED_NV_CODEC_HEADERS}")
         # Prepared FFmpeg bundles include the NV codec headers used to build them.
-        set(NV_CODEC_HEADERS_13_1_INCLUDE_DIR "${FFMPEG_PREPARED_BINARIES}/include")
+        set(NV_CODEC_HEADERS_13_1_INCLUDE_DIR "${FFMPEG_INCLUDE_DIRS}")
         message(STATUS "Using NV codec headers from prepared FFmpeg binaries")
     else()
         CPMGetPackage(nv_codec_headers_13_1)

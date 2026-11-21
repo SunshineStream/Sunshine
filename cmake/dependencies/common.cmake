@@ -17,6 +17,22 @@ add_subdirectory("${moonlight-common-c_SOURCE_DIR}/enet" "${moonlight-common-c_B
 # web server
 CPMGetPackage(simple_web_server)
 
+# Keep dependency-qualified includes independent of CPM and Flatpak checkout directory names.
+set(SUNSHINE_DEPENDENCY_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/dependency-include")
+function(sunshine_forward_dependency_headers source_dir include_prefix)
+    foreach(header IN LISTS ARGN)
+        file(CONFIGURE
+                OUTPUT "${SUNSHINE_DEPENDENCY_INCLUDE_DIR}/${include_prefix}/${header}"
+                CONTENT "#include \"@source_dir@/@header@\"\n"
+                @ONLY)
+    endforeach()
+endfunction()
+
+sunshine_forward_dependency_headers("${moonlight-common-c_SOURCE_DIR}/src" "moonlight-common-c/src"
+        Input.h Limelight.h Limelight-internal.h Rtsp.h)
+sunshine_forward_dependency_headers("${simple_web_server_SOURCE_DIR}" "Simple-Web-Server"
+        client_http.hpp client_https.hpp crypto.hpp server_http.hpp server_https.hpp)
+
 # lizardbyte common helpers
 set(LIZARDBYTE_COMMON_BUILD_TEST_SUPPORT ${BUILD_TESTS}
         CACHE BOOL "Build lizardbyte-common GoogleTest support helpers" FORCE)

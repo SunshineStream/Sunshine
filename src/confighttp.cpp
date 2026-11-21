@@ -23,10 +23,10 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/asio/ssl/context.hpp>
 #include <boost/filesystem.hpp>
-#include <crypto.hpp>
 #include <lizardbyte/common/env.h>
 #include <nlohmann/json.hpp>
-#include <server_https.hpp>
+#include <Simple-Web-Server/crypto.hpp>
+#include <Simple-Web-Server/server_https.hpp>
 
 #if defined(_WIN32) || defined(__APPLE__)
   #include "platform/virtualhid_input.h"
