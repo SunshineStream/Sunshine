@@ -342,7 +342,7 @@ namespace stream {
     return ((size + 15) / 16) * 16;
   }
 
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 2048;  ///< Supports larger optional Dolby audio access units.
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 2560;  ///< Maximum 640 kbit/s AC-3 access unit at 48 kHz.
 
   /**
    * @brief AES key storage used for audio packet encryption.
@@ -364,7 +364,11 @@ namespace stream {
 
   // return bytes written on success
   // return -1 on error
-  static inline int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
+  static inline int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
+    if (!audio_packet_fits(plaintext.size(), encrypted, destination_capacity)) {
+      return -1;
+    }
+
     // If encryption isn't enabled
     if (!encrypted) {
       std::ranges::copy(plaintext, destination);
@@ -372,6 +376,14 @@ namespace stream {
     }
 
     return cbc.encrypt(std::string_view {(char *) std::begin(plaintext), plaintext.size()}, destination, &iv);
+  }
+
+  bool audio_packet_fits(std::size_t plaintext_size, bool encrypted, std::size_t destination_capacity) {
+    if (plaintext_size > MAX_AUDIO_PACKET_SIZE) {
+      return false;
+    }
+    const auto required_size = encrypted ? crypto::cipher::round_to_pkcs7_padded(plaintext_size) : plaintext_size;
+    return required_size <= destination_capacity;
   }
 
   static inline void while_starting_do_nothing(std::atomic<session::state_e> &state) {
@@ -1969,7 +1981,7 @@ namespace stream {
 
       auto &shards_p = session->audio.shards_p;
 
-      auto bytes = encode_audio(session->config.encryptionFlagsEnabled & SS_ENC_AUDIO, packet_data, shards_p[sequenceNumber % RTPA_DATA_SHARDS], iv, session->audio.cipher);
+      auto bytes = encode_audio(session->config.encryptionFlagsEnabled & SS_ENC_AUDIO, packet_data, shards_p[sequenceNumber % RTPA_DATA_SHARDS], crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE), iv, session->audio.cipher);
       if (bytes < 0) {
         BOOST_LOG(error) << "Couldn't encode audio packet"sv;
         break;
@@ -2424,7 +2436,7 @@ namespace stream {
         session->video.gcm_iv_counter = 0;
       }
 
-      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(2048);
+      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE);
 
       util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
       util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};
