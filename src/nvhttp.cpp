@@ -28,6 +28,7 @@
 #include "display_device.h"
 #include "file_handler.h"
 #include "globals.h"
+#include "http_server.h"
 #include "httpcommon.h"
 #include "logging.h"
 #include "network.h"
@@ -1666,6 +1667,8 @@ namespace nvhttp {
 
     https_server_t https_server {config::nvhttp.cert, config::nvhttp.pkey};
     http_server_t http_server;
+    http::configure_gamestream_server(https_server);
+    http::configure_gamestream_server(http_server);
 
     // Verify certificates after establishing connection
     https_server.verify = [](SSL *ssl) {
