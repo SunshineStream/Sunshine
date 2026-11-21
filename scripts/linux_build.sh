@@ -66,6 +66,11 @@ function cuda_target_dir() {
   fi
 }
 
+function use_cuda_redistributables() {
+  [[ "$appimage_build" == 1 && "$force_cuda_runfile" == 0 && "$cuda_system_package" == 0 &&
+     "$cuda_version" == "13.5.0" && ( "$architecture" == "x86_64" || "$architecture" == "$AARCH64" ) ]]
+}
+
 function cuda_math_functions_patch_applied() {
   local cuda_toolkit_path=$1
   local math_functions_file
@@ -148,6 +153,10 @@ function detect_nvcc_path() {
   # Then check for locally installed CUDA in build directory
   if [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
     echo "${build_dir}/cuda/bin/nvcc"
+    return 0
+  fi
+  if use_cuda_redistributables && [[ -f "${build_dir}/cuda/redistributables/bin/nvcc" ]]; then
+    echo "${build_dir}/cuda/redistributables/bin/nvcc"
     return 0
   fi
 
@@ -378,9 +387,13 @@ function add_debian_based_deps() {
     "qt6-base-dev"
     "systemd"
     "udev"
-    "wget"  # necessary for cuda install with `run` file
+    "wget"  # necessary for CUDA installation
     "xvfb"  # necessary for headless unit testing
   )
+
+  if [[ "$skip_cuda" == 0 ]] && use_cuda_redistributables; then
+    dependencies+=("xz-utils")
+  fi
 
   # appstream-glib was removed in Ubuntu 26.10; appstreamcli remains available.
   if [[ "$distro" != "$DISTRO_UBUNTU" ]] || [[ "$version" < "$UBUNTU_APPSTREAM_GLIB_REMOVAL_VERSION" ]]; then
@@ -500,10 +513,14 @@ function add_fedora_deps() {
     "qt6-qtsvg-devel"
     "rpm-build"  # if you want to build an RPM binary package
     "vulkan-loader-devel"
-    "wget"  # necessary for cuda install with `run` file
+    "wget"  # necessary for CUDA installation
     "which"  # necessary for cuda install with `run` file
     "xorg-x11-server-Xvfb"  # necessary for headless unit testing
   )
+
+  if [[ "$skip_cuda" == 0 ]] && use_cuda_redistributables; then
+    dependencies+=("xz")
+  fi
 
   # Fedora 44+ provides Boost 1.90 or newer and packages its static libraries separately.
   if [[ "$version" =~ ^[0-9]+$ ]] && (( version >= 44 )); then
@@ -520,6 +537,67 @@ function add_fedora_deps() {
   fi
   return 0
 }
+
+function install_cuda_redistributables() (
+  local cuda_redist_arch="linux-x86_64"
+  if [[ "$architecture" == "${AARCH64}" ]]; then
+    cuda_redist_arch="linux-sbsa"
+  fi
+
+  local cuda_base_url="https://developer.download.nvidia.com/compute/cuda/redist"
+  local staging_dir
+  mkdir -p -- "${build_dir}/cuda"
+  staging_dir=$(mktemp -d "${build_dir}/cuda/.redistributables.XXXXXX")
+  trap 'rm -rf -- "$staging_dir"' EXIT
+
+  local toolkit_dir="${staging_dir}/toolkit"
+  local target_dir="${toolkit_dir}/targets/$(cuda_target_dir)"
+  mkdir -p -- "$target_dir"
+
+  # Component versions and architecture-specific SHA-256 digests from
+  # https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.5.0.json
+  # component:version:destination:x86_64_sha256:sbsa_sha256
+  local -a components=(
+    "cuda_nvcc:13.5.37:root:ac41262734f3c62cd75a502081cfae093b03b846d7f9274d8b1eb41f83209b96:0c6756fdda5a4c5159dc5181788bd68c9d261e71d6f299ebb241185e113254a3"
+    "libnvvm:13.5.37:root:8dd4866e387f0ce2259e8dcc91bebdbb59f84c6d4505b3bba46ae91b9a11dd16:6c79308860d5eb47c6dd3693652a4d7cd430050438d31d5f036aa0b19583f2ea"
+    "cccl:13.3.5.0.6:target:5139f641e72df6b0c64ee9e68cabaeafa9a5e36a4b1f7d370a1dc0dac62dd72f:c308969d8ad6de704c3f8be9ccf5ff2c9b40dd6e23b43b6e4057d255779d5ada"
+    "cuda_crt:13.5.37:target:0df5c0ca27392152f370751c82b27ff1ab67661e4810cfc7248e2e03479c9ae0:65d373eead42f1544363027c9ee3e6e6eb223c27743749e84ce1e9595bc71b33"
+    "cuda_cudart:13.5.37:target:26ca1b8963ce1b73e0e77113c711730545cacaaee7233c0526477d96d4c621fe:9da80d6aa87f5bc46971c1343024f30a850aca9aac03da95219880aaf854154f"
+    "cuda_culibos:13.5.25:target:4c03a0e737f474923823687c93b43a0727e424dcbc53eb44fb116995c87df713:78d7ce9b78d69196b85fd1bfae591d7c1537393242c3a39e616ca8dfade68a99"
+    "libnvptxcompiler:13.5.37:target:e92761c2c83fdbe1c582aab568e684371c3023e88b7b4c6fb3d92e3feb160b67:8f5503e8a7ced0e676ce327eb83f5a1650b59f54d66e6cf704d2d4ee9583eb2d"
+  )
+
+  local start_seconds=$SECONDS
+  echo "Installing AppImage CUDA ${cuda_version} redistributables (${cuda_redist_arch})"
+  local component name component_version destination sha_x86_64 sha_sbsa sha archive extract_dir url
+  for component in "${components[@]}"; do
+    IFS=: read -r name component_version destination sha_x86_64 sha_sbsa <<< "$component"
+    archive="${name}-${cuda_redist_arch}-${component_version}-archive.tar.xz"
+    sha="$sha_x86_64"
+    if [[ "$architecture" == "${AARCH64}" ]]; then
+      sha="$sha_sbsa"
+    fi
+    extract_dir="$target_dir"
+    if [[ "$destination" == "root" ]]; then
+      extract_dir="$toolkit_dir"
+    fi
+
+    url="${cuda_base_url}/${name}/${cuda_redist_arch}/${archive}"
+    echo "CUDA component URL: ${url}"
+    wget "$url" --max-redirect=0 --progress=bar:force:noscroll -q --show-progress -O "${staging_dir}/${archive}"
+    printf '%s  %s\n' "$sha" "${staging_dir}/${archive}" | sha256sum --check
+    tar -xJf "${staging_dir}/${archive}" --directory="$extract_dir" --strip-components=1
+    rm -- "${staging_dir}/${archive}"
+  done
+
+  # nvcc expects this header under the target-specific include directory.
+  mv -- "${toolkit_dir}/include/fatbinary_section.h" "${target_dir}/include/"
+  apply_cuda_patches "$toolkit_dir"
+
+  # Publish the complete directory only after verification and extraction.
+  mv -T -- "$toolkit_dir" "${build_dir}/cuda/redistributables"
+  echo "Installed AppImage CUDA redistributables in $((SECONDS - start_seconds)) seconds"
+)
 
 function install_cuda() {
   setup_cuda_system_package_environment
@@ -538,17 +616,6 @@ function install_cuda() {
   if [[ "$cuda_system_package" == 1 ]]; then
     echo "CUDA system package '$cuda_system_package_name' was requested, but nvcc was not found after dependency installation."
     return 1
-  fi
-
-  local cuda_override_args=()
-  if [[ "$distro" == "$DISTRO_FEDORA" ]]; then
-    cuda_override_args+=(--override)
-  fi
-
-  local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
-  local cuda_suffix=""
-  if [[ "$architecture" == "${AARCH64}" ]]; then
-    local cuda_suffix="_sbsa"
   fi
 
   if [[ "$architecture" == "${AARCH64}" ]]; then
@@ -570,6 +637,22 @@ function install_cuda() {
       ${sudo_cmd} sed -i 's/__SVFloat64_t/float/g' "$math_vector_file"
       ${sudo_cmd} sed -i 's/__SVBool_t/int/g' "$math_vector_file"
     fi
+  fi
+
+  if use_cuda_redistributables; then
+    install_cuda_redistributables
+    return
+  fi
+
+  local cuda_override_args=()
+  if [[ "$distro" == "$DISTRO_FEDORA" ]]; then
+    cuda_override_args+=(--override)
+  fi
+
+  local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
+  local cuda_suffix=""
+  if [[ "$architecture" == "${AARCH64}" ]]; then
+    cuda_suffix="_sbsa"
   fi
 
   local url="${cuda_prefix}${cuda_version}/local_installers/cuda_${cuda_version}_linux${cuda_suffix}.run"
