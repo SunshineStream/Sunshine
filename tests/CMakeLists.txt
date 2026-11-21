@@ -301,3 +301,7 @@ if (WIN32)
         )
     endif()
 endif ()
+
+# Exercise the same negotiation implementation used by the client transport.
+target_sources(${PROJECT_NAME} PRIVATE
+        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/VideoFormats.c")

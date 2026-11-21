@@ -7,7 +7,9 @@
 // standard includes
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -34,6 +36,18 @@ namespace stream {
 }
 
 namespace video {
+  /**
+   * @brief Video stream format identifiers used by GameStream setup.
+   */
+  enum video_format_e {
+    format_h264 = 0,  ///< H.264 High profile.
+    format_hevc = 1,  ///< HEVC Main/Main10 profile.
+    format_av1 = 2,  ///< AV1 Main/Main10 profile.
+    format_mpeg2 = 3,  ///< MPEG-2/H.262 video.
+    format_h263p = 4,  ///< H.263+ video.
+  };
+
+  constexpr int VIDEO_FORMAT_COUNT = format_h263p + 1;  ///< Number of supported wire codec identifiers.
 
   /**
    * @brief Encoding configuration requested by a remote client.
@@ -47,7 +61,7 @@ namespace video {
     int slicesPerFrame;  ///< Number of slices per frame.
     int numRefFrames;  ///< Maximum number of reference frames.
     int encoderCscMode;  ///< Requested color range and SDR colorspace; HDR always uses BT.2020 and ST2084.
-    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1.
+    int videoFormat;  ///< Video codec format selected from video_format_e.
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
@@ -444,7 +458,7 @@ namespace video {
     const std::unique_ptr<const encoder_platform_formats_t> platform_formats;  ///< Platform-specific memory and pixel formats accepted by the encoder.
 
     /**
-     * @brief Codec capabilities for AV1, HEVC, or H.264.
+     * @brief Codec capabilities for a modern or legacy video format.
      */
     struct codec_t {
       std::vector<option_t> common_options;  ///< Options applied to every encode mode for this codec.
@@ -481,24 +495,30 @@ namespace video {
     codec_t av1;  ///< AV1 codec capability and option set.
     codec_t hevc;  ///< HEVC codec capability and option set.
     codec_t h264;  ///< H.264 codec capability and option set.
+    codec_t mpeg2;  ///< MPEG-2 codec capability and option set.
+    codec_t h263p;  ///< H.263+ codec capability and option set.
 
     /**
      * @brief Select the codec descriptor requested by a stream configuration.
      *
      * @param config Configuration values to apply.
-     * @return Codec descriptor for H.264, HEVC, or AV1.
+     * @return Codec descriptor for H.264, HEVC, AV1, MPEG-2, or H.263+.
      */
     const codec_t &codec_from_config(const config_t &config) const {
       switch (config.videoFormat) {
         default:
           BOOST_LOG(error) << "Unknown video format " << config.videoFormat << ", falling back to H.264";
           // fallthrough
-        case 0:
+        case format_h264:
           return h264;
-        case 1:
+        case format_hevc:
           return hevc;
-        case 2:
+        case format_av1:
           return av1;
+        case format_mpeg2:
+          return mpeg2;
+        case format_h263p:
+          return h263p;
       }
     }
 
@@ -765,8 +785,35 @@ namespace video {
    */
   using hdr_info_t = std::unique_ptr<hdr_info_raw_t>;
 
-  extern int active_hevc_mode;
-  extern int active_av1_mode;
+  /**
+   * @brief Callback used to probe one encoder for one requested legacy codec.
+   */
+  using codec_probe_t = std::function<bool(encoder_t &, int)>;
+
+  /**
+   * @brief Probe MPEG-2 or H.263+ independently of H.264 support.
+   *
+   * @param encoder Backend whose requested codec should be validated.
+   * @param video_format MPEG-2 or H.263+ wire codec identifier.
+   * @return Whether the backend successfully encoded the requested legacy codec.
+   */
+  bool validate_legacy_codec(encoder_t &encoder, int video_format);
+
+  /**
+   * @brief Choose the first backend that passes a codec-specific probe.
+   *
+   * @param candidates Backend preference order, including software fallbacks.
+   * @param video_format Requested legacy codec identifier.
+   * @param probe Callback validating only the requested codec.
+   * @return Selected backend, or nullptr when no candidate passes.
+   */
+  encoder_t *select_legacy_encoder(std::span<encoder_t *const> candidates, int video_format, const codec_probe_t &probe);
+
+  extern bool last_encoder_probe_supported_h264;  ///< Whether baseline H.264 is available.
+  extern int active_hevc_mode;  ///< Active HEVC codec advertisement mode.
+  extern int active_av1_mode;  ///< Active AV1 codec advertisement mode.
+  extern int active_mpeg2_mode;  ///< Active MPEG-2 codec advertisement mode.
+  extern int active_h263p_mode;  ///< Active H.263+ codec advertisement mode.
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
   extern std::array<bool, 3> last_encoder_probe_supported_dynamic_range_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1

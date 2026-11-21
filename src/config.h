@@ -75,6 +75,8 @@ namespace config {
 
     int hevc_mode;  ///< HEVC support mode advertised to clients.
     int av1_mode;  ///< AV1 support mode advertised to clients.
+    int mpeg2_mode;  ///< MPEG-2 codec advertisement mode.
+    int h263p_mode;  ///< H.263+ codec advertisement mode.
 
     int min_threads;  ///< Minimum number of threads or slices for CPU encoding.
 

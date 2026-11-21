@@ -707,6 +707,7 @@ namespace safe {
       if (!_count) {
         new (_object_buf.data()) element_type;
         if (_construct(*reinterpret_cast<element_type *>(_object_buf.data())) != 0) {
+          reinterpret_cast<element_type *>(_object_buf.data())->~element_type();
           return ptr_t {nullptr};
         }
       }
@@ -722,7 +723,7 @@ namespace safe {
 
     std::array<std::uint8_t, sizeof(element_type)> _object_buf;
 
-    std::uint32_t _count;
+    std::uint32_t _count = 0;  ///< Number of active references, including dynamically allocated storage.
     std::mutex _lock;
   };
 
