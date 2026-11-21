@@ -342,7 +342,7 @@ namespace stream {
     return ((size + 15) / 16) * 16;
   }
 
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 2560;  ///< Maximum 640 kbit/s AC-3 access unit at 48 kHz.
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = audio::MAX_DOLBY_PACKET_SIZE;  ///< Shared encoder and transport payload limit.
 
   /**
    * @brief AES key storage used for audio packet encryption.
