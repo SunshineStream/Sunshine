@@ -76,13 +76,14 @@ const config = ref(props.config)
         <option value="eac3">E-AC-3 (Dolby Digital Plus)</option>
       </select>
       <div class="form-text">{{ $t('config.audio_format_fallback_desc') }}</div>
-      <Checkbox class="mt-3"
-                id="high_quality_audio"
-                locale-prefix="config"
-                v-model="config.high_quality_audio"
-                :disabled="config.audio_format === 'opus'"
-                default="false"
-      ></Checkbox>
+      <fieldset :disabled="config.audio_format === 'opus'">
+        <Checkbox class="mt-3"
+                  id="high_quality_audio"
+                  locale-prefix="config"
+                  v-model="config.high_quality_audio"
+                  default="false"
+        ></Checkbox>
+      </fieldset>
     </div>
 
     <!-- Disable Audio -->
