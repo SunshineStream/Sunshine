@@ -12,6 +12,12 @@
   "sources": [
     {
       "type": "git",
+      "x-renovate": {
+        "datasource": "github-tags",
+        "depName": "xorg/xserver",
+        "packageName": "LizardByte-infrastructure/xserver",
+        "versioning": "regex:^xorg-server-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+      },
       "url": "https://github.com/LizardByte-infrastructure/xserver.git",
       "tag": "xorg-server-21.1.13",
       "commit": "be2767845d6ed3c6dbd25a151051294d0908a995",
@@ -34,6 +40,12 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libxcvt",
+            "packageName": "LizardByte-infrastructure/libxcvt",
+            "versioning": "regex:^libxcvt-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libxcvt.git",
           "tag": "libxcvt-0.1.2",
           "commit": "d9ca87eea9eecddaccc3a77227bcb3acf84e89df",
@@ -51,6 +63,12 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libxmu",
+            "packageName": "LizardByte-infrastructure/libxmu",
+            "versioning": "regex:^libXmu-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libxmu.git",
           "tag": "libXmu-1.2.1",
           "commit": "792f80402ee06ce69bca3a8f2a84295999c3a170",
@@ -68,6 +86,12 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/font/util",
+            "packageName": "LizardByte-infrastructure/font-util",
+            "versioning": "regex:^font-util-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/font-util.git",
           "tag": "font-util-1.4.1",
           "commit": "b5ca142f81a6f14eddb23be050291d1c25514777",
@@ -85,6 +109,12 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libfontenc",
+            "packageName": "LizardByte-infrastructure/libfontenc",
+            "versioning": "regex:^libfontenc-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libfontenc.git",
           "tag": "libfontenc-1.1.8",
           "commit": "92a85fda2acb4e14ec0b2f6d8fe3eaf2b687218c",
@@ -108,6 +138,10 @@
       "sources": [
         {
           "type": "archive",
+          "x-renovate": {
+            "depName": "libtirpc",
+            "enabled": false
+          },
           "url": "https://downloads.sourceforge.net/sourceforge/libtirpc/libtirpc-1.3.4.tar.bz2",
           "sha256": "1e0b0c7231c5fa122e06c0609a76723664d068b0dba3b8219b63e6340b347860",
           "x-checker-data": {
@@ -124,6 +158,12 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libxfont",
+            "packageName": "LizardByte-infrastructure/libxfont",
+            "versioning": "regex:^libXfont2-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libxfont.git",
           "tag": "libXfont2-2.0.6",
           "commit": "d54aaf2483df6a1f98fadc09004157e657b7f73e",
@@ -141,6 +181,12 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/app/xauth",
+            "packageName": "LizardByte-infrastructure/xauth",
+            "versioning": "regex:^xauth-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/xauth.git",
           "tag": "xauth-1.1.3",
           "commit": "c29eef23683f0e3575a3c60d9314de8156fbe2c2",

@@ -32,9 +32,14 @@
   "sources": [
     {
       "type": "git",
+      "x-renovate": {
+        "datasource": "github-tags",
+        "depName": "avahi/avahi",
+        "versioning": "regex:^v(?<major>[0-9]+)[.](?<minor>[0-9]+)(?:[.](?<patch>[0-9]+))?$"
+      },
       "url": "https://github.com/avahi/avahi.git",
-      "commit": "f060abee2807c943821d88839c013ce15db17b58",
       "tag": "v0.8",
+      "commit": "f060abee2807c943821d88839c013ce15db17b58",
       "x-checker-data": {
         "type": "git",
         "tag-pattern": "^v([\\d.]+)$"

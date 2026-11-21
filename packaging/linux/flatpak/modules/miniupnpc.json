@@ -13,6 +13,11 @@
   "sources": [
     {
       "type": "git",
+      "x-renovate": {
+        "datasource": "github-tags",
+        "depName": "miniupnp/miniupnp",
+        "versioning": "regex:^miniupnpc_(?<major>[0-9]+)_(?<minor>[0-9]+)_(?<patch>[0-9]+)$"
+      },
       "url": "https://github.com/miniupnp/miniupnp.git",
       "tag": "miniupnpc_2_3_4",
       "commit": "ca489177b12004b8fe5992d5229ae76e802ced14",
