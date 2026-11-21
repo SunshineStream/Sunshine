@@ -75,6 +75,14 @@ namespace rtsp_stream {
    * @param req Request to handle.
    */
   void cmd_play(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  /**
+   * @brief Send the successful ANNOUNCE response through the production response path.
+   * @param sock Connected client socket.
+   * @param session Launch session.
+   * @param sequence_number ANNOUNCE request sequence number.
+   * @param selected_audio_codec Codec accepted during negotiation.
+   */
+  void respond_announce_success(boost::asio::ip::tcp::socket &sock, launch_session_t &session, int sequence_number, audio::dolby_codec_e selected_audio_codec);
 }  // namespace rtsp_stream
 
 /**
@@ -163,5 +171,47 @@ TEST(RtspDescribeTest, SurroundParamsCompensateClientRotationForEveryStreamConfi
   ASSERT_EQ(advertised.size(), expected.size());
   for (std::size_t x = 0; x < expected.size(); ++x) {
     EXPECT_EQ(advertised[x], expected[x].second) << "stream config " << expected[x].first;
+  }
+}
+
+/**
+ * @brief ANNOUNCE success responses expose the negotiated Dolby codec while keeping legacy Opus headers unchanged.
+ */
+TEST(RtspAnnounceResponseTest, SerializesDolbyCodecAndLegacyOpusResponses) {
+  using boost::asio::ip::tcp;
+
+  const std::array negotiations {
+    std::pair {audio::dolby_codec_e::ac3, std::string_view {"AC3"}},
+    std::pair {audio::dolby_codec_e::eac3, std::string_view {"EAC3"}},
+    std::pair {audio::dolby_codec_e::opus, std::string_view {}},
+  };
+
+  for (const auto &[codec, expected_header] : negotiations) {
+    SCOPED_TRACE(expected_header.empty() ? "legacy Opus client" : std::string(expected_header));
+    boost::asio::io_context io;
+    tcp::acceptor acceptor {io, {boost::asio::ip::address_v4::loopback(), 0}};
+    tcp::socket client {io};
+    client.connect(acceptor.local_endpoint());
+    auto server_socket = acceptor.accept();
+
+    rtsp_stream::launch_session_t session {};
+    rtsp_stream::respond_announce_success(server_socket, session, 73, codec);
+    server_socket.shutdown(tcp::socket::shutdown_send);
+
+    std::string response;
+    boost::system::error_code read_error;
+    boost::asio::read(client, boost::asio::dynamic_buffer(response), read_error);
+    ASSERT_EQ(read_error, boost::asio::error::eof);
+    EXPECT_TRUE(response.starts_with("RTSP/1.0 200 OK\\r\\n"));
+    EXPECT_NE(response.find("CSeq: 73\\r\\n"), std::string::npos);
+
+    const auto codec_header = response.find("X-SS-Audio-Codec:");
+    if (expected_header.empty()) {
+      EXPECT_EQ(codec_header, std::string::npos);
+      EXPECT_TRUE(response.ends_with("\\r\\n\\r\\n"));
+    } else {
+      ASSERT_NE(codec_header, std::string::npos);
+      EXPECT_NE(response.find(std::string("X-SS-Audio-Codec: ") + std::string(expected_header) + "\\r\\n"), std::string::npos);
+    }
   }
 }
