@@ -24,6 +24,7 @@
 
 // local includes
 #include "config.h"
+#include "config_file.h"
 #include "entry_handler.h"
 #include "file_handler.h"
 #include "logging.h"
@@ -2025,15 +2026,26 @@ namespace config {
 #endif
 
   /**
-   * @brief Parse serialized text into the corresponding runtime representation.
+   * @brief Options collected from the Sunshine command line before loading the config file.
    */
-  int parse(int argc, char *argv[]) {
-    config_map_t cmd_vars;
+  struct launch_arguments_t {
+    config_map_t overrides;  ///< Configuration values supplied on the command line.
+    bool explicit_config_file = false;  ///< Whether a positional config path was supplied.
 #ifdef _WIN32
-    bool shortcut_launch = false;
-    bool service_admin_launch = false;
+    bool shortcut_launch = false;  ///< Whether the Start Menu shortcut was used.
+    bool service_admin_launch = false;  ///< Whether this process was elevated to start the service.
 #endif
+  };
 
+  /**
+   * @brief Read startup options and record the selected config path, flags, and command.
+   *
+   * @param argc Number of command-line arguments.
+   * @param argv Command-line argument vector.
+   * @param arguments Parsed startup options.
+   * @return 0 to continue startup, 1 after printing help, or -1 on invalid options.
+   */
+  static int parse_launch_arguments(int argc, char *argv[], launch_arguments_t &arguments) {
     for (auto x = 1; x < argc; ++x) {
       auto line = argv[x];
 
@@ -2043,9 +2055,9 @@ namespace config {
       }
 #ifdef _WIN32
       else if (line == "--shortcut"sv) {
-        shortcut_launch = true;
+        arguments.shortcut_launch = true;
       } else if (line == "--shortcut-admin"sv) {
-        service_admin_launch = true;
+        arguments.service_admin_launch = true;
       }
 #endif
       else if (*line == '-') {
@@ -2066,6 +2078,7 @@ namespace config {
         auto pos = std::find(line, line_end, '=');
         if (pos == line_end) {
           sunshine.config_file = line;
+          arguments.explicit_config_file = true;
         } else {
           TUPLE_EL(var, 1, parse_option(line, line_end));
           if (!var) {
@@ -2073,16 +2086,19 @@ namespace config {
             return -1;
           }
 
-          TUPLE_EL_REF(name, 0, *var);
-
-          auto it = cmd_vars.find(name);
-          if (it != std::end(cmd_vars)) {
-            cmd_vars.erase(it);
-          }
-
-          cmd_vars.try_emplace(std::move(var->first), std::move(var->second));
+          arguments.overrides.insert_or_assign(std::move(var->first), std::move(var->second));
         }
       }
+    }
+
+    return 0;
+  }
+
+  int parse(int argc, char *argv[], std::string &config_warning) {
+    config_warning.clear();
+    launch_arguments_t arguments;
+    if (const auto status = parse_launch_arguments(argc, argv, arguments); status != 0) {
+      return status;
     }
 
     bool config_loaded = false;
@@ -2090,15 +2106,22 @@ namespace config {
       // Create appdata folder if it does not exist
       file_handler::make_directory(platf::appdata().string());
 
-      // Create empty config file if it does not exist
-      if (!fs::exists(sunshine.config_file)) {
-        std::ofstream {sunshine.config_file};
+      std::string file_content;
+      if (arguments.explicit_config_file) {
+        auto result = read_explicit_config_file(sunshine.config_file);
+        file_content = std::move(result.contents);
+        config_warning = std::move(result.diagnostic);
+      } else {
+        // Preserve the default config creation and loading behavior.
+        if (!fs::exists(sunshine.config_file)) {
+          std::ofstream {sunshine.config_file};
+        }
+        file_content = file_handler::read_file(sunshine.config_file.c_str());
       }
 
-      // Read config file
-      auto vars = parse_config(file_handler::read_file(sunshine.config_file.c_str()));
+      auto vars = parse_config(file_content);
 
-      for (auto &[name, value] : cmd_vars) {
+      for (auto &[name, value] : arguments.overrides) {
         vars.insert_or_assign(name, std::move(value));
       }
 
@@ -2118,7 +2141,7 @@ namespace config {
     // as non-admin and the config folder is not yet present; we can defer
     // so that service instance will do the work instead.
 
-    if (!config_loaded && !shortcut_launch) {
+    if (!config_loaded && !arguments.shortcut_launch) {
       BOOST_LOG(fatal) << "To relaunch Sunshine successfully, use the shortcut in the Start Menu. Do not run Sunshine.exe manually."sv;
       std::this_thread::sleep_for(10s);
 #else
@@ -2132,14 +2155,14 @@ namespace config {
     // because we need to have the correct base port loaded in our config.
     // Exception: UCRT64 shortcut_launch instances may have no config loaded due to
     // insufficient permissions to create folder; port defaults will be acceptable.
-    if (service_admin_launch) {
+    if (arguments.service_admin_launch) {
       // This is a relaunch as admin to start the service
       service_ctrl::start_service();
 
       // Always return 1 to ensure Sunshine doesn't start normally
       return 1;
     }
-    if (shortcut_launch) {
+    if (arguments.shortcut_launch) {
       if (!service_ctrl::is_service_running()) {
         // If the service isn't running, relaunch ourselves as admin to start it
         std::array<WCHAR, MAX_PATH> executable;

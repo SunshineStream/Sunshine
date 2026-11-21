@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <string>
 
 // platform includes
 #ifdef __APPLE__
@@ -247,7 +248,8 @@ int main(int argc, char *argv[]) {
   mail::man = std::make_shared<safe::mail_raw_t>();
 
   // parse config file
-  if (config::parse(argc, argv)) {
+  std::string config_warning;
+  if (config::parse(argc, argv, config_warning)) {
     return 0;
   }
 
@@ -263,6 +265,10 @@ int main(int argc, char *argv[]) {
 
   // Log publisher metadata
   log_publisher_data();
+
+  if (!config_warning.empty()) {
+    BOOST_LOG(warning) << config_warning;
+  }
 
   // Log modified_config_settings
   config::log_config_settings(config::modified_config_settings, false);

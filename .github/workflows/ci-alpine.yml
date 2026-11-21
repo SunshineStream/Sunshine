@@ -133,7 +133,7 @@ jobs:
           ldd /usr/bin/sunshine | tee sunshine-ldd.txt
           grep -Eq 'libc\.musl|ld-musl' sunshine-ldd.txt
           scanelf -n /usr/bin/sunshine
-          /usr/bin/sunshine --version
+          bash tests/scripts/test_config_startup.sh /usr/bin/sunshine
 
           rule_file="$(find /lib /usr/lib -path '*/udev/rules.d/60-sunshine.rules' -print -quit)"
           test -n "${rule_file}"
