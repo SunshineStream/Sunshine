@@ -10,6 +10,7 @@
 #include "utility.h"
 
 #include <array>
+#include <cstddef>
 #include <bitset>
 #include <string_view>
 #include <vector>
@@ -168,7 +169,7 @@ namespace audio {
    * @brief Audio codec selected by RTSP Dolby offer/accept negotiation.
    */
   enum class dolby_codec_e {
-    opus,  ///< Existing Opus audio path.
+    opus,  ///< Default Opus audio codec.
     ac3,  ///< Dolby Digital AC-3 bitstream.
     eac3  ///< Dolby Digital Plus E-AC-3 bitstream.
   };
