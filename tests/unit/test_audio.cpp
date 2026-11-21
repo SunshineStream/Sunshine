@@ -128,7 +128,7 @@ TEST(AudioDolbyEncoderTest, EncodesAllSupportedCodecsLayoutsAndQualityTiersWitho
       for (const bool high_quality : {false, true}) {
         SCOPED_TRACE(testing::Message() << "eac3=" << eac3 << ", channels=" << channels << ", high_quality=" << high_quality);
         const std::vector<float> pcm(1536U * static_cast<std::size_t>(channels), 0.0F);
-        buffer_t output {4096};
+        buffer_t output {MAX_DOLBY_PACKET_SIZE};
         EXPECT_GT(encode_dolby_frame_for_testing(eac3, high_quality, channels, pcm, output), 0);
       }
     }
