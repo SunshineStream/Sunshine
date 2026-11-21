@@ -832,6 +832,33 @@ namespace rtsp_stream {
   /**
    * @brief Handle an unsupported RTSP command.
    */
+  /**
+   * @brief Send the successful ANNOUNCE response, preserving legacy Opus headers.
+   *
+   * @param sock Socket used to write the response.
+   * @param session Launch session associated with the request.
+   * @param seqn ANNOUNCE request sequence number.
+   * @param selected_audio_codec Codec accepted during negotiation.
+   */
+  void respond_announce_success(tcp::socket &sock, launch_session_t &session, int seqn, audio::dolby_codec_e selected_audio_codec) {
+    OPTION_ITEM cseq_option {};
+    std::string cseq_header {"CSeq"};
+    auto seqn_str = std::to_string(seqn);
+    cseq_option.option = cseq_header.data();
+    cseq_option.content = seqn_str.data();
+
+    OPTION_ITEM audio_codec_option {};
+    std::string audio_codec_header {"X-SS-Audio-Codec"};
+    std::string audio_codec_name {audio::dolby_codec_name(selected_audio_codec)};
+    if (selected_audio_codec != audio::dolby_codec_e::opus) {
+      audio_codec_option.option = audio_codec_header.data();
+      audio_codec_option.content = audio_codec_name.data();
+      cseq_option.next = &audio_codec_option;
+    }
+
+    respond(sock, session, &cseq_option, 200, "OK", seqn, {});
+  }
+
   void cmd_not_found(tcp::socket &sock, launch_session_t &session, msg_t &&req) {
     respond(sock, session, nullptr, 404, "NOT FOUND", req->sequenceNumber, {});
   }
@@ -1329,17 +1356,7 @@ namespace rtsp_stream {
       return;
     }
 
-    // Return a codec response header only when a Dolby offer was negotiated.
-    // Legacy Opus clients receive the unchanged response headers.
-    OPTION_ITEM audio_codec_option {};
-    std::string audio_codec_header {"X-SS-Audio-Codec"};
-    std::string audio_codec_name {audio::dolby_codec_name(selected_audio_codec)};
-    if (selected_audio_codec != audio::dolby_codec_e::opus) {
-      audio_codec_option.option = audio_codec_header.data();
-      audio_codec_option.content = audio_codec_name.data();
-      option.next = &audio_codec_option;
-    }
-    respond(sock, session, &option, 200, "OK", req->sequenceNumber, {});
+    respond_announce_success(sock, session, req->sequenceNumber, selected_audio_codec);
   }
 
   /**
