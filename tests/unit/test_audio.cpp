@@ -145,6 +145,18 @@ TEST(AudioDolbyEncoderTest, RejectsInvalidInputAndUnsupportedChannelCount) {
 }
 #endif
 
+TEST(AudioPacketTransportTest, ChecksPlaintextAndEncryptedDestinationCapacity) {
+  constexpr std::size_t max_audio_payload = 2560;
+  constexpr std::size_t encrypted_capacity = 2576;
+
+  EXPECT_TRUE(stream::audio_packet_fits(max_audio_payload, false, max_audio_payload));
+  EXPECT_FALSE(stream::audio_packet_fits(max_audio_payload + 1, false, encrypted_capacity));
+  EXPECT_TRUE(stream::audio_packet_fits(max_audio_payload, true, encrypted_capacity));
+  EXPECT_FALSE(stream::audio_packet_fits(max_audio_payload, true, max_audio_payload));
+  EXPECT_TRUE(stream::audio_packet_fits(1400, true, 1408));
+  EXPECT_FALSE(stream::audio_packet_fits(1401, true, 1408));
+}
+
 TEST(AudioPacketSessionTest, EncoderPreservesTheReceivingSession) {
   stream::config_t stream_config {};
   rtsp_stream::launch_session_t launch_session {};
