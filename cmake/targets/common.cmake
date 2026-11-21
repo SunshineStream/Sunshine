@@ -92,7 +92,12 @@ add_custom_target(web-ui ALL
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Installing NPM Dependencies and Building the Web UI"
         COMMAND "${CMAKE_COMMAND}" -E env "${NPM_PATH}" ${NPM_COMMAND} "${NPM}" ci ${NPM_INSTALL_FLAGS}
-        COMMAND "${CMAKE_COMMAND}" -E env "${NPM_PATH}" "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}" "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}" "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}" ${NPM_COMMAND} "${NPM}" run build  # cmake-lint: disable=C0301
+        COMMAND "${CMAKE_COMMAND}" -E env "${NPM_PATH}"
+                "SUNSHINE_BUILD_HOMEBREW=${NPM_BUILD_HOMEBREW}"
+                "SUNSHINE_SOURCE_ASSETS_DIR=${NPM_SOURCE_ASSETS_DIR}"
+                "SUNSHINE_ASSETS_DIR=${NPM_ASSETS_DIR}"
+                "SUNSHINE_LIBVIRTUALHID_ICON=${libvirtualhid_SOURCE_DIR}/libvirtualhid.svg"
+                ${NPM_COMMAND} "${NPM}" run build
         VERBATIM)
 
 # docs
@@ -119,19 +124,20 @@ set_source_files_properties("${CMAKE_SOURCE_DIR}/src/upnp.cpp"
         DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}"
         PROPERTIES COMPILE_FLAGS -Wno-pedantic)
 
-# third-party/ViGEmClient
-set(VIGEM_COMPILE_FLAGS "")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unknown-pragmas ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-misleading-indentation ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-class-memaccess ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-function ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-variable ")
-string(APPEND VIGEM_COMPILE_FLAGS "-Wno-missing-field-initializers ")
-set_source_files_properties("${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
-        DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}"
-        PROPERTIES
-        COMPILE_DEFINITIONS "UNICODE=1;ERROR_INVALID_DEVICE_OBJECT_PARAMETER=650"
-        COMPILE_FLAGS ${VIGEM_COMPILE_FLAGS})
+if(WIN32)
+    set(VIGEM_COMPILE_FLAGS "")
+    string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unknown-pragmas ")
+    string(APPEND VIGEM_COMPILE_FLAGS "-Wno-misleading-indentation ")
+    string(APPEND VIGEM_COMPILE_FLAGS "-Wno-class-memaccess ")
+    string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-function ")
+    string(APPEND VIGEM_COMPILE_FLAGS "-Wno-unused-variable ")
+    string(APPEND VIGEM_COMPILE_FLAGS "-Wno-missing-field-initializers ")
+    set_source_files_properties("${vigemclient_SOURCE_DIR}/src/ViGEmClient.cpp"
+            DIRECTORY "${CMAKE_SOURCE_DIR}" "${TEST_DIR}"
+            PROPERTIES
+            COMPILE_DEFINITIONS "UNICODE=1;ERROR_INVALID_DEVICE_OBJECT_PARAMETER=650"
+            COMPILE_FLAGS ${VIGEM_COMPILE_FLAGS})
+endif()
 
 # src/nvhttp
 string(TOUPPER "x${CMAKE_BUILD_TYPE}" BUILD_TYPE)

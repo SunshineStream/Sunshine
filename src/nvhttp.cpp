@@ -21,7 +21,7 @@
 #include <boost/property_tree/json_parser.hpp>
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/xml_parser.hpp>
-#include <Simple-Web-Server/server_http.hpp>
+#include <server_http.hpp>
 
 // local includes
 #include "config.h"

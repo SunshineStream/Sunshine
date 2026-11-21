@@ -1,0 +1,14 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "github-tags",
+      "depName": "Dav1dde/glad"
+    },
+    "url": "https://github.com/Dav1dde/glad.git",
+    "tag": "v2.0.8",
+    "commit": "73db193f853e2ee079bf3ca8a64aa2eaf6459043",
+    "dest": "flatpak-cpm/glad",
+    "disable-submodules": true
+  }
+]

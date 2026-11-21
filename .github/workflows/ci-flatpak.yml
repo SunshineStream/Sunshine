@@ -288,8 +288,8 @@ jobs:
           cp "./package-lock.json" "./flathub/"
           cp "./packaging/linux/flatpak/README.md" "./flathub/"
           cp "./packaging/linux/flatpak/flathub.json" "./flathub/"
+          # Includes the Git source lists referenced by the Sunshine module.
           cp -r "./packaging/linux/flatpak/modules/." "./flathub/modules/"
-          # submodules will need to be handled in the workflow that creates the PR
 
           # create the archive
           tar -czf ./artifacts/flathub.tar.gz -C ./flathub .

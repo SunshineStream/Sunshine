@@ -4,8 +4,8 @@
  */
 #include <cstdint>
 extern "C" {
-#include <moonlight-common-c/src/Input.h>
-#include <moonlight-common-c/src/Limelight.h>
+#include <Input.h>
+#include <Limelight.h>
 }
 
 // standard includes

@@ -7,7 +7,7 @@
 #include "compat/moonlight.h"
 
 extern "C" {
-#include <moonlight-common-c/src/Rtsp.h>
+#include <Rtsp.h>
 }
 
 // standard includes

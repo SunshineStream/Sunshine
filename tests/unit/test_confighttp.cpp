@@ -22,9 +22,9 @@
 #include <utility>
 
 // lib includes
-#include <Simple-Web-Server/client_https.hpp>
-#include <Simple-Web-Server/crypto.hpp>
-#include <Simple-Web-Server/server_https.hpp>
+#include <client_https.hpp>
+#include <crypto.hpp>
+#include <server_https.hpp>
 
 // local includes
 #include <src/config.h>

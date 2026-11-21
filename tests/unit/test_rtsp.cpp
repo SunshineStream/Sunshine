@@ -19,7 +19,7 @@
 // lib includes
 #include <boost/asio.hpp>
 extern "C" {
-#include <moonlight-common-c/src/Rtsp.h>
+#include <Rtsp.h>
 }
 
 // local includes

@@ -1,0 +1,14 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "github-tags",
+      "depName": "LizardByte/libdisplaydevice"
+    },
+    "url": "https://github.com/LizardByte/libdisplaydevice.git",
+    "tag": "v2026.1008.124543",
+    "commit": "a2afc0430d44223c25a2ebc598000f78b338aa52",
+    "dest": "flatpak-cpm/libdisplaydevice",
+    "disable-submodules": true
+  }
+]

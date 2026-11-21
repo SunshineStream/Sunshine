@@ -1,0 +1,15 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "github-tags",
+      "depName": "wayland/wayland-protocols",
+      "packageName": "LizardByte-infrastructure/wayland-protocols"
+    },
+    "url": "https://github.com/LizardByte-infrastructure/wayland-protocols.git",
+    "tag": "1.50",
+    "commit": "3eab2dccf4bfdd85c16d312a6c8c8fbc2a6e73a8",
+    "dest": "flatpak-cpm/wayland_protocols",
+    "disable-submodules": true
+  }
+]

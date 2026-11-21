@@ -18,8 +18,8 @@
 #include <vector>
 
 // lib includes
-#include <Simple-Web-Server/client_http.hpp>
-#include <Simple-Web-Server/server_http.hpp>
+#include <client_http.hpp>
+#include <server_http.hpp>
 
 // local includes
 #include <src/config.h>

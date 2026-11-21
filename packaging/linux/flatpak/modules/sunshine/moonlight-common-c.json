@@ -1,0 +1,14 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "git-refs",
+      "depName": "moonlight-stream/moonlight-common-c",
+      "versioning": "exact",
+      "ref": "master"
+    },
+    "url": "https://github.com/moonlight-stream/moonlight-common-c.git",
+    "commit": "94c65fd364d17b223f00a8763c9a5d94a66cb8dd",
+    "dest": "flatpak-cpm/moonlight-common-c"
+  }
+]

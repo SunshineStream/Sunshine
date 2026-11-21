@@ -1,0 +1,15 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "git-refs",
+      "depName": "LizardByte-infrastructure/Simple-Web-Server",
+      "versioning": "exact",
+      "ref": "master"
+    },
+    "url": "https://github.com/LizardByte-infrastructure/Simple-Web-Server.git",
+    "commit": "546895a93a29062bb178367b46c7afb72da9881e",
+    "dest": "flatpak-cpm/simple_web_server",
+    "disable-submodules": true
+  }
+]

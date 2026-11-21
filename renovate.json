@@ -3,5 +3,15 @@
   "extends": [
     "local>LizardByte/.github:renovate-config"
   ],
+  "customManagers": [
+    {
+      "description": "Track Flatpak Git commits with the branch stored in x-renovate metadata",
+      "customType": "regex",
+      "managerFilePatterns": ["packaging/linux/flatpak/modules/sunshine/*.json"],
+      "matchStrings": [
+        "\"x-renovate\"\\s*:\\s*\\{\\s*\"datasource\"\\s*:\\s*\"(?<datasource>git-refs)\"\\s*,\\s*\"depName\"\\s*:\\s*\"(?<depName>[^\"]+)\"\\s*,\\s*\"versioning\"\\s*:\\s*\"(?<versioning>[^\"]+)\"\\s*,\\s*\"ref\"\\s*:\\s*\"(?<currentValue>[^\"]+)\"\\s*\\}\\s*,\\s*\"url\"\\s*:\\s*\"(?<packageName>[^\"]+)\"\\s*,\\s*\"commit\"\\s*:\\s*\"(?<currentDigest>[a-fA-F0-9]{40})\""
+      ]
+    }
+  ],
   "forkProcessing": "enabled"
 }

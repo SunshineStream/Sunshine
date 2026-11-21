@@ -14,7 +14,7 @@
 // lib includes
 #include <libvirtualhid/license.hpp>
 #include <nlohmann/json.hpp>
-#include <Simple-Web-Server/server_https.hpp>
+#include <server_https.hpp>
 
 // local includes
 #include "thread_safe.h"

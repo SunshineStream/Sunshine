@@ -20,7 +20,7 @@
 // lib includes
 #include <boost/property_tree/ptree.hpp>
 #include <nlohmann/json.hpp>
-#include <Simple-Web-Server/server_https.hpp>
+#include <server_https.hpp>
 
 // local includes
 #include "crypto.h"

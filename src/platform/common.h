@@ -29,7 +29,7 @@
 #include "src/video_colorspace.h"
 
 extern "C" {
-#include <moonlight-common-c/src/Limelight.h>
+#include <Limelight.h>
 }
 
 using namespace std::literals;

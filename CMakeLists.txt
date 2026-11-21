@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 # `CMAKE_CUDA_ARCHITECTURES` requires 3.18
 # `set_source_files_properties` requires 3.18
 # `cmake_path(CONVERT ... TO_NATIVE_PATH_LIST ...)` requires 3.20
-# `third-party/libvirtualhid` requires 3.24
+# libvirtualhid requires 3.24
 # todo - set this conditionally
 
 project(Sunshine VERSION 0.0.0
@@ -76,11 +76,6 @@ include(${CMAKE_MODULE_PATH}/prep/special_package_configuration.cmake)
 if(${END_BUILD})
     return()
 endif()
-
-# Build-deps owns the dependency versions shared with its FFmpeg builds.
-# Include its lock only for full builds so manifest-only configurations do not
-# require the build-deps submodule.
-include(${CMAKE_CURRENT_SOURCE_DIR}/third-party/build-deps/package-lock.cmake)
 
 # project constants
 include(${CMAKE_MODULE_PATH}/prep/constants.cmake)

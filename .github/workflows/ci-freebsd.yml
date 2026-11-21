@@ -110,7 +110,7 @@ jobs:
               --python "/usr/local/bin/python${PYTHON_VERSION}" \
               --no-python-downloads \
               --no-install-project
-            # uv.lock pins external artifacts; the reviewed vendored glad2 build hook is required.
+            # uv.lock pins the source artifact for MarkupSafe, which has no FreeBSD wheel.
             uv sync "$@"  # NOSONAR(githubactions:S8541, githubactions:S8544)
             set -- \
               --project third-party/lizardbyte-common \

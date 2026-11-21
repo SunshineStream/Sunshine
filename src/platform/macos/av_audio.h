@@ -21,7 +21,7 @@
 #include <functional>
 
 // lib includes
-#include "third-party/TPCircularBuffer/TPCircularBuffer.h"
+#include <TPCircularBuffer.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
