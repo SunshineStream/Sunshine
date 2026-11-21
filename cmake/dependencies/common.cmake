@@ -17,14 +17,14 @@ add_subdirectory("${moonlight-common-c_SOURCE_DIR}/enet" "${moonlight-common-c_B
 # web server
 CPMGetPackage(simple_web_server)
 
-# Keep dependency-qualified includes independent of CPM and Flatpak checkout directory names.
 set(SUNSHINE_DEPENDENCY_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/dependency-include")
+
+# Forward each header in ARGN from source_dir into include_prefix to preserve qualified includes.
 function(sunshine_forward_dependency_headers source_dir include_prefix)
     foreach(header IN LISTS ARGN)
-        file(CONFIGURE
+        file(GENERATE
                 OUTPUT "${SUNSHINE_DEPENDENCY_INCLUDE_DIR}/${include_prefix}/${header}"
-                CONTENT "#include \"@source_dir@/@header@\"\n"
-                @ONLY)
+                CONTENT "#include \"${source_dir}/${header}\"\n")
     endforeach()
 endfunction()
 
