@@ -191,7 +191,7 @@ Options:
   --cuda-patches           Apply cuda patches. Enabled automatically on Ubuntu 26.04.
   --cuda-runfile           Force CUDA installation from the NVIDIA runfile.
   --cuda-system-package=*  The CUDA package to install when system CUDA is enabled.
-                           Defaults: cuda-toolkit-13-1 on Ubuntu 26.04, cuda-toolkit-13-3 on 26.10.
+                           Opt in on Ubuntu 26.04/26.10 instead of using the NVIDIA runfile.
   --num-processors         The number of processors to use for compilation. Default is the value of 'nproc'.
   --publisher-name         The name of the publisher (not developer) of the application.
   --publisher-website      The URL of the publisher's website.
@@ -928,27 +928,16 @@ case "${distro}:${version}" in
     gcc_version="14"
     nvm_node=0
     ;;
-  "${DISTRO_UBUNTU}":26.04)
+  "${DISTRO_UBUNTU}":26.04|"${DISTRO_UBUNTU}":26.10)
     package_update_command="${sudo_cmd} apt-get update"
     package_install_command="${sudo_cmd} apt-get install -y"
-    cuda_patches=1
-    if [[ "$force_cuda_runfile" == 0 ]]; then
-      cuda_system_package=1
-      if [[ -z "$cuda_system_package_name" ]]; then
-        cuda_system_package_name="cuda-toolkit-13-1"
-      fi
+    if [[ "$version" == "26.04" ]]; then
+      cuda_patches=1
     fi
-    gcc_version="14"
-    nvm_node=0
-    ;;
-  "${DISTRO_UBUNTU}":26.10)
-    package_update_command="${sudo_cmd} apt-get update"
-    package_install_command="${sudo_cmd} apt-get install -y"
-    if [[ "$force_cuda_runfile" == 0 ]]; then
+    if [[ "$force_cuda_runfile" == 0 && -n "$cuda_system_package_name" ]]; then
       cuda_system_package=1
-      if [[ -z "$cuda_system_package_name" ]]; then
-        cuda_system_package_name="cuda-toolkit-13-3"
-      fi
+    else
+      force_cuda_runfile=1
     fi
     gcc_version="14"
     nvm_node=0
