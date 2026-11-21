@@ -7,15 +7,13 @@
 #include <array>
 #include <thread>
 
-// Use Sunshine's existing FFmpeg linkage for Dolby audio encoding.
+// lib includes
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/frame.h>
 }
-
-// lib includes
 #include <opus/opus_multistream.h>
 
 // local includes
