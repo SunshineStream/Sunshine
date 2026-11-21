@@ -202,16 +202,16 @@ TEST(RtspAnnounceResponseTest, SerializesDolbyCodecAndLegacyOpusResponses) {
     boost::system::error_code read_error;
     boost::asio::read(client, boost::asio::dynamic_buffer(response), read_error);
     ASSERT_EQ(read_error, boost::asio::error::eof);
-    EXPECT_TRUE(response.starts_with("RTSP/1.0 200 OK\\r\\n"));
-    EXPECT_NE(response.find("CSeq: 73\\r\\n"), std::string::npos);
+    EXPECT_TRUE(response.starts_with("RTSP/1.0 200 OK\r\n"));
+    EXPECT_NE(response.find("CSeq: 73\r\n"), std::string::npos);
 
     const auto codec_header = response.find("X-SS-Audio-Codec:");
     if (expected_header.empty()) {
       EXPECT_EQ(codec_header, std::string::npos);
-      EXPECT_TRUE(response.ends_with("\\r\\n\\r\\n"));
+      EXPECT_TRUE(response.ends_with("\r\n\r\n"));
     } else {
       ASSERT_NE(codec_header, std::string::npos);
-      EXPECT_NE(response.find(std::string("X-SS-Audio-Codec: ") + std::string(expected_header) + "\\r\\n"), std::string::npos);
+      EXPECT_NE(response.find(std::string("X-SS-Audio-Codec: ") + std::string(expected_header) + "\r\n"), std::string::npos);
     }
   }
 }
