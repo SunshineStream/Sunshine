@@ -123,10 +123,10 @@ BuildRequires: gcc14-c++
 BuildRequires: gcc15
 BuildRequires: gcc15-c++
 %global gcc_version 15
-%global cuda_version 13.1.1
-%global cuda_build 590.48.01
-%global cuda_redist_compiler_version 13.1.115
-%global cuda_redist_runtime_version 13.1.80
+%global cuda_version 13.5.0
+%global cuda_redist_compiler_version 13.5.37
+%global cuda_redist_cccl_version 13.3.5.0.6
+%global cuda_redist_culibos_version 13.5.25
 %global cuda_use_redistributables 1
 %endif
 %endif
@@ -135,10 +135,10 @@ BuildRequires: gcc15-c++
 BuildRequires: gcc15
 BuildRequires: gcc15-c++
 %global gcc_version 15
-%global cuda_version 13.1.1
-%global cuda_build 590.48.01
-%global cuda_redist_compiler_version 13.1.115
-%global cuda_redist_runtime_version 13.1.80
+%global cuda_version 13.5.0
+%global cuda_redist_compiler_version 13.5.37
+%global cuda_redist_cccl_version 13.3.5.0.6
+%global cuda_redist_culibos_version 13.5.25
 %global cuda_use_redistributables 1
 %endif
 
@@ -258,10 +258,10 @@ function install_cuda_from_redistributables() {
   local cuda_components=(
     "cuda_nvcc:%{cuda_redist_compiler_version}:root"
     "libnvvm:%{cuda_redist_compiler_version}:root"
-    "cuda_cccl:%{cuda_redist_compiler_version}:target"
+    "cccl:%{cuda_redist_cccl_version}:target"
     "cuda_crt:%{cuda_redist_compiler_version}:target"
-    "cuda_cudart:%{cuda_redist_runtime_version}:target"
-    "cuda_culibos:%{cuda_redist_compiler_version}:target"
+    "cuda_cudart:%{cuda_redist_compiler_version}:target"
+    "cuda_culibos:%{cuda_redist_culibos_version}:target"
     "libnvptxcompiler:%{cuda_redist_compiler_version}:target"
   )
 
@@ -333,29 +333,13 @@ function install_cuda() {
   rm "%{_builddir}/cuda.run"
 %endif
 
-  # we need to patch math_functions.h depending on the CUDA major version
-  # see https://forums.developer.nvidia.com/t/error-exception-specification-is-incompatible-for-cospi-sinpi-cospif-sinpif-with-glibc-2-41/323591/3
-  local cuda_major
-  cuda_major=$(echo "%{cuda_version}" | cut -d. -f1)
-  local patch_file=""
-  if [ "${cuda_major}" -eq 12 ]; then
-    # CUDA 12.x: the extern declarations lack noexcept(true); add it to match glibc 2.41.
-    patch_file="cuda-12-math_functions.patch"
-  elif [ "${cuda_major}" -eq 13 ]; then
-    # CUDA 13.x: the extern declarations already have noexcept(true), but the __func__()
-    # macro invocations at the bottom still lack it, causing a redeclaration conflict.
-    patch_file="cuda-13-math_functions.patch"
-  else
-    echo "Warning: no math_functions.h patch available for CUDA ${cuda_major}.x, skipping."
-  fi
-
-  if [ -n "${patch_file}" ]; then
-    echo "Applying CUDA patch: ${patch_file}"
+  # CUDA 12 needs the glibc 2.41 exception-specifier workaround. CUDA 13.5 already supplies it.
+  if [[ "%{cuda_version}" == 12.* ]]; then
     patch -p2 \
       --backup \
       --directory="%{cuda_dir}" \
       --verbose \
-      < "%{_builddir}/Sunshine/packaging/linux/patches/${architecture}/${patch_file}"
+      < "%{_builddir}/Sunshine/packaging/linux/patches/${architecture}/cuda-12-math_functions.patch"
   fi
 }
 
