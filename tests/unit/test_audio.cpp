@@ -3,14 +3,14 @@
  * @brief Test src/audio.*.
  */
 
+// test includes
+#include "../tests_common.h"
+
 // standard includes
 #include <array>
 #include <string_view>
 #include <utility>
 #include <vector>
-
-// test includes
-#include "../tests_common.h"
 
 // local includes
 #include <src/audio.h>
