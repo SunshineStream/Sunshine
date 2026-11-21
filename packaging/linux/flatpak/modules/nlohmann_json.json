@@ -8,8 +8,18 @@
   "sources": [
     {
       "type": "archive",
+      "x-renovate": {
+        "datasource": "github-release-attachments",
+        "depName": "nlohmann/json",
+        "versioning": "semver"
+      },
       "url": "https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz",
-      "sha256": "d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d"
+      "sha256": "d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d",
+      "x-checker-data": {
+        "type": "github",
+        "repo": "nlohmann/json",
+        "asset-name": "json.tar.xz"
+      }
     }
   ]
 }

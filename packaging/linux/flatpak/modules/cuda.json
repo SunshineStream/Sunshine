@@ -30,9 +30,18 @@
       ],
       "sources": [
         {
-          "type": "archive",
-          "url": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz",
-          "sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a"
+          "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "GNOME/libxml2",
+            "versioning": "regex:^v(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
+          "url": "https://github.com/GNOME/libxml2.git",
+          "tag": "v2.13.9",
+          "commit": "04af2cabb9f859c198b8a553c028a87481199410",
+          "x-checker-data": {
+            "type": "git"
+          }
         }
       ]
     }
@@ -43,18 +52,36 @@
       "only-arches": [
         "x86_64"
       ],
+      "x-renovate": {
+        "depName": "cuda",
+        "enabled": false
+      },
       "url": "https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_595.45.04_linux.run",
       "sha256": "c599b651582c8f345ebde7bcf089b7dcfcd8afd7d3ea7f50525698c563a239d7",
-      "dest-filename": "cuda.run"
+      "dest-filename": "cuda.run",
+      "x-checker-data": {
+        "type": "html",
+        "url": "https://developer.nvidia.com/cuda-downloads",
+        "pattern": "(https://developer[.]download[.]nvidia[.]com/compute/cuda/([0-9]+[.][0-9]+[.][0-9]+)/local_installers/cuda_[0-9]+[.][0-9]+[.][0-9]+(?:_[0-9.]+)?_linux[.]run)"
+      }
     },
     {
       "type": "file",
       "only-arches": [
         "aarch64"
       ],
+      "x-renovate": {
+        "depName": "cuda",
+        "enabled": false
+      },
       "url": "https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_595.45.04_linux_sbsa.run",
       "sha256": "9684ebc64988f71ef1c70846cc9d158fb27950c1355bf37c8795c346346b6a72",
-      "dest-filename": "cuda.run"
+      "dest-filename": "cuda.run",
+      "x-checker-data": {
+        "type": "html",
+        "url": "https://developer.nvidia.com/cuda-downloads",
+        "pattern": "(https://developer[.]download[.]nvidia[.]com/compute/cuda/([0-9]+[.][0-9]+[.][0-9]+)/local_installers/cuda_[0-9]+[.][0-9]+[.][0-9]+(?:_[0-9.]+)?_linux_sbsa[.]run)"
+      }
     }
   ]
 }

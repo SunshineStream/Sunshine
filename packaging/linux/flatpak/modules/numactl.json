@@ -3,6 +3,11 @@
   "sources": [
     {
       "type": "git",
+      "x-renovate": {
+        "datasource": "github-tags",
+        "depName": "numactl/numactl",
+        "versioning": "semver"
+      },
       "url": "https://github.com/numactl/numactl.git",
       "tag": "v2.0.19",
       "commit": "3bc85e37d5a30da6790cb7e8bb488bb8f679170f",

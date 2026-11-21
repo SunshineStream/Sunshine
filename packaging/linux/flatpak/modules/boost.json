@@ -9,8 +9,19 @@
   "sources": [
     {
       "type": "archive",
+      "x-renovate": {
+        "datasource": "github-release-attachments",
+        "depName": "boostorg/boost",
+        "versioning": "regex:^boost-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)(?<prerelease>[.][A-Za-z0-9.-]+)?$"
+      },
       "url": "https://github.com/boostorg/boost/releases/download/boost-1.92.0/boost-1.92.0-cmake.tar.xz",
-      "sha256": "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d"
+      "sha256": "9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d",
+      "x-checker-data": {
+        "type": "json",
+        "url": "https://api.github.com/repos/boostorg/boost/releases?per_page=30",
+        "version-query": "map(select((.draft or .prerelease | not) and (.tag_name | test(\"^boost-[0-9]+[.][0-9]+[.][0-9]+$\")))) | first | .tag_name",
+        "url-query": ".[] | select(.tag_name == $version) | .assets[] | select(.name == ($version + \"-cmake.tar.xz\")) | .browser_download_url"
+      }
     }
   ]
 }
