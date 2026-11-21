@@ -20,7 +20,7 @@
         "type": "json",
         "url": "https://api.github.com/repos/boostorg/boost/releases?per_page=30",
         "version-query": "map(select((.draft or .prerelease | not) and (.tag_name | test(\"^boost-[0-9]+[.][0-9]+[.][0-9]+$\")))) | first | .tag_name",
-        "url-query": "map(select((.draft or .prerelease | not) and (.tag_name | test(\"^boost-[0-9]+[.][0-9]+[.][0-9]+$\")))) | first | .assets[] | select(.name == ($version + \"-cmake.tar.xz\")) | .browser_download_url"
+        "url-query": ".[] | select(.tag_name == $version) | .assets[] | select(.name == ($version + \"-cmake.tar.xz\")) | .browser_download_url"
       }
     }
   ]
