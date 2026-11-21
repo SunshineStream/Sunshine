@@ -1,0 +1,95 @@
+---
+name: Windows display persistence diagnostics (#5942)
+permissions: {}
+
+on:
+  pull_request:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+    paths:
+      - .github/workflows/diagnostics-5942.yml
+      - .github/diagnostics/sunshine-5942/**
+
+jobs:
+  build_ab:
+    name: Windows AMD64 diagnostic A/B
+    if: >-
+      github.event.pull_request.head.ref == 'diagnostics/5942-windows-display-persistence' &&
+      (github.event.pull_request.head.repo.full_name == 'SunshineStream/Sunshine' ||
+        github.event.pull_request.head.repo.full_name == 'ReenigneArcher/Sunshine')
+    runs-on: windows-2022
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout diagnostic kit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/diagnostics/sunshine-5942
+
+      - name: Setup UCRT64
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e  # v2.33.0
+        with:
+          msystem: ucrt64
+          update: true
+          install: >-
+            git
+            unzip
+            mingw-w64-ucrt-x86_64-boost
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-cppwinrt
+            mingw-w64-ucrt-x86_64-curl-winssl
+            mingw-w64-ucrt-x86_64-doxygen
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-graphviz
+            mingw-w64-ucrt-x86_64-MinHook
+            mingw-w64-ucrt-x86_64-miniupnpc
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-nlohmann-json
+            mingw-w64-ucrt-x86_64-onevpl
+            mingw-w64-ucrt-x86_64-openssl
+            mingw-w64-ucrt-x86_64-opus
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-qt6-static
+            mingw-w64-ucrt-x86_64-toolchain
+
+      - name: Setup native Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
+        with:
+          node-version: 'lts/*'
+          package-manager-cache: false
+
+      - name: Setup Python
+        id: setup-python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: '3.14'
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        with:
+          enable-cache: false
+
+      - name: Build and package both variants
+        shell: msys2 {0}
+        env:
+          MSYS2_PATH_TYPE: inherit
+          UV_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: |
+          set -euo pipefail
+          kit="$(cygpath "$RUNNER_TEMP")/sunshine-5942"
+          mkdir "$kit"
+          cp .github/diagnostics/sunshine-5942/{build-ab.sh,README.md} "$kit"
+          # Do not copy the Windows worktree representation of the patch.
+          git show HEAD:.github/diagnostics/sunshine-5942/persistence.patch > "$kit/persistence.patch"
+          bash "$kit/build-ab.sh"
+
+      - name: Upload matching diagnostic ZIPs and provenance
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: sunshine-5942-windows-amd64-diagnostic-pair
+          path: ${{ runner.temp }}/sunshine-5942/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
