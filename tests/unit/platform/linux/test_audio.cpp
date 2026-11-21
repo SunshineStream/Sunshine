@@ -10,6 +10,8 @@
 
   // standard includes
   #include <chrono>
+  #include <cstdint>
+  #include <functional>
   #include <vector>
 
   // lib includes
@@ -36,6 +38,15 @@ namespace platf {
      * @param userdata Alarm receiving the translated result.
      */
     void success_cb(pa_context *, int status, void *userdata);
+
+    /**
+     * @brief Make sure one of Sunshine's virtual sinks exists, loading it if it isn't listed.
+     * @param found Whether the sink is in the sink list.
+     * @param module_index Index of the module that owns the sink; set when the sink is loaded here.
+     * @param load Loads the sink and returns its module index, or PA_INVALID_INDEX on failure.
+     * @return `true` when the sink exists afterwards.
+     */
+    bool ensure_null_sink(bool found, std::uint32_t &module_index, const std::function<std::uint32_t()> &load);
   }  // namespace pa
 }  // namespace platf
 
@@ -153,6 +164,66 @@ TEST(LinuxAudioCallbackTest, TranslatesSuccessAndFailureWithoutContext) {
     ASSERT_TRUE(alarm.status().has_value());
     EXPECT_EQ(*alarm.status(), status == 0 ? 1 : 0);
   }
+}
+
+/**
+ * @brief A listed sink with no owner module (a native PipeWire node) is used as is.
+ *
+ * Loading it again would create a second sink with the same name, and Sunshine would fall back
+ * to capturing the host sink's monitor.
+ */
+TEST(LinuxAudioNullSinkTest, UsesListedSinkWithoutOwnerModule) {
+  std::uint32_t module_index = PA_INVALID_INDEX;
+  int loads = 0;
+
+  EXPECT_TRUE(platf::pa::ensure_null_sink(true, module_index, [&loads]() {
+    ++loads;
+    return 7u;
+  }));
+  EXPECT_EQ(loads, 0);
+  EXPECT_EQ(module_index, PA_INVALID_INDEX);
+}
+
+/**
+ * @brief A listed sink owned by a module keeps that module, so it is still unloaded on shutdown.
+ */
+TEST(LinuxAudioNullSinkTest, KeepsOwnerModuleOfListedSink) {
+  std::uint32_t module_index = 42;
+  int loads = 0;
+
+  EXPECT_TRUE(platf::pa::ensure_null_sink(true, module_index, [&loads]() {
+    ++loads;
+    return 7u;
+  }));
+  EXPECT_EQ(loads, 0);
+  EXPECT_EQ(module_index, 42u);
+}
+
+/**
+ * @brief A sink that isn't listed is loaded once, and its module is kept for unloading.
+ */
+TEST(LinuxAudioNullSinkTest, LoadsMissingSink) {
+  std::uint32_t module_index = PA_INVALID_INDEX;
+  int loads = 0;
+
+  EXPECT_TRUE(platf::pa::ensure_null_sink(false, module_index, [&loads]() {
+    ++loads;
+    return 7u;
+  }));
+  EXPECT_EQ(loads, 1);
+  EXPECT_EQ(module_index, 7u);
+}
+
+/**
+ * @brief A sink that fails to load is reported missing.
+ */
+TEST(LinuxAudioNullSinkTest, ReportsSinkThatFailsToLoad) {
+  std::uint32_t module_index = PA_INVALID_INDEX;
+
+  EXPECT_FALSE(platf::pa::ensure_null_sink(false, module_index, []() {
+    return static_cast<std::uint32_t>(PA_INVALID_INDEX);
+  }));
+  EXPECT_EQ(module_index, PA_INVALID_INDEX);
 }
 
 #endif  // __linux__
