@@ -74,9 +74,8 @@ These GPUs can still have an NVENC hardware encoder, but that does not make the 
 compatible with them. Installing a different CUDA Toolkit alongside a prebuilt package does not change those kernels.
 
 Use [NVIDIA's GPU list](https://developer.nvidia.com/cuda-gpus) to check your GPU's compute capability.
-Toolkit versions can vary by package. For example, the Copr build configuration for Fedora 43 and earlier uses CUDA
-12.9, not CUDA 13. Use an NVIDIA driver compatible with the package's toolkit and your GPU; see
-[NVIDIA's CUDA compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/).
+Toolkit versions can vary by package. Use an NVIDIA driver compatible with the package's toolkit and your GPU;
+see [NVIDIA's CUDA compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/).
 
 #### Alpine Linux
 
