@@ -30,17 +30,17 @@
       ],
       "sources": [
         {
-          "type": "archive",
+          "type": "git",
           "x-renovate": {
-            "depName": "libxml2",
-            "enabled": false
+            "datasource": "github-tags",
+            "depName": "GNOME/libxml2",
+            "versioning": "regex:^v(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
           },
-          "url": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz",
-          "sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a",
+          "url": "https://github.com/GNOME/libxml2.git",
+          "tag": "v2.13.9",
+          "commit": "04af2cabb9f859c198b8a553c028a87481199410",
           "x-checker-data": {
-            "type": "gnome",
-            "name": "libxml2",
-            "stable-only": true
+            "type": "git"
           }
         }
       ]
