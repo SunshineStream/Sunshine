@@ -348,6 +348,14 @@ watch(
               v-model="config.native_pen_touch"
               default="true"
     ></Checkbox>
+
+    <!-- Input only mode -->
+    <Checkbox class="mb-3"
+              id="enable_input_only_mode"
+              locale-prefix="config"
+              v-model="config.enable_input_only_mode"
+              default="false"
+    ></Checkbox>
   </div>
 </template>
 

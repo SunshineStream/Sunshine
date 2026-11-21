@@ -51,6 +51,8 @@ namespace video {
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
+
+    bool input_only;  ///< Input-only session: encode one blank IDR frame, then idle without capturing video.
   };
 
   /**
@@ -243,6 +245,26 @@ namespace video {
    * @return Capture timestamp of the packet's frame, when known.
    */
   std::optional<std::chrono::steady_clock::time_point> match_frame_timestamp(frame_timestamp_queue_t &timestamps, int64_t pts);
+
+  /**
+   * @brief Fill an image buffer with opaque black pixels.
+   *
+   * Capture backends may hand out uninitialized buffers, or buffers with a zeroed alpha
+   * channel, for `dummy_img()`. Such a frame decodes as a green screen on some clients, so
+   * anything that is meant to be shown as a blank placeholder must be normalized first.
+   *
+   * Packed BGRA/xRGB images (`pixel_pitch == 4`) and planar NV12 images (`pixel_pitch == 1`,
+   * where the half-height interleaved UV plane directly follows the Y plane) are supported.
+   * Any other layout, or a descriptor that is unusable (no buffer, degenerate dimensions, or a
+   * row pitch too small to hold a row of pixels), is left untouched.
+   *
+   * Images whose `data` is not a CPU-writable buffer (`img_t::is_cpu_buffer()` returns false)
+   * are skipped, because writing through an opaque GPU resource would corrupt it. Those
+   * backends render blank frames as black in their own conversion path.
+   *
+   * @param img Image to fill in place.
+   */
+  void fill_blank_image(platf::img_t &img);
 
   /**
    * @brief Pixel formats supported by one encoder backend.

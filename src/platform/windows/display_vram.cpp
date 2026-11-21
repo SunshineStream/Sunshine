@@ -189,6 +189,15 @@ namespace platf::dxgi {
     // DXGI format of this image texture
     DXGI_FORMAT format;  ///< DXGI format of the captured texture.
 
+    /**
+     * @brief Report that `data` is an opaque D3D11 texture rather than CPU pixels.
+     *
+     * @return Always false; blank frames are produced by the conversion path.
+     */
+    bool is_cpu_buffer() const override {
+      return false;
+    }
+
     virtual ~img_d3d_t() override {
       if (encoder_texture_handle) {
         CloseHandle(encoder_texture_handle);
@@ -502,64 +511,72 @@ namespace platf::dxgi {
       }
 
       auto &img = (img_d3d_t &) img_base;
-      if (!img.blank) {
-        auto &img_ctx = img_ctx_map[img.id];
 
-        // Open the shared capture texture with our ID3D11Device
-        if (initialize_image_context(img, img_ctx)) {
-          return -1;
+      auto draw = [&](auto &input, auto &y_or_yuv_viewports, auto &uv_viewport) {
+        device_ctx->PSSetShaderResources(0, 1, &input);
+
+        // Draw Y/YUV
+        device_ctx->OMSetRenderTargets(1, &out_Y_or_YUV_rtv, nullptr);
+        device_ctx->VSSetShader(convert_Y_or_YUV_vs.get(), nullptr, 0);
+        device_ctx->PSSetShader(img.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? convert_Y_or_YUV_fp16_ps.get() : convert_Y_or_YUV_ps.get(), nullptr, 0);
+        auto viewport_count = (format == DXGI_FORMAT_R16_UINT) ? 3 : 1;
+        assert(viewport_count <= y_or_yuv_viewports.size());
+        device_ctx->RSSetViewports(viewport_count, y_or_yuv_viewports.data());
+        device_ctx->Draw(3 * viewport_count, 0);  // vertex shader will spread vertices across viewports
+
+        // Draw UV if needed
+        if (out_UV_rtv) {
+          assert(format == DXGI_FORMAT_NV12 || format == DXGI_FORMAT_P010);
+          device_ctx->OMSetRenderTargets(1, &out_UV_rtv, nullptr);
+          device_ctx->VSSetShader(convert_UV_vs.get(), nullptr, 0);
+          device_ctx->PSSetShader(img.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? convert_UV_fp16_ps.get() : convert_UV_ps.get(), nullptr, 0);
+          device_ctx->RSSetViewports(1, &uv_viewport);
+          device_ctx->Draw(3, 0);
         }
 
-        // Acquire encoder mutex to synchronize with capture code
-        auto status = img_ctx.encoder_mutex->AcquireSync(0, INFINITE);
-        if (status != S_OK) {
-          BOOST_LOG(error) << "Failed to acquire encoder mutex [0x"sv << util::hex(status).to_string_view() << ']';
-          return -1;
-        }
-
-        auto draw = [&](auto &input, auto &y_or_yuv_viewports, auto &uv_viewport) {
-          device_ctx->PSSetShaderResources(0, 1, &input);
-
-          // Draw Y/YUV
-          device_ctx->OMSetRenderTargets(1, &out_Y_or_YUV_rtv, nullptr);
-          device_ctx->VSSetShader(convert_Y_or_YUV_vs.get(), nullptr, 0);
-          device_ctx->PSSetShader(img.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? convert_Y_or_YUV_fp16_ps.get() : convert_Y_or_YUV_ps.get(), nullptr, 0);
-          auto viewport_count = (format == DXGI_FORMAT_R16_UINT) ? 3 : 1;
-          assert(viewport_count <= y_or_yuv_viewports.size());
-          device_ctx->RSSetViewports(viewport_count, y_or_yuv_viewports.data());
-          device_ctx->Draw(3 * viewport_count, 0);  // vertex shader will spread vertices across viewports
-
-          // Draw UV if needed
-          if (out_UV_rtv) {
-            assert(format == DXGI_FORMAT_NV12 || format == DXGI_FORMAT_P010);
-            device_ctx->OMSetRenderTargets(1, &out_UV_rtv, nullptr);
-            device_ctx->VSSetShader(convert_UV_vs.get(), nullptr, 0);
-            device_ctx->PSSetShader(img.format == DXGI_FORMAT_R16G16B16A16_FLOAT ? convert_UV_fp16_ps.get() : convert_UV_ps.get(), nullptr, 0);
-            device_ctx->RSSetViewports(1, &uv_viewport);
-            device_ctx->Draw(3, 0);
-          }
-        };
-
-        // Clear render target view(s) once so that the aspect ratio mismatch "bars" appear black
-        if (!rtvs_cleared) {
-          auto black = create_black_texture_for_rtv_clear();
-          if (black) {
-            draw(black, out_Y_or_YUV_viewports_for_clear, out_UV_viewport_for_clear);
-          }
-          rtvs_cleared = true;
-        }
-
-        // Draw captured frame
-        draw(img_ctx.encoder_input_res, out_Y_or_YUV_viewports, out_UV_viewport);
-
-        // Release encoder mutex to allow capture code to reuse this image
-        img_ctx.encoder_mutex->ReleaseSync(0);
-
+        // Unbind the input view so the capture texture is not held as a shader resource.
         ID3D11ShaderResourceView *emptyShaderResourceView = nullptr;
         device_ctx->PSSetShaderResources(0, 1, &emptyShaderResourceView);
-      }
+      };
 
-      return 0;
+      // Initialize the render target views once so that the aspect ratio mismatch "bars"
+      // appear black. This must not depend on the frame having content: input-only sessions
+      // only ever submit blank images, and integer RTV formats can only be cleared by drawing.
+      return convert_d3d_frame(
+        rtvs_cleared,
+        img.blank,
+        [&]() -> bool {
+          auto black = create_black_texture_for_rtv_clear();
+          if (!black) {
+            return false;
+          }
+          draw(black, out_Y_or_YUV_viewports_for_clear, out_UV_viewport_for_clear);
+          return true;
+        },
+        [&]() -> int {
+          auto &img_ctx = img_ctx_map[img.id];
+
+          // Open the shared capture texture with our ID3D11Device
+          if (initialize_image_context(img, img_ctx)) {
+            return -1;
+          }
+
+          // Acquire encoder mutex to synchronize with capture code
+          auto status = img_ctx.encoder_mutex->AcquireSync(0, INFINITE);
+          if (status != S_OK) {
+            BOOST_LOG(error) << "Failed to acquire encoder mutex [0x"sv << util::hex(status).to_string_view() << ']';
+            return -1;
+          }
+
+          // Draw captured frame
+          draw(img_ctx.encoder_input_res, out_Y_or_YUV_viewports, out_UV_viewport);
+
+          // Release encoder mutex to allow capture code to reuse this image
+          img_ctx.encoder_mutex->ReleaseSync(0);
+
+          return 0;
+        }
+      );
     }
 
     /**
@@ -753,19 +770,16 @@ namespace platf::dxgi {
 
       DXGI_FORMAT rtv_Y_or_YUV_format = DXGI_FORMAT_UNKNOWN;
       DXGI_FORMAT rtv_UV_format = DXGI_FORMAT_UNKNOWN;
-      bool rtv_simple_clear = false;
 
       switch (format) {
         case DXGI_FORMAT_NV12:
           rtv_Y_or_YUV_format = DXGI_FORMAT_R8_UNORM;
           rtv_UV_format = DXGI_FORMAT_R8G8_UNORM;
-          rtv_simple_clear = true;
           break;
 
         case DXGI_FORMAT_P010:
           rtv_Y_or_YUV_format = DXGI_FORMAT_R16_UNORM;
           rtv_UV_format = DXGI_FORMAT_R16G16_UNORM;
-          rtv_simple_clear = true;
           break;
 
         case DXGI_FORMAT_AYUV:
@@ -809,7 +823,7 @@ namespace platf::dxgi {
         return -1;
       }
 
-      if (rtv_simple_clear) {
+      if (!requires_drawn_rtv_clear(format)) {
         // Clear the RTVs to ensure the aspect ratio padding is black
         const std::array<float, 4> y_black = {0.0f, 0.0f, 0.0f, 0.0f};
         device_ctx->ClearRenderTargetView(out_Y_or_YUV_rtv.get(), y_black.data());
@@ -819,7 +833,8 @@ namespace platf::dxgi {
         }
         rtvs_cleared = true;
       } else {
-        // Can't use ClearRenderTargetView(), will clear on first convert()
+        // Integer render targets cannot use ClearRenderTargetView(), so convert() draws
+        // the black texture before encoding the first frame (even when it is blank).
         rtvs_cleared = false;
       }
 

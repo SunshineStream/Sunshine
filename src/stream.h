@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
 #include <utility>
 
 // lib includes
@@ -94,5 +95,14 @@ namespace stream {
      * @return PEM certificate associated with the session's client.
      */
     const std::string &client_cert(session_t &session);
+    /**
+     * @brief Return the number of streaming sessions that have not finished teardown.
+     *
+     * This is a non-blocking snapshot that is safe to call from a session teardown
+     * thread, unlike rtsp_stream::session_count() which joins stopping sessions.
+     *
+     * @return Number of live streaming sessions.
+     */
+    std::uint32_t running_session_count();
   }  // namespace session
 }  // namespace stream

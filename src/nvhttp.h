@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -86,6 +87,103 @@ namespace nvhttp {
    * @param cert
    */
   void setup(const std::string &pkey, const std::string &cert);
+
+  /**
+   * @brief Snapshot of the host app state used to handle a resume request.
+   */
+  struct resume_state_t {
+    int app_id {};  ///< Running app id, or 0 when no app is running.
+    bool input_only {};  ///< Whether the running app is the input-only placeholder.
+    bool no_active_sessions {};  ///< Whether no streaming sessions were active after cleanup.
+
+    /**
+     * @brief Report whether a running app can be resumed.
+     *
+     * @return True when an app is running.
+     */
+    constexpr bool can_resume() const noexcept {
+      return app_id > 0;
+    }
+
+    /**
+     * @brief Report whether a resume should reconfigure the display.
+     *
+     * The display is only configured for a resumable app when no session is active and
+     * the app is not the input-only placeholder, which shows no video.
+     *
+     * @return True when the display should be configured for the resumed app.
+     */
+    constexpr bool should_configure_display() const noexcept {
+      return can_resume() && no_active_sessions && !input_only;
+    }
+  };
+
+  /**
+   * @brief Resolve the app state for a resume request.
+   *
+   * Stopping sessions are joined first, because the last input-only session's teardown
+   * can terminate the placeholder. The snapshots must be taken afterwards so a reconnect
+   * cannot resume an app that no longer exists and fall back to desktop capture.
+   *
+   * @return Resolved app id, input-only mode, and active session state.
+   */
+  resume_state_t resolve_resume_state();
+
+  /**
+   * @brief Resolve the app state for a resume request using a supplied session cleanup.
+   *
+   * The cleanup callback runs before the app and mode snapshots are taken. Tests use this
+   * seam to model a stopping session whose teardown terminates the placeholder.
+   *
+   * @param cleanup_stopping_sessions Callback that joins stopping sessions and reports
+   *        whether no active session remains.
+   * @return Resolved app id, input-only mode, and active session state.
+   */
+  resume_state_t resolve_resume_state(const std::function<bool()> &cleanup_stopping_sessions);
+
+  /**
+   * @brief Snapshot of the host state used to handle a launch request.
+   */
+  struct launch_state_t {
+    int app_id {};  ///< Running app id observed after the stopping-session cleanup, or 0 when no app is running.
+    int active_sessions {};  ///< Streaming sessions still active after the cleanup.
+
+    /**
+     * @brief Report whether an input-only launch must execute the placeholder app.
+     *
+     * An input-only session does not conflict with an already running app, but when nothing
+     * is running the placeholder has to be executed for the session to have a host app.
+     *
+     * @return True when no app is running after the cleanup.
+     */
+    constexpr bool should_execute_placeholder() const noexcept {
+      return app_id == 0;
+    }
+  };
+
+  /**
+   * @brief Resolve the host state for a launch request.
+   *
+   * Stopping sessions are joined first, because the last input-only session's teardown
+   * terminates the placeholder. Taking the running-app snapshot afterwards keeps a launch
+   * from trusting a pre-cleanup snapshot, skipping the placeholder, and leaving the new
+   * input-only session with nothing running.
+   *
+   * @return Running app id and active session count observed after the cleanup.
+   */
+  launch_state_t resolve_launch_state();
+
+  /**
+   * @brief Resolve the host state for a launch request using a supplied session cleanup.
+   *
+   * The cleanup callback runs before the running-app snapshot is taken. Tests use this seam
+   * to model a stopping session whose teardown terminates the placeholder.
+   *
+   * @param cleanup_stopping_sessions Callback that joins stopping sessions and reports the
+   *        number of sessions still active afterwards.
+   * @return Running app id and active session count observed after the cleanup.
+   */
+  launch_state_t resolve_launch_state(const std::function<int()> &cleanup_stopping_sessions);
 
   /**
    * @brief Simple-Web-Server HTTPS backend configured for Sunshine certificate handling.

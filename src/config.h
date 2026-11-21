@@ -321,6 +321,8 @@ namespace config {
 
     bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
     bool native_pen_touch;  ///< Enable native pen and touch injection.
+
+    bool enable_input_only_mode;  ///< Advertise an "Input Only" app that streams no video capture while keeping input and audio active.
   };
 
   namespace flag {

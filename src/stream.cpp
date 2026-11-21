@@ -2275,6 +2275,13 @@ namespace stream {
     }
 
     /**
+     * @brief Return the number of streaming sessions that have not finished teardown.
+     */
+    std::uint32_t running_session_count() {
+      return running_sessions;
+    }
+
+    /**
      * @brief Stop the active streaming session and prevent new packets from being queued.
      */
     void stop(session_t &session) {
@@ -2318,11 +2325,23 @@ namespace stream {
 
       // If this is the last session, invoke the platform callbacks
       if (--running_sessions == 0) {
+        // If the only thing running was the synthetic "Input Only" placeholder, there is
+        // no real app to keep alive once the last client disconnects. Terminate it so the
+        // host does not stay stuck reporting a phantom running app.
+        const bool was_input_only = proc::proc.is_input_only_running();
+        if (was_input_only) {
+          proc::proc.terminate();
+        }
+
         bool revert_display_config {config::video.dd.config_revert_on_disconnect};
         if (proc::proc.running()) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
           system_tray::update_tray_pausing(proc::proc.get_last_run_app_name());
 #endif
+        } else if (was_input_only) {
+          // The input-only placeholder never configured the display, so there is nothing to
+          // revert on its account. There are no sessions left, so gamepads can go away too.
+          input::terminate_gamepads();
         } else {
           // We have no app running and also no clients anymore.
           revert_display_config = true;
@@ -2377,7 +2396,10 @@ namespace stream {
       if (++running_sessions == 1) {
         platf::streaming_will_start();
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
-        system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
+        // The "Input Only" placeholder is not a real app, so don't announce it as playing.
+        if (!proc::proc.is_input_only_running()) {
+          system_tray::update_tray_playing(proc::proc.get_last_run_app_name());
+        }
 #endif
       }
 

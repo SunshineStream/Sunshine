@@ -245,6 +245,8 @@
     "dscp_tagging_desc": "Mark audio and video packets with DSCP priority tags when requested by the client. Disabling this may help if audio crackles or stutters on Wi-Fi, as some routers handle tagged traffic poorly.",
     "virtualhid_randomize_mac": "Randomize virtual controller MAC",
     "virtualhid_randomize_mac_desc": "Use a random MAC address for PlayStation-style virtual controllers instead of one based on the controller index. This avoids mixing per-controller settings when controllers are swapped on the client.",
+    "enable_input_only_mode": "Enable Input Only Mode",
+    "enable_input_only_mode_desc": "Adds a special \"Input Only\" app that streams input and audio without screen capture. The video pipeline serves blank frames on request and otherwise idles, minimizing CPU/GPU usage on the host.",
     "encoder": "Force a Specific Encoder",
     "encoder_desc": "Force a specific encoder, otherwise Sunshine will select the best available option. Note: If you specify a hardware encoder on Windows, it must match the GPU where the display is connected.",
     "encoder_software": "Software",
