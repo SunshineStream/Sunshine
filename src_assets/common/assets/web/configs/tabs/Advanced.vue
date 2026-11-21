@@ -59,6 +59,14 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
 
+    <!-- PyroWave Support -->
+    <Checkbox class="mb-3"
+              id="pyrowave"
+              locale-prefix="config"
+              v-model="config.pyrowave"
+              default="true"
+    ></Checkbox>
+
     <!-- Capture -->
     <div class="mb-3" v-if="platform !== 'macos'">
       <label for="capture" class="form-label">{{ $t('config.capture') }}</label>

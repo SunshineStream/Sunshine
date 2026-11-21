@@ -8,6 +8,7 @@
 #include <atomic>
 #include <bitset>
 #include <deque>
+#include <limits>
 #include <list>
 #include <thread>
 #include <utility>
@@ -16,7 +17,9 @@
 #include <boost/pointer_cast.hpp>
 
 extern "C" {
+#include <libavutil/hwcontext.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/intreadwrite.h>
 #include <libavutil/mastering_display_metadata.h>
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
@@ -40,6 +43,12 @@ extern "C" {
 #ifdef _WIN32
 extern "C" {
   #include <libavutil/hwcontext_d3d11va.h>
+}
+#endif
+
+#ifdef SUNSHINE_BUILD_VULKAN
+extern "C" {
+  #include <libavutil/hwcontext_vulkan.h>
 }
 #endif
 
@@ -167,6 +176,10 @@ namespace video {
    * @return Effective stream configuration, downgraded to SDR when HDR is unsupported.
    */
   config_t resolve_dynamic_range(const encoder_t &encoder, config_t config) {
+    // PyroWave profiles are independently probed and validated during ANNOUNCE.
+    if (config.videoFormat == pyrowave::video_format) {
+      return config;
+    }
     if (!config.dynamicRange) {
       return config;
     }
@@ -612,6 +625,967 @@ namespace video {
     std::unique_ptr<platf::nvenc_encode_device_t> device;
     bool force_idr = false;
   };
+
+  namespace pyrowave {
+    size_t frame_budget(const config_t &config) {
+      if (config.bitrate <= 0 || config.framerate <= 0 || config.framerateX100 < 0 || config.packetSize <= int(shard_overhead) || config.packetSize > config::PACKETSIZE_MAX) {
+        return 0;
+      }
+      const auto rate = config.framerateX100 ? uint64_t(config.framerateX100) : uint64_t(config.framerate) * 100;
+      const auto bitrate = config::video.max_bitrate > 0 ? std::min(config.bitrate, config::video.max_bitrate) : config.bitrate;
+      const auto budget = uint64_t(bitrate) * 1000 * 100 / (8 * rate);
+      if (!budget || budget > max_frame_size) {
+        return 0;
+      }
+
+      const auto payload_size = size_t(config.packetSize) - shard_overhead;
+      auto capacity = std::min(max_frame_size, max_frame_packets * payload_size - frame_header_size);
+      // The codec budget already includes the eight-byte sequence and block headers.
+      if (!config.pyrowaveRecordFraming) {
+        // Each native packet is at least eight bytes and needs a four-byte length, plus the packet count.
+        capacity = (capacity - 4) * 2 / 3;
+      } else if (payload_size >= 24 && payload_size % 4 == 0) {
+        // Padding costs at most one record's size plus four bytes per record (minimum eight bytes).
+        // Reserve another payload for the critical/detail boundary: framed size <= 5/2 * budget + payload.
+        capacity = (capacity - payload_size) * 2 / 5;
+      }
+      return std::min(size_t(budget), capacity);
+    }
+
+    bool valid_config(const config_t &config) {
+      return config.videoFormat == video_format &&
+             config.width > 0 && config.width <= 16384 &&
+             config.height > 0 && config.height <= 16384 &&
+             config.packetSize > int(shard_overhead) && config.packetSize <= config::PACKETSIZE_MAX &&
+             (config.dynamicRange == 0 || config.dynamicRange == 1) &&
+             (config.chromaSamplingType == 1 || (config.chromaSamplingType == 0 && config.width % 2 == 0 && config.height % 2 == 0)) &&
+             frame_budget(config) != 0;
+    }
+
+    packet_t frame_packets(std::span<const pyrowave_packet> packets, std::span<const uint8_t> bitstream, const config_t &config, size_t critical_blocks, int64_t frame_index) {
+      if (packets.empty() || packets.size() > std::numeric_limits<uint32_t>::max() || config.packetSize <= int(shard_overhead) || config.packetSize > config::PACKETSIZE_MAX) {
+        return nullptr;
+      }
+      std::vector<uint8_t> output;
+      std::vector<std::span<const uint8_t>> records;
+      if (!config.pyrowaveRecordFraming) {
+        output.resize(4);
+        AV_WL32(output.data(), packets.size());
+      }
+      size_t native_size = 0;
+      for (const auto &packet : packets) {
+        if (!packet.size || packet.size > record_packet_boundary || packet.size % 4 || packet.offset > bitstream.size() || packet.size > bitstream.size() - packet.offset || packet.size > max_frame_size - native_size) {
+          return nullptr;
+        }
+        native_size += packet.size;
+        auto bytes = bitstream.subspan(packet.offset, packet.size);
+        if (!config.pyrowaveRecordFraming) {
+          if (output.size() > max_frame_size - 4 - bytes.size()) {
+            return nullptr;
+          }
+          const auto offset = output.size();
+          output.resize(offset + 4);
+          AV_WL32(output.data() + offset, bytes.size());
+          output.insert(output.end(), bytes.begin(), bytes.end());
+          continue;
+        }
+        while (!bytes.empty()) {
+          if (bytes.size() < 8) {
+            return nullptr;
+          }
+          const auto word = AV_RL32(bytes.data());
+          // Native sequence and block records both have eight-byte headers.
+          const bool sequence = word & 0x80000000u;
+          const size_t size = sequence ? 8 : ((word >> 16) & 0xfffu) * 4;
+          if (sequence != records.empty() || size < 8 || size > bytes.size()) {
+            return nullptr;
+          }
+          records.push_back(bytes.first(size));
+          bytes = bytes.subspan(size);
+        }
+      }
+      if (!config.pyrowaveRecordFraming) {
+        return std::make_unique<packet_raw_generic>(std::move(output), frame_index, true);
+      }
+
+      const auto payload_size = size_t(config.packetSize) - shard_overhead;
+      const bool aligned = payload_size >= 24 && payload_size % 4 == 0;
+      output.reserve(native_size);
+      std::vector<bool> record_starts;
+      auto append = [&](std::span<const uint8_t> bytes) {
+        if (bytes.size() > max_frame_size - output.size()) {
+          return false;
+        }
+        const auto position = output.size() + frame_header_size;
+        if (aligned) {
+          record_starts.resize((position + bytes.size() + payload_size - 1) / payload_size);
+          if (output.empty() || position % payload_size == 0) {
+            record_starts[position / payload_size] = true;
+          }
+        }
+        output.insert(output.end(), bytes.begin(), bytes.end());
+        return true;
+      };
+      auto pad = [&](size_t size) {
+        std::array<uint8_t, 8> padding;
+        AV_WL32(padding.data(), 0xffffffffu);
+        AV_WL32(padding.data() + 4, (size - 8) / 4);
+        if (size > max_frame_size - output.size()) {
+          return false;
+        }
+        append(padding);
+        output.resize(output.size() + size - padding.size());
+        return true;
+      };
+      auto remaining = [&]() {
+        return payload_size - (output.size() + frame_header_size) % payload_size;
+      };
+
+      size_t critical_packets = 0;
+      auto detail = records.end();
+      if (aligned) {
+        detail = std::stable_partition(records.begin() + 1, records.end(), [&](auto record) {
+          return (AV_RL32(record.data() + 4) >> 8) < critical_blocks;
+        });
+        // Put records that must span shards first, preserving recovery for small records.
+        auto oversized = [&](auto record) {
+          return record.size() > payload_size - 8;
+        };
+        std::stable_partition(records.begin() + 1, detail, oversized);
+        std::stable_partition(detail, records.end(), oversized);
+      }
+      for (auto record = records.begin(); record != records.end(); ++record) {
+        if (aligned) {
+          if (record == detail) {
+            if (remaining() != payload_size && !pad(remaining())) {
+              return nullptr;
+            }
+            critical_packets = (output.size() + frame_header_size) / payload_size;
+          }
+          if (record->size() <= payload_size - 8) {
+            if ((record->size() > remaining() || remaining() - record->size() == 4) && !pad(remaining())) {
+              return nullptr;
+            }
+          } else if ((output.size() + frame_header_size + record->size()) % payload_size == payload_size - 4 && !pad(8)) {
+            return nullptr;
+          }
+        }
+        if (!append(*record)) {
+          return nullptr;
+        }
+      }
+      if (aligned && detail == records.end()) {
+        critical_packets = record_starts.size();
+      }
+      if (record_starts.size() > max_frame_packets) {
+        return nullptr;
+      }
+      auto result = std::make_unique<packet_raw_generic>(std::move(output), frame_index, true);
+      result->pyrowave_critical_packets = uint16_t(critical_packets);
+      result->pyrowave_record_starts = std::move(record_starts);
+      return result;
+    }
+
+    /**
+     * @brief Identify the wire capability required by a validated PyroWave configuration.
+     * @param config Validated stream configuration.
+     * @return ServerCodecModeSupport bit for this profile.
+     */
+    uint32_t profile_flag(const config_t &config) {
+      return config.chromaSamplingType ? (config.dynamicRange ? scm_hdr_444 : scm_sdr_444) :
+                                         (config.dynamicRange ? scm_hdr : scm_sdr);
+    }
+
+    bool supported(const config_t &config, uint32_t profiles) {
+      return valid_config(config) && (profiles & profile_flag(config)) != 0;
+    }
+
+    uint32_t probe_profiles(const std::function<bool(const config_t &)> &validate) {
+      config_t probe {1920, 1080, 60, 6000, 200000, 1, 0, 3, video_format, 0, 0, 0};
+      uint32_t profiles = 0;
+      for (int chroma : {0, 1}) {
+        for (int hdr : {0, 1}) {
+          probe.chromaSamplingType = chroma;
+          probe.dynamicRange = hdr;
+          if (validate(probe)) {
+            profiles |= profile_flag(probe);
+            BOOST_LOG(info) << "Found PyroWave encoder (" << (hdr ? "HDR" : "SDR") << ", " << (chroma ? "4:4:4" : "4:2:0") << ')';
+          }
+        }
+      }
+      return profiles;
+    }
+
+    AVPixelFormat capture_format(const encoder_platform_formats_t &formats, const config_t &config) {
+      // The shared D3D11 converter supports packed 4:4:4 independently of the hardware video encoder.
+      if (formats.dev_type == platf::mem_type_e::dxgi) {
+        return config.chromaSamplingType ? (config.dynamicRange ? AV_PIX_FMT_XV30 : AV_PIX_FMT_VUYX) :
+                                           (config.dynamicRange ? AV_PIX_FMT_P010 : AV_PIX_FMT_NV12);
+      }
+      const auto avcodec_formats = dynamic_cast<const encoder_platform_formats_avcodec *>(&formats);
+      if (!avcodec_formats) {
+        return AV_PIX_FMT_NONE;
+      }
+      return config.chromaSamplingType ? (config.dynamicRange ? avcodec_formats->avcodec_pix_fmt_yuv444_10bit : avcodec_formats->avcodec_pix_fmt_yuv444_8bit) :
+                                         (config.dynamicRange ? avcodec_formats->avcodec_pix_fmt_10bit : avcodec_formats->avcodec_pix_fmt_8bit);
+    }
+
+    static_assert(PYROWAVE_API_VERSION_MAJOR == 1, "Sunshine requires PyroWave C API 1.x");
+
+    bool map_gpu_frame(AVPixelFormat format, std::span<const pyrowave_image_view> images, pyrowave_gpu_buffers &buffers, float &scaling_factor) {
+      buffers = {};
+      scaling_factor = 1.0f;
+      if (images.empty() || std::any_of(images.begin(), images.end(), [](const auto &image) {
+            return !image.image || !image.width || !image.height;
+          })) {
+        return false;
+      }
+
+      if (format == AV_PIX_FMT_VUYX || format == AV_PIX_FMT_XV30) {
+        std::array<VkComponentSwizzle, 3> swizzles;
+        if (images.size() != 1) {
+          return false;
+        }
+        if (format == AV_PIX_FMT_VUYX && images[0].image_format == VK_FORMAT_R8G8B8A8_UNORM) {
+          swizzles = {VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R};
+        } else if (format == AV_PIX_FMT_XV30 && images[0].image_format == VK_FORMAT_A2B10G10R10_UNORM_PACK32) {
+          swizzles = {VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_B};
+        } else if (format == AV_PIX_FMT_XV30 && images[0].image_format == VK_FORMAT_A2R10G10B10_UNORM_PACK32) {
+          swizzles = {VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_R};
+        } else {
+          return false;
+        }
+        for (int component = 0; component < 3; ++component) {
+          buffers.planes[component] = images[0];
+          buffers.planes[component].view_format = images[0].image_format;
+          buffers.planes[component].swizzle = swizzles[component];
+        }
+        return true;
+      }
+
+      VkFormat combined;
+      std::array<VkFormat, 3> plane_formats {VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM, VK_FORMAT_R8_UNORM};
+      const bool semiplanar = format == AV_PIX_FMT_NV12 || format == AV_PIX_FMT_P010;
+      switch (format) {
+        case AV_PIX_FMT_NV12:
+          combined = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+          plane_formats[1] = VK_FORMAT_R8G8_UNORM;
+          break;
+        case AV_PIX_FMT_P010:
+          combined = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
+          plane_formats = {VK_FORMAT_R16_UNORM, VK_FORMAT_R16G16_UNORM, VK_FORMAT_UNDEFINED};
+          scaling_factor = 65535.0f / (1023.0f * 64.0f);
+          break;
+        case AV_PIX_FMT_YUV420P:
+          combined = VK_FORMAT_G8_B8_R8_3PLANE_420_UNORM;
+          break;
+        case AV_PIX_FMT_YUV444P:
+          combined = VK_FORMAT_G8_B8_R8_3PLANE_444_UNORM;
+          break;
+        case AV_PIX_FMT_YUV420P10:
+        case AV_PIX_FMT_YUV444P10:
+        case AV_PIX_FMT_YUV444P16:
+          combined = format == AV_PIX_FMT_YUV420P10 ? VK_FORMAT_G16_B16_R16_3PLANE_420_UNORM : VK_FORMAT_G16_B16_R16_3PLANE_444_UNORM;
+          plane_formats.fill(VK_FORMAT_R16_UNORM);
+          scaling_factor = format == AV_PIX_FMT_YUV444P16 ? 1.0f : 65535.0f / 1023.0f;
+          break;
+        default:
+          return false;
+      }
+
+      const bool multiplanar = images.size() == 1;
+      if (multiplanar ? images[0].image_format != combined : images.size() != (semiplanar ? 2 : 3)) {
+        return false;
+      }
+      // Native P010 plane views normalize the ten significant bits without a shader scale.
+      if (multiplanar && format == AV_PIX_FMT_P010) {
+        plane_formats = {VK_FORMAT_R10X6_UNORM_PACK16, VK_FORMAT_R10X6G10X6_UNORM_2PACK16, VK_FORMAT_UNDEFINED};
+        scaling_factor = 1.0f;
+      }
+      const auto desc = av_pix_fmt_desc_get(format);
+      constexpr VkImageAspectFlagBits aspects[] {VK_IMAGE_ASPECT_PLANE_0_BIT, VK_IMAGE_ASPECT_PLANE_1_BIT, VK_IMAGE_ASPECT_PLANE_2_BIT};
+      for (int component = 0; component < 3; ++component) {
+        const int plane = semiplanar && component ? 1 : component;
+        const auto &image = images[multiplanar ? 0 : plane];
+        if (!multiplanar && (image.image_format != plane_formats[plane] || image.width != (images[0].width >> (plane ? desc->log2_chroma_w : 0)) || image.height != (images[0].height >> (plane ? desc->log2_chroma_h : 0)))) {
+          return false;
+        }
+        auto &view = buffers.planes[component];
+        view = image;
+        view.view_format = plane_formats[plane];
+        view.aspect = multiplanar ? aspects[plane] : VK_IMAGE_ASPECT_COLOR_BIT;
+        view.swizzle = semiplanar && component == 2 ? VK_COMPONENT_SWIZZLE_G : VK_COMPONENT_SWIZZLE_R;
+      }
+      return true;
+    }
+
+#ifdef SUNSHINE_BUILD_VULKAN
+    /**
+     * @brief Encode FFmpeg Vulkan frames using their device, layouts, and timeline semaphores.
+     */
+    class vulkan_input_t final: public gpu_input_t {
+    public:
+      using gpu_input_t::gpu_input_t;
+
+      /**
+       * @brief Finish submitted work before releasing command resources and the borrowed device wrapper.
+       */
+      ~vulkan_input_t() override {
+        if (pending) {
+          vkWaitForFences(vk->act_dev, 1, &fence, VK_TRUE, UINT64_MAX);
+        }
+        if (command_pool) {
+          vkDestroyCommandPool(vk->act_dev, command_pool, nullptr);
+        }
+        if (fence) {
+          vkDestroyFence(vk->act_dev, fence, nullptr);
+        }
+        if (device) {
+          api.destroy_device(device);
+        }
+      }
+
+      /**
+       * @brief Use FFmpeg to retain or derive a Vulkan device for hardware-only frame transfers.
+       * @param source_frames Capture conversion pool.
+       * @return True when the shared device and submission resources are usable.
+       */
+      bool init(AVHWFramesContext *source_frames) {
+        if (!api.share_device || !source_frames->device_ctx) {
+          return false;
+        }
+        const auto type = source_frames->device_ctx->type;
+        external_frames = type == AV_HWDEVICE_TYPE_VAAPI;
+        if (type != AV_HWDEVICE_TYPE_VULKAN && type != AV_HWDEVICE_TYPE_CUDA && type != AV_HWDEVICE_TYPE_VAAPI) {
+          return false;
+        }
+        if (av_hwdevice_ctx_create_derived(&context, AV_HWDEVICE_TYPE_VULKAN, source_frames->device_ref, 0) < 0) {
+          return false;
+        }
+        if (type != AV_HWDEVICE_TYPE_VULKAN) {
+          transfer_frames.reset(av_hwframe_ctx_alloc(context.get()));
+          if (!transfer_frames) {
+            return false;
+          }
+          auto pool = reinterpret_cast<AVHWFramesContext *>(transfer_frames->data);
+          pool->format = AV_PIX_FMT_VULKAN;
+          pool->sw_format = source_frames->sw_format;
+          pool->width = source_frames->width;
+          pool->height = source_frames->height;
+          auto vk_frames = static_cast<AVVulkanFramesContext *>(pool->hwctx);
+          // CUDA interop requires separate images. VAAPI exports separate DMA-BUF layers.
+          vk_frames->flags = AVVkFrameFlags(AV_VK_FRAME_FLAG_NONE | AV_VK_FRAME_FLAG_DISABLE_MULTIPLANE);
+          if (av_hwframe_ctx_init(transfer_frames.get()) < 0) {
+            return false;
+          }
+          mapped.reset(av_frame_alloc());
+          if (!mapped) {
+            return false;
+          }
+        }
+        auto ctx = reinterpret_cast<AVHWDeviceContext *>(context->data);
+        vk = static_cast<AVVulkanDeviceContext *>(ctx->hwctx);
+        if (!vk->get_proc_addr || vk->alloc) {
+          return false;
+        }
+  #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 32, 100)
+        synchronized_queues = vk->queue_flags & VK_DEVICE_QUEUE_CREATE_INTERNALLY_SYNCHRONIZED_BIT_KHR;
+  #endif
+  #if !FF_API_VULKAN_SYNC_QUEUES
+        if (!synchronized_queues) {
+          return false;
+        }
+  #endif
+        for (auto capability : {VK_QUEUE_GRAPHICS_BIT, VK_QUEUE_COMPUTE_BIT}) {
+          const auto family = std::find_if(vk->qf, vk->qf + vk->nb_qf, [&](const auto &qf) {
+            return qf.num > 0 && (qf.flags & capability);
+          });
+          if (family == vk->qf + vk->nb_qf) {
+            return false;
+          }
+          if (capability == VK_QUEUE_COMPUTE_BIT) {
+            compute_family = family->idx;
+          }
+          if (queue_count && queues[0].familyIndex == uint32_t(family->idx)) {
+            continue;
+          }
+          auto &queue = queues[queue_count];
+          auto &info = queue_infos[queue_count++];
+          info = {VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
+          info.queueFamilyIndex = family->idx;
+          info.queueCount = 1;
+          info.pQueuePriorities = &priority;
+  #if LIBAVUTIL_VERSION_INT >= AV_VERSION_INT(60, 32, 100)
+          info.flags = vk->queue_flags;
+  #endif
+          VkDeviceQueueInfo2 get_info {VK_STRUCTURE_TYPE_DEVICE_QUEUE_INFO_2};
+          get_info.flags = info.flags;
+          get_info.queueFamilyIndex = family->idx;
+          queue.familyIndex = family->idx;
+          vkGetDeviceQueue2(vk->act_dev, &get_info, &queue.queue);
+          if (!queue.queue) {
+            return false;
+          }
+        }
+        for (uint32_t i = 0; i < queue_count; ++i) {
+          if (queues[i].familyIndex == compute_family) {
+            compute_queue = queues[i].queue;
+          }
+        }
+        application.apiVersion = VK_API_VERSION_1_3;
+        instance_info.pApplicationInfo = &application;
+        instance_info.enabledExtensionCount = vk->nb_enabled_inst_extensions;
+        instance_info.ppEnabledExtensionNames = vk->enabled_inst_extensions;
+        device_info.pNext = &vk->device_features;
+        device_info.enabledExtensionCount = vk->nb_enabled_dev_extensions;
+        device_info.ppEnabledExtensionNames = vk->enabled_dev_extensions;
+        device_info.queueCreateInfoCount = queue_count;
+        device_info.pQueueCreateInfos = queue_infos.data();
+        pyrowave_device_create_info info {};
+        info.GetInstanceProcAddr = vk->get_proc_addr;
+        info.instance = vk->inst;
+        info.physical_device = vk->phys_dev;
+        info.device = vk->act_dev;
+        info.instance_create_info = &instance_info;
+        info.device_create_info = &device_info;
+        info.queue_info = queues.data();
+        info.queue_info_count = queue_count;
+        info.userdata = this;
+        info.queue_lock_callback = [](void *self) {
+          static_cast<vulkan_input_t *>(self)->lock_queues(true);
+        };
+        info.queue_unlock_callback = [](void *self) {
+          static_cast<vulkan_input_t *>(self)->lock_queues(false);
+        };
+        if (api.share_device(&info, &device) != PYROWAVE_SUCCESS || api.set_queue_type(device, VK_QUEUE_COMPUTE_BIT) != PYROWAVE_SUCCESS) {
+          return false;
+        }
+        VkCommandPoolCreateInfo pool_info {VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
+        pool_info.queueFamilyIndex = compute_family;
+        VkCommandBufferAllocateInfo allocation {VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocation.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocation.commandBufferCount = 1;
+        VkFenceCreateInfo fence_info {VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        if (vkCreateCommandPool(vk->act_dev, &pool_info, nullptr, &command_pool) != VK_SUCCESS) {
+          return false;
+        }
+        allocation.commandPool = command_pool;
+        return vkAllocateCommandBuffers(vk->act_dev, &allocation, &command_buffer) == VK_SUCCESS &&
+               vkCreateFence(vk->act_dev, &fence_info, nullptr, &fence) == VK_SUCCESS;
+      }
+
+      /** @copydoc gpu_input_t::prepare */
+      bool prepare(AVFrame *source) override {
+        if (!source->hw_frames_ctx) {
+          return false;
+        }
+        if (source->format == AV_PIX_FMT_CUDA && transfer_frames) {
+          if ((!mapped->buf[0] && av_hwframe_get_buffer(transfer_frames.get(), mapped.get(), 0) < 0) || av_hwframe_transfer_data(mapped.get(), source, 0) < 0) {
+            return false;
+          }
+          source = mapped.get();
+        } else if (source->format == AV_PIX_FMT_VAAPI && transfer_frames) {
+          av_frame_unref(mapped.get());
+          mapped->format = AV_PIX_FMT_VULKAN;
+          mapped->hw_frames_ctx = av_buffer_ref(transfer_frames.get());
+          if (!mapped->hw_frames_ctx || av_hwframe_map(mapped.get(), source, AV_HWFRAME_MAP_READ | AV_HWFRAME_MAP_DIRECT) < 0) {
+            return false;
+          }
+          source = mapped.get();
+        }
+        if (source->format != AV_PIX_FMT_VULKAN || !source->data[0]) {
+          return false;
+        }
+        frame = source;
+        auto pool = reinterpret_cast<AVHWFramesContext *>(source->hw_frames_ctx->data);
+        if (pool->device_ctx->hwctx != vk) {
+          return false;
+        }
+        auto vk_frames = static_cast<AVVulkanFramesContext *>(pool->hwctx);
+        auto pixels = reinterpret_cast<AVVkFrame *>(source->data[0]);
+        const auto desc = av_pix_fmt_desc_get(pool->sw_format);
+        if (!desc || !(vk_frames->usage & VK_IMAGE_USAGE_SAMPLED_BIT)) {
+          return false;
+        }
+        std::array<pyrowave_image_view, AV_NUM_DATA_POINTERS> images {};
+        size_t count = 0;
+        // FFmpeg uses concurrent sharing when more than one distinct queue family is enabled.
+        const bool concurrent = std::any_of(vk->qf, vk->qf + vk->nb_qf, [&](const auto &qf) {
+          return qf.idx != int(compute_family);
+        });
+        image_family = concurrent ? VK_QUEUE_FAMILY_IGNORED : compute_family;
+        for (; count < images.size() && pixels->img[count]; ++count) {
+          if (pixels->queue_family[count] == VK_QUEUE_FAMILY_EXTERNAL || pixels->queue_family[count] == VK_QUEUE_FAMILY_FOREIGN_EXT || (!concurrent && pixels->queue_family[count] != compute_family && pixels->queue_family[count] != VK_QUEUE_FAMILY_IGNORED)) {
+            return false;
+          }
+          auto &image = images[count];
+          image.image = pixels->img[count];
+          image.image_format = vk_frames->format[count];
+          image.width = source->width >> (count ? desc->log2_chroma_w : 0);
+          image.height = source->height >> (count ? desc->log2_chroma_h : 0);
+          image.aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+          image.layout = VK_IMAGE_LAYOUT_GENERAL;
+        }
+        return map_gpu_frame(pool->sw_format, std::span(images).first(count), buffers, scaling_factor);
+      }
+
+      /** @copydoc gpu_input_t::encode */
+      pyrowave_result encode(pyrowave_encoder encoder, const pyrowave_rate_control &rate_control) override {
+        auto pool = reinterpret_cast<AVHWFramesContext *>(frame->hw_frames_ctx->data);
+        auto vk_frames = static_cast<AVVulkanFramesContext *>(pool->hwctx);
+        auto pixels = reinterpret_cast<AVVkFrame *>(frame->data[0]);
+        vk_frames->lock_frame(pool, pixels);
+        auto unlock = util::fail_guard([&]() {
+          vk_frames->unlock_frame(pool, pixels);
+        });
+        VkCommandBufferBeginInfo begin {VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+        begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+        if (vkResetCommandPool(vk->act_dev, command_pool, 0) != VK_SUCCESS || vkResetFences(vk->act_dev, 1, &fence) != VK_SUCCESS || vkBeginCommandBuffer(command_buffer, &begin) != VK_SUCCESS) {
+          return PYROWAVE_ERROR_GENERIC;
+        }
+        std::array<VkImageMemoryBarrier2, AV_NUM_DATA_POINTERS> barriers {};
+        std::array<VkSemaphoreSubmitInfo, AV_NUM_DATA_POINTERS> waits {}, signals {};
+        uint32_t count = 0;
+        for (; count < barriers.size() && pixels->img[count]; ++count) {
+          auto &barrier = barriers[count];
+          barrier = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+          barrier.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+          barrier.srcAccessMask = pixels->access[count];
+          barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+          barrier.dstAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+          barrier.oldLayout = pixels->layout[count];
+          barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+          barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+          barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+          if (external_frames && pixels->queue_family[count] == VK_QUEUE_FAMILY_EXTERNAL) {
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_NONE;
+            barrier.srcAccessMask = 0;
+            barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+            barrier.dstQueueFamilyIndex = image_family;
+          }
+          barrier.image = pixels->img[count];
+          barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+          if (!pixels->sem[count]) {
+            return PYROWAVE_ERROR_INVALID_ARGUMENT;
+          }
+          waits[count] = {VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO};
+          waits[count].semaphore = pixels->sem[count];
+          waits[count].value = pixels->sem_value[count];
+          waits[count].stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+          signals[count] = waits[count];
+          ++signals[count].value;
+        }
+        VkDependencyInfo dependency {VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+        dependency.imageMemoryBarrierCount = count;
+        dependency.pImageMemoryBarriers = barriers.data();
+        vkCmdPipelineBarrier2(command_buffer, &dependency);
+        api.set_scaling_factor(encoder, scaling_factor);
+        api.set_command_buffer(device, command_buffer);
+        const auto result = api.encode_gpu(encoder, nullptr, nullptr, &buffers, &rate_control);
+        api.set_command_buffer(device, VK_NULL_HANDLE);
+        if (result != PYROWAVE_SUCCESS) {
+          return result;
+        }
+        if (external_frames) {
+          // VAAPI/EGL may overwrite the surface on the next capture conversion.
+          for (uint32_t i = 0; i < count; ++i) {
+            auto &barrier = barriers[i];
+            barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+            barrier.srcAccessMask = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+            barrier.dstStageMask = VK_PIPELINE_STAGE_2_NONE;
+            barrier.dstAccessMask = 0;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            barrier.srcQueueFamilyIndex = image_family;
+            barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+          }
+          vkCmdPipelineBarrier2(command_buffer, &dependency);
+        }
+        if (vkEndCommandBuffer(command_buffer) != VK_SUCCESS) {
+          return PYROWAVE_ERROR_GENERIC;
+        }
+        VkCommandBufferSubmitInfo command {VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO};
+        command.commandBuffer = command_buffer;
+        VkSubmitInfo2 submission {VK_STRUCTURE_TYPE_SUBMIT_INFO_2};
+        submission.waitSemaphoreInfoCount = count;
+        submission.pWaitSemaphoreInfos = waits.data();
+        submission.signalSemaphoreInfoCount = count;
+        submission.pSignalSemaphoreInfos = signals.data();
+        submission.commandBufferInfoCount = 1;
+        submission.pCommandBufferInfos = &command;
+        lock_queues(true);
+        const auto submitted = vkQueueSubmit2(compute_queue, 1, &submission, fence);
+        lock_queues(false);
+        if (submitted != VK_SUCCESS) {
+          return PYROWAVE_ERROR_GENERIC;
+        }
+        pending = true;
+        for (uint32_t i = 0; i < count; ++i) {
+          pixels->layout[i] = VK_IMAGE_LAYOUT_GENERAL;
+          pixels->access[i] = external_frames ? 0 : VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+          pixels->queue_family[i] = external_frames ? VK_QUEUE_FAMILY_EXTERNAL : image_family;
+          pixels->sem_value[i] = signals[i].value;
+        }
+        vk_frames->unlock_frame(pool, pixels);
+        unlock.disable();
+        // Packetization reads encoded bytes on the CPU, so this submission must finish first.
+        if (vkWaitForFences(vk->act_dev, 1, &fence, VK_TRUE, UINT64_MAX) != VK_SUCCESS) {
+          return PYROWAVE_ERROR_GENERIC;
+        }
+        pending = false;
+        return PYROWAVE_SUCCESS;
+      }
+
+    private:
+      /**
+       * @brief Synchronize queue submissions with FFmpeg on devices without internally synchronized queues.
+       * @param lock Whether to acquire or release the queue locks.
+       */
+      void lock_queues(bool lock) {
+  #if FF_API_VULKAN_SYNC_QUEUES
+        if (synchronized_queues) {
+          return;
+        }
+          // Older FFmpeg devices still require the queue locks deprecated by the new queue extension.
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+        auto ctx = reinterpret_cast<AVHWDeviceContext *>(context->data);
+        for (uint32_t i = 0; i < queue_count; ++i) {
+          const auto &queue = queues[lock ? i : queue_count - i - 1];
+          if (lock) {
+            vk->lock_queue(ctx, queue.familyIndex, queue.index);
+          } else {
+            vk->unlock_queue(ctx, queue.familyIndex, queue.index);
+          }
+        }
+    #pragma GCC diagnostic pop
+  #endif
+      }
+
+      avcodec_buffer_t context;  ///< Retained FFmpeg Vulkan device and feature chain.
+      avcodec_buffer_t transfer_frames;  ///< Optional pool for hardware-to-hardware transfers.
+      avcodec_frame_t mapped;  ///< Imported VAAPI frame or reusable CUDA transfer target.
+      AVVulkanDeviceContext *vk = nullptr;  ///< Borrowed context owned by context.
+      AVFrame *frame = nullptr;  ///< Prepared frame owned by the converter or mapped.
+      VkApplicationInfo application {VK_STRUCTURE_TYPE_APPLICATION_INFO};  ///< Borrowed instance API version.
+      VkInstanceCreateInfo instance_info {VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};  ///< Enabled instance extensions.
+      VkDeviceCreateInfo device_info {VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};  ///< Enabled device features and queues.
+      std::array<VkDeviceQueueCreateInfo, 2> queue_infos {};  ///< Graphics and compute queue descriptions.
+      std::array<pyrowave_device_create_queue_info, 2> queues {};  ///< Concrete borrowed queue handles.
+      uint32_t queue_count = 0;  ///< Number of distinct borrowed queue families.
+      float priority = 1.0f;  ///< Queue priority storage retained with the create infos.
+      uint32_t compute_family = 0;  ///< Queue family used for the encoding command buffer.
+      VkQueue compute_queue {};  ///< Borrowed compute queue.
+      VkCommandPool command_pool {};  ///< Reusable command buffer allocation pool.
+      VkCommandBuffer command_buffer {};  ///< Current encoding command buffer.
+      VkFence fence {};  ///< Completion of the current encoding submission.
+      bool pending = false;  ///< Whether the command pool still has submitted work.
+      bool synchronized_queues = false;  ///< Whether the driver synchronizes shared queue submissions.
+      bool external_frames = false;  ///< Whether imported VAAPI images must be released back to their producer.
+      uint32_t image_family = VK_QUEUE_FAMILY_IGNORED;  ///< Ownership while Vulkan samples the images.
+      pyrowave_gpu_buffers buffers {};  ///< Sampled YUV component views.
+      float scaling_factor = 1.0f;  ///< Normalization of the GPU sample storage.
+    };
+#endif
+
+    /**
+     * @brief Own conversion, GPU codec state, and reusable host transfer buffers.
+     */
+    class session_impl_t final: public session_t {
+    public:
+      /**
+       * @brief Store the converter and byte budget before initializing the codec.
+       *
+       * @param device Initialized frame conversion device.
+       * @param budget Maximum native bitstream bytes per frame, including record headers.
+       * @param api C API implementation to call.
+       * @param frames Hardware frame pool retained until after converter destruction.
+       */
+      session_impl_t(std::unique_ptr<platf::avcodec_encode_device_t> device, size_t budget, const api_t &api, avcodec_buffer_t frames):
+          frames {std::move(frames)},
+          converter {std::move(device)},
+          api {api},
+          rate_control {budget} {
+      }
+
+      /**
+       * @brief Destroy codec objects in dependency order, including partial initialization.
+       */
+      ~session_impl_t() override {
+        if (encoder) {
+          api.destroy_encoder(encoder);
+        }
+        if (device && !gpu_input) {
+          api.destroy_device(device);
+        }
+      }
+
+      /**
+       * @brief Initialize GPU sharing when available and prepare the CPU fallback for the negotiated profile.
+       *
+       * @param config Negotiated stream configuration.
+       * @return True when the Vulkan device and encoder are usable.
+       */
+      bool init(const config_t &config) {
+        framing = config;
+        uint32_t major, minor, patch;
+        api.get_api_version(&major, &minor, &patch);
+        if (major != PYROWAVE_API_VERSION_MAJOR || std::pair {major, minor} < std::pair {uint32_t(PYROWAVE_API_VERSION_MAJOR), uint32_t(PYROWAVE_API_VERSION_MINOR)}) {
+          BOOST_LOG(error) << "Incompatible PyroWave C API: " << major << '.' << minor << '.' << patch;
+          return false;
+        }
+#if defined(SUNSHINE_BUILD_VULKAN) || defined(_WIN32)
+        const auto pool_ref = converter->frame->hw_frames_ctx ? converter->frame->hw_frames_ctx : frames.get();
+        if (pool_ref) {
+          auto pool = reinterpret_cast<AVHWFramesContext *>(pool_ref->data);
+  #ifdef SUNSHINE_BUILD_VULKAN
+          auto input = std::make_unique<vulkan_input_t>(api);
+          if (input->init(pool)) {
+            gpu_input = std::move(input);
+          }
+  #endif
+  #ifdef _WIN32
+          if (pool->format == AV_PIX_FMT_D3D11 && api.match_device) {
+            gpu_input = make_d3d11_input(pool, api);
+          }
+  #endif
+        }
+#endif
+        const auto create_encoder = [&]() {
+          const pyrowave_encoder_create_info info {device, config.width, config.height, config.chromaSamplingType ? PYROWAVE_CHROMA_SUBSAMPLING_444 : PYROWAVE_CHROMA_SUBSAMPLING_420};
+          return api.create_encoder(&info, &encoder) == PYROWAVE_SUCCESS;
+        };
+        if (gpu_input) {
+          device = gpu_input->device;
+          if (!create_encoder()) {
+            if (encoder) {
+              api.destroy_encoder(encoder);
+              encoder = nullptr;
+            }
+            gpu_input.reset();
+            device = nullptr;
+          }
+        }
+        if (!gpu_input) {
+          if (api.create_device(&device) != PYROWAVE_SUCCESS) {
+            BOOST_LOG(error) << "Could not create a PyroWave Vulkan device";
+            return false;
+          }
+          if (!create_encoder()) {
+            BOOST_LOG(error) << "Could not create a PyroWave encoder";
+            return false;
+          }
+        }
+        gpu_active = gpu_input != nullptr;
+
+        converted.reset(av_frame_alloc());
+        readback.reset(av_frame_alloc());
+        input_frame.reset(av_frame_alloc());
+        if (!converted || !readback || !input_frame) {
+          return false;
+        }
+        auto source_format = converter->frame->format;
+        if (const auto pool = converter->frame->hw_frames_ctx ? converter->frame->hw_frames_ctx : frames.get()) {
+          source_format = reinterpret_cast<AVHWFramesContext *>(pool->data)->sw_format;
+        }
+        // PyroWave caches upload images, so keep the NV12 or planar layout fixed for this session.
+        converted->format = config.chromaSamplingType ? (config.dynamicRange ? AV_PIX_FMT_YUV444P10 : AV_PIX_FMT_YUV444P) :
+                                                        (config.dynamicRange ? AV_PIX_FMT_YUV420P10 : (source_format == AV_PIX_FMT_NV12 ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P));
+        converted->width = config.width;
+        converted->height = config.height;
+        return av_frame_copy_props(converted.get(), converter->frame) >= 0;
+      }
+
+      /**
+       * @brief Retain compatible frames directly, converting other layouts while preserving HDR precision.
+       *
+       * @param img Captured image.
+       * @return Zero on success, or a negative conversion/transfer error.
+       */
+      int convert(platf::img_t &img) override {
+        ready = false;
+        av_frame_unref(input_frame.get());
+        if (converter->convert(img)) {
+          return -1;
+        }
+        auto source = converter->frame;
+        if (gpu_active) {
+          const auto pool = source->hw_frames_ctx ? reinterpret_cast<AVHWFramesContext *>(source->hw_frames_ctx->data) : nullptr;
+          if (pool && source->width == converted->width && source->height == converted->height && matches_profile(pool->sw_format) && av_frame_ref(input_frame.get(), source) >= 0 && gpu_input->prepare(input_frame.get())) {
+            ready = true;
+            return 0;
+          }
+          av_frame_unref(input_frame.get());
+          gpu_active = false;
+          BOOST_LOG(warning) << "PyroWave GPU input unavailable; using CPU frame transfer";
+        }
+        if (source->hw_frames_ctx) {
+          av_frame_unref(readback.get());
+          if (av_hwframe_transfer_data(readback.get(), source, 0) < 0) {
+            BOOST_LOG(error) << "Could not download the PyroWave input frame";
+            return -1;
+          }
+          source = readback.get();
+        }
+
+        // Only change plane layout/bit storage here. The capture converter has
+        // already applied the negotiated matrix, range, and HDR transfer function.
+        if (source->format != AV_PIX_FMT_NV12 && source->format != AV_PIX_FMT_P010 && source->format != AV_PIX_FMT_YUV420P && source->format != AV_PIX_FMT_YUV420P10 && source->format != AV_PIX_FMT_YUV444P && source->format != AV_PIX_FMT_YUV444P10 && source->format != AV_PIX_FMT_YUV444P16 && source->format != AV_PIX_FMT_VUYX && source->format != AV_PIX_FMT_XV30) {
+          BOOST_LOG(error) << "Unsupported PyroWave input pixel format: " << source->format;
+          return -1;
+        }
+        if (!matches_profile(AVPixelFormat(source->format))) {
+          BOOST_LOG(error) << "PyroWave input color depth or chroma sampling does not match the negotiated profile";
+          return -1;
+        }
+        // Matching layouts and dimensions can bypass sws_scale().
+        // PyroWave requires positive row strides, so reversed rows still need conversion.
+        const bool direct = source->format == converted->format && source->width == converted->width && source->height == converted->height &&
+                            std::all_of(source->linesize, source->linesize + av_pix_fmt_count_planes(AVPixelFormat(source->format)), [](int stride) {
+                              return stride > 0;
+                            });
+        if (!direct) {
+          auto context = sws_getCachedContext(scaler.release(), source->width, source->height, AVPixelFormat(source->format), converted->width, converted->height, AVPixelFormat(converted->format), SWS_POINT, nullptr, nullptr, nullptr);
+          scaler.reset(context);
+          if (!scaler || (!converted->buf[0] && av_frame_get_buffer(converted.get(), 0) < 0) || av_frame_make_writable(converted.get()) < 0 || sws_scale(scaler.get(), source->data, source->linesize, 0, source->height, converted->data, converted->linesize) != converted->height) {
+            return -1;
+          }
+          source = converted.get();
+        }
+        // References keep repeated frames alive; av_frame_ref() copies unowned capture buffers.
+        if (av_frame_ref(input_frame.get(), source) < 0) {
+          return -1;
+        }
+        ready = true;
+        return 0;
+      }
+
+      /**
+       * @brief Every PyroWave frame is independently decodable.
+       */
+      void request_idr_frame() override {}
+
+      /**
+       * @brief Continue producing independently decodable frames.
+       */
+      void request_normal_frame() override {}
+
+      /**
+       * @brief Ignore reference invalidation because the codec has no inter-frame references.
+       *
+       * @param first_frame First lost frame, unused.
+       * @param last_frame Last lost frame, unused.
+       */
+      void invalidate_ref_frames(int64_t first_frame, int64_t last_frame) override {}
+
+      /**
+       * @brief Encode the latest converted pixels and preserve native packet boundaries.
+       *
+       * @param frame_index GameStream frame sequence number.
+       * @return Independent frame container, or null on codec failure.
+       */
+      packet_t encode(int64_t frame_index) override {
+        if (!ready) {
+          return nullptr;
+        }
+        pyrowave_result result;
+        if (gpu_active) {
+          result = gpu_input->encode(encoder, rate_control);
+        } else {
+          pyrowave_cpu_buffer input {};
+          input.width = input_frame->width;
+          input.height = input_frame->height;
+          const auto desc = av_pix_fmt_desc_get(AVPixelFormat(input_frame->format));
+          input.format = input_frame->format == AV_PIX_FMT_NV12 ? PYROWAVE_CPU_BUFFER_FORMAT_NV12 :
+                         desc->log2_chroma_w == 0               ? (desc->comp[0].depth == 10 ? PYROWAVE_CPU_BUFFER_FORMAT_YUV444P10 : PYROWAVE_CPU_BUFFER_FORMAT_YUV444P) :
+                                                                  (desc->comp[0].depth == 10 ? PYROWAVE_CPU_BUFFER_FORMAT_YUV420P10 : PYROWAVE_CPU_BUFFER_FORMAT_YUV420P);
+          for (int plane = 0; plane < av_pix_fmt_count_planes(AVPixelFormat(input_frame->format)); ++plane) {
+            input.data[plane] = input_frame->data[plane];
+            input.row_stride_in_bytes[plane] = input_frame->linesize[plane];
+            input.plane_size_in_bytes[plane] = input.row_stride_in_bytes[plane] * (input.height >> (plane ? desc->log2_chroma_h : 0));
+          }
+          result = api.encode_cpu(encoder, &input, &rate_control);
+        }
+        size_t count = 0;
+        const auto boundary = framing.pyrowaveRecordFraming ? record_packet_boundary : packet_boundary;
+        if (result != PYROWAVE_SUCCESS || api.num_packets(encoder, boundary, &count) != PYROWAVE_SUCCESS || count == 0 || count > max_frame_size / boundary) {
+          BOOST_LOG(error) << "PyroWave encoding failed";
+          return nullptr;
+        }
+
+        packets.resize(count);
+        // Native records cannot be split, so a legacy packet can exceed its 1024-byte target.
+        // Query an allocation with a boundary large enough for any native record.
+        size_t storage_count = count;
+        if (boundary != record_packet_boundary && (api.num_packets(encoder, record_packet_boundary, &storage_count) != PYROWAVE_SUCCESS || !storage_count || storage_count > max_frame_size / record_packet_boundary)) {
+          return nullptr;
+        }
+        bitstream.resize(storage_count * record_packet_boundary);
+        if (api.packetize(encoder, packets.data(), boundary, &count, bitstream.data(), bitstream.size()) != PYROWAVE_SUCCESS || count == 0 || count > packets.size()) {
+          BOOST_LOG(error) << "PyroWave packetization failed";
+          return nullptr;
+        }
+
+        size_t critical_blocks = 0;
+        // The first two native bands contain the coarsest wavelet level and its detail.
+        if (framing.pyrowaveRecordFraming && api.active_blocks(encoder, 2, &critical_blocks) != PYROWAVE_SUCCESS) {
+          return nullptr;
+        }
+        return frame_packets(std::span(packets.data(), count), bitstream, framing, critical_blocks, frame_index);
+      }
+
+    private:
+      /**
+       * @brief Match eight-bit versus higher precision and chroma sampling to the session.
+       *
+       * @param format Pixel layout supplied by the converter or hardware frame pool.
+       * @return True when the depth category and chroma subsampling match.
+       */
+      bool matches_profile(AVPixelFormat format) const {
+        const auto input = av_pix_fmt_desc_get(format);
+        const auto output = av_pix_fmt_desc_get(AVPixelFormat(converted->format));
+        return input && (input->comp[0].depth > 8) == (output->comp[0].depth > 8) && input->log2_chroma_w == output->log2_chroma_w && input->log2_chroma_h == output->log2_chroma_h;
+      }
+
+      avcodec_buffer_t frames;  ///< Hardware pool borrowed by the converter; destroyed last.
+      std::unique_ptr<platf::avcodec_encode_device_t> converter;  ///< Platform color conversion and source frame owner.
+      api_t api;  ///< Runtime C API implementation.
+      std::unique_ptr<gpu_input_t> gpu_input;  ///< Optional hardware sharing resources, retained through encoder destruction.
+      bool gpu_active = false;  ///< Whether subsequent frames can use hardware sharing.
+      pyrowave_device device {};  ///< Device owned by gpu_input, or owned directly for CPU input.
+      pyrowave_encoder encoder {};  ///< Codec instance owned by this session.
+      pyrowave_rate_control rate_control;  ///< Per-frame coefficient byte budget.
+      config_t framing {};  ///< Client framing and final negotiated packet size.
+      avcodec_frame_t readback;  ///< Downloaded hardware frame, when needed.
+      avcodec_frame_t converted;  ///< Stable CPU input layout, with buffers allocated only when conversion is needed.
+      avcodec_frame_t input_frame;  ///< Retained pixels for encoding, including repeated frames.
+      sws_t scaler;  ///< Plane-layout and bit-storage conversion preserving negotiated chroma and color depth.
+      std::vector<pyrowave_packet> packets;  ///< Packet offsets returned by the C API.
+      std::vector<uint8_t> bitstream;  ///< Reusable encoded coefficient storage.
+      bool ready = false;  ///< Whether conversion has produced a usable frame.
+    };
+
+    std::unique_ptr<session_t> make_session(const config_t &config, std::unique_ptr<platf::avcodec_encode_device_t> device, const api_t &api, avcodec_buffer_t frames) {
+      if (!valid_config(config) || !device || !device->frame || device->frame->width != config.width || device->frame->height != config.height) {
+        return nullptr;
+      }
+      // Associate borrowed VideoToolbox buffers with their pool for readback.
+      if (device->frame->format == AV_PIX_FMT_VIDEOTOOLBOX && !device->frame->hw_frames_ctx) {
+        if (!frames) {
+          return nullptr;
+        }
+        device->frame->hw_frames_ctx = av_buffer_ref(frames.get());
+        if (!device->frame->hw_frames_ctx) {
+          return nullptr;
+        }
+      }
+      auto session = std::make_unique<session_impl_t>(std::move(device), frame_budget(config), api, std::move(frames));
+      return session->init(config) ? std::move(session) : nullptr;
+    }
+
+    std::unique_ptr<session_t> make_session(const config_t &config, std::unique_ptr<platf::avcodec_encode_device_t> device, avcodec_buffer_t frames) {
+      return make_session(config, std::move(device), api_t {}, std::move(frames));
+    }
+  }  // namespace pyrowave
 
   /**
    * @brief Native VideoToolbox encode session and device state for hardware encoding.
@@ -1511,6 +2485,7 @@ namespace video {
   static encoder_t *chosen_encoder;
   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
   int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
+  uint32_t active_pyrowave_profiles;  ///< PyroWave profile bits validated on the selected capture backend.
   bool last_encoder_probe_supported_ref_frames_invalidation = false;  ///< Whether the last probe found reference-frame invalidation support.
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};  ///< YUV444 support discovered for each probed codec.
   std::array<bool, 3> last_encoder_probe_supported_dynamic_range_for_codec = {};  ///< 10-bit 4:2:0 support discovered for each probed codec.
@@ -2042,6 +3017,15 @@ namespace video {
       return encode_nvenc(frame_nr, *nvenc_session, packets, channel_data, frame_timestamp);
     } else if (auto vt_session = dynamic_cast<vt_encode_session_t *>(&session)) {
       return encode_vt(frame_nr, *vt_session, packets, channel_data, frame_timestamp);
+    } else if (auto pyrowave_session = dynamic_cast<pyrowave::session_t *>(&session)) {
+      auto packet = pyrowave_session->encode(frame_nr);
+      if (!packet) {
+        return -1;
+      }
+      packet->channel_data = channel_data;
+      packet->frame_timestamp = frame_timestamp;
+      packets->raise(std::move(packet));
+      return 0;
     }
 
     return -1;
@@ -2477,6 +3461,108 @@ namespace video {
   }
 
   /**
+   * @brief Prepare the existing capture converter for PyroWave without opening an FFmpeg encoder.
+   * @param encoder Encoder descriptor selecting the capture memory type.
+   * @param config Negotiated PyroWave configuration.
+   * @param width Captured image width.
+   * @param height Captured image height.
+   * @param device Platform color-conversion device.
+   * @param api PyroWave C API entry points.
+   * @return PyroWave session, or null if conversion or encoding is unavailable.
+   */
+  std::unique_ptr<encode_session_t> make_pyrowave_encode_session(const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::avcodec_encode_device_t> device, const pyrowave::api_t &api = {}) {
+    if (!pyrowave::valid_config(config) || !device || !encoder.platform_formats || width <= 0 || height <= 0) {
+      return nullptr;
+    }
+    const auto colorspace = device->colorspace;
+    // The software converter accepts 8-bit capture pixels and cannot preserve HDR.
+    if (config.dynamicRange && !device->hardware) {
+      return nullptr;
+    }
+
+    auto formats = dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get());
+#ifdef _WIN32
+    // Native NVENC, QSV, and AMF all use the same D3D11 capture converter.
+    // PyroWave needs the base D3D11 frame, without a derived QSV context.
+    static const encoder_platform_formats_avcodec d3d_formats {
+      AV_HWDEVICE_TYPE_D3D11VA,
+      AV_HWDEVICE_TYPE_NONE,
+      AV_PIX_FMT_D3D11,
+      AV_PIX_FMT_NV12,
+      AV_PIX_FMT_P010,
+      AV_PIX_FMT_VUYX,
+      AV_PIX_FMT_XV30,
+      dxgi_init_avcodec_hardware_input_buffer
+    };
+    if (encoder.platform_formats->dev_type == platf::mem_type_e::dxgi) {
+      formats = &d3d_formats;
+    }
+#endif
+    if (!formats) {
+      return nullptr;
+    }
+    const auto sw_format = pyrowave::capture_format(*encoder.platform_formats, config);
+    if (sw_format == AV_PIX_FMT_NONE) {
+      return nullptr;
+    }
+    avcodec_frame_t frame {av_frame_alloc()};
+    if (!frame) {
+      return nullptr;
+    }
+    frame->width = config.width;
+    frame->height = config.height;
+    const auto metadata = avcodec_colorspace_from_sunshine_colorspace(colorspace);
+    frame->color_range = metadata.range;
+    frame->color_primaries = metadata.primaries;
+    frame->color_trc = metadata.transfer_function;
+    frame->colorspace = metadata.matrix;
+
+    avcodec_buffer_t frames;
+    if (device->hardware) {
+      if (!formats->init_avcodec_hardware_input_buffer) {
+        return nullptr;
+      }
+      auto context = formats->init_avcodec_hardware_input_buffer(device.get());
+      if (context.has_right()) {
+        return nullptr;
+      }
+      frames.reset(av_hwframe_ctx_alloc(context.left().get()));
+      if (!frames) {
+        return nullptr;
+      }
+      auto hw_frames = reinterpret_cast<AVHWFramesContext *>(frames->data);
+      hw_frames->format = formats->avcodec_dev_pix_fmt;
+      hw_frames->sw_format = sw_format;
+      hw_frames->width = config.width;
+      hw_frames->height = config.height;
+      device->init_hwframes(hw_frames);
+#ifdef SUNSHINE_BUILD_VULKAN
+      if (hw_frames->format == AV_PIX_FMT_VULKAN) {
+        auto vk_frames = static_cast<AVVulkanFramesContext *>(hw_frames->hwctx);
+        vk_frames->usage = static_cast<VkImageUsageFlagBits>((vk_frames->usage & ~VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR) | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+      }
+#endif
+      if (av_hwframe_ctx_init(frames.get()) < 0) {
+        return nullptr;
+      }
+      frame->format = hw_frames->format;
+    } else {
+      frame->format = sw_format;
+      auto converter = std::make_unique<avcodec_software_encode_device_t>();
+      if (converter->init(width, height, frame.get(), sw_format, false)) {
+        return nullptr;
+      }
+      converter->colorspace = colorspace;
+      device = std::move(converter);
+    }
+    if (device->set_frame(frame.release(), frames.get())) {
+      return nullptr;
+    }
+    device->apply_colorspace();
+    return pyrowave::make_session(config, std::move(device), api, std::move(frames));
+  }
+
+  /**
    * @brief Create encode session.
    *
    * @param disp Display connection or display handle.
@@ -2488,6 +3574,9 @@ namespace video {
    * @return Constructed encode session object.
    */
   std::unique_ptr<encode_session_t> make_encode_session(platf::display_t *disp, const encoder_t &encoder, const config_t &config, int width, int height, std::unique_ptr<platf::encode_device_t> encode_device) {
+    if (config.videoFormat == pyrowave::video_format) {
+      return make_pyrowave_encode_session(encoder, config, width, height, boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device)));
+    }
     if (dynamic_cast<platf::avcodec_encode_device_t *>(encode_device.get())) {
       auto avcodec_encode_device = boost::dynamic_pointer_cast<platf::avcodec_encode_device_t>(std::move(encode_device));
       return make_avcodec_encode_session(disp, encoder, config, width, height, std::move(avcodec_encode_device));
@@ -2692,7 +3781,12 @@ namespace video {
     auto colorspace = colorspace_from_client_config(config, disp.is_hdr());
 
     platf::pix_fmt_e pix_fmt;
-    if (config.chromaSamplingType == 1) {
+    if (config.videoFormat == pyrowave::video_format) {
+      pix_fmt = map_pix_fmt(pyrowave::capture_format(*encoder.platform_formats, config));
+      if (pix_fmt == platf::pix_fmt_e::unknown) {
+        return {};
+      }
+    } else if (config.chromaSamplingType == 1) {
       // YUV 4:4:4
       if (!(encoder.flags & YUV444_SUPPORT)) {
         // Encoder can't support YUV 4:4:4 regardless of hardware capabilities
@@ -2709,7 +3803,7 @@ namespace video {
     }
 
     {
-      auto encoder_name = encoder.codec_from_config(config).name;
+      auto encoder_name = config.videoFormat == pyrowave::video_format ? "pyrowave"s : encoder.codec_from_config(config).name;
 
       BOOST_LOG(info) << "Creating encoder " << logging::bracket(encoder_name);
 
@@ -2718,7 +3812,7 @@ namespace video {
       BOOST_LOG(info) << "Color range: " << (colorspace.full_range ? "JPEG" : "MPEG");
     }
 
-    if (dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
+    if (config.videoFormat == pyrowave::video_format || dynamic_cast<const encoder_platform_formats_avcodec *>(encoder.platform_formats.get())) {
       result = disp.make_avcodec_encode_device(pix_fmt);
     } else if (dynamic_cast<const encoder_platform_formats_nvenc *>(encoder.platform_formats.get())) {
       result = disp.make_nvenc_encode_device(pix_fmt);
@@ -3401,6 +4495,26 @@ namespace video {
                                                                      encoder.av1[encoder_t::DYNAMIC_RANGE_YUV444];
   }
 
+  /**
+   * @brief Probe each PyroWave color depth and chroma profile using the selected capture backend.
+   * @param encoder Encoder descriptor selecting the capture backend.
+   */
+  void probe_pyrowave(const encoder_t &encoder) {
+    active_pyrowave_profiles = 0;
+    if (!config::video.pyrowave) {
+      return;
+    }
+    const auto output_name = display_device::map_output_name(config::video.output_name);
+    std::shared_ptr<platf::display_t> display;
+    active_pyrowave_profiles = pyrowave::probe_profiles([&](const config_t &probe) {
+      reset_display(display, encoder.platform_formats->dev_type, output_name, probe);
+      return display && validate_config(display, encoder, probe) >= 0;
+    });
+    if (!active_pyrowave_profiles) {
+      BOOST_LOG(warning) << "PyroWave is unavailable on the selected capture backend";
+    }
+  }
+
   int probe_encoders() {
     if (!allow_encoder_probing(display_device::enumerate_devices())) {
       // Error already logged
@@ -3411,6 +4525,7 @@ namespace video {
 
     // If we already have a good encoder, check to see if another probe is required
     if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && !platf::needs_encoder_reenumeration()) {
+      probe_pyrowave(*chosen_encoder);
       return 0;
     }
 
@@ -3419,6 +4534,7 @@ namespace video {
     chosen_encoder = nullptr;
     active_hevc_mode = config::video.hevc_mode;
     active_av1_mode = config::video.av1_mode;
+    active_pyrowave_profiles = 0;
     reset_encoder_probe_results();
 
     auto adjust_encoder_constraints_hevc = [&](encoder_t *encoder) {
@@ -3568,6 +4684,8 @@ namespace video {
     BOOST_LOG(info);
 
     auto &encoder = *chosen_encoder;
+
+    probe_pyrowave(encoder);
 
     record_encoder_probe_results(encoder);
 

@@ -6,6 +6,8 @@ import Advanced from '../../src_assets/common/assets/web/configs/tabs/Advanced.v
 import General from '../../src_assets/common/assets/web/configs/tabs/General.vue'
 import Inputs from '../../src_assets/common/assets/web/configs/tabs/Inputs.vue'
 import Network from '../../src_assets/common/assets/web/configs/tabs/Network.vue'
+import Checkbox from '../../src_assets/common/assets/web/Checkbox.vue'
+import configTabs from '../../src_assets/common/assets/web/configs/config_tabs.json'
 
 const globalOptions = {
   mocks: {
@@ -25,6 +27,25 @@ const globalOptions = {
     Undo: true,
   },
 }
+
+describe('PyroWave configuration', () => {
+  it.each(['windows', 'linux', 'macos', 'freebsd'])('enables capability detection by default and supports disabling it on %s', async platform => {
+    const config = { ...configTabs.find(tab => tab.id === 'advanced').options }
+    const wrapper = mount(Advanced, {
+      props: { platform, config },
+      global: { ...globalOptions, stubs: { ...globalOptions.stubs, Checkbox: false } },
+    })
+    const checkbox = wrapper.findAllComponents(Checkbox).find(component => component.props('id') === 'pyrowave')
+    const input = checkbox.get('input[type="checkbox"]')
+    expect(input.element.checked).toBe(true)
+    expect(checkbox.text()).toContain('_common.enabled_def_cbox')
+    expect(config.pyrowave).toBe('enabled')
+    await input.setValue(false)
+    expect(config.pyrowave).toBe('disabled')
+    await input.setValue(true)
+    expect(config.pyrowave).toBe('enabled')
+  })
+})
 
 describe('configuration accessibility', () => {
   it('gives every global prep command input an accessible label', () => {
@@ -135,7 +156,7 @@ describe('network configuration', () => {
 
 describe('FEC configuration', () => {
   it.each([0, 1, 20, 99, 100])('accepts %i percent and updates the configuration', async percentage => {
-    const config = { fec_percentage: 20 }
+    const config = { ...configTabs.find(tab => tab.id === 'advanced').options, fec_percentage: 20 }
     const wrapper = mount(Advanced, {
       props: { platform: 'macos', config },
       global: globalOptions,
@@ -149,8 +170,9 @@ describe('FEC configuration', () => {
   })
 
   it.each([-1, 101, 255, 0.5])('marks %s percent as invalid', async percentage => {
+    const config = { ...configTabs.find(tab => tab.id === 'advanced').options, fec_percentage: 20 }
     const wrapper = mount(Advanced, {
-      props: { platform: 'macos', config: { fec_percentage: 20 } },
+      props: { platform: 'macos', config },
       global: globalOptions,
     })
     const input = wrapper.get('#fec_percentage')

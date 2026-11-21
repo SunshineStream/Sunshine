@@ -2125,6 +2125,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
         <td colspan="2">
             Percentage of error correcting packets per data packet in each video frame.
             Set to <code>0</code> to disable forward error correction.
+            PyroWave protects only critical data when the client supports record framing.
             @warning{Higher values can correct for more network packet loss,
             but at the cost of increasing bandwidth usage.}
         </td>
@@ -2278,6 +2279,33 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>3</td>
         <td>advertise support for AV1 Main 8-bit and 10-bit (HDR) profiles</td>
+    </tr>
+</table>
+
+### pyrowave
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Allows compatible clients to request PyroWave 8-bit or 10-bit 4:2:0 or 4:4:4 video streams.
+            Support is advertised based on encoder capabilities. HDR requires a supported capture backend
+            and HDR enabled on the host display and client.
+            Transport framing is negotiated with the client.
+            @warning{PyroWave consumes a significant amount of bandwidth. Not recommended unless on LAN and utilizing a hardwired connection.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            pyrowave = disabled
+            @endcode</td>
     </tr>
 </table>
 

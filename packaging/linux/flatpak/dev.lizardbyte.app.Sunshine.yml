@@ -80,6 +80,7 @@ modules:
       - -DBUILD_WERROR=ON
       - -DCMAKE_BUILD_TYPE=Release
       - -DCMAKE_CUDA_COMPILER=/app/cuda/bin/nvcc
+      - -DCPM_pyrowave_granite_SOURCE=/run/build/sunshine/third-party/pyrowave-granite
       - -DFFMPEG_PREPARED_BINARIES=/app/ffmpeg
       - -DGLAD_SKIP_PIP_INSTALL=ON
       - -DSUNSHINE_ASSETS_DIR=share/sunshine
@@ -107,5 +108,20 @@ modules:
       - type: git
         url: "@GITHUB_CLONE_URL@"
         commit: "@GITHUB_COMMIT@"
+      - type: git
+        url: https://github.com/Themaister/Granite.git
+        commit: "@PYROWAVE_GRANITE_TAG@"
+        disable-submodules: true
+        dest: third-party/pyrowave-granite
+      - type: git
+        url: https://github.com/zeux/volk.git
+        commit: 47cddf7ed97b94118a08aacb548a411188e016cc
+        disable-submodules: true
+        dest: third-party/pyrowave-granite/third_party/volk
+      - type: git
+        url: https://github.com/KhronosGroup/Vulkan-Headers.git
+        commit: 6802bb4733b63ed5efd3adb308a6c885ef180ea1
+        disable-submodules: true
+        dest: third-party/pyrowave-granite/third_party/khronos/vulkan-headers
       - type: file
         path: package-lock.json

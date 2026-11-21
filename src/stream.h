@@ -6,6 +6,7 @@
 
 // standard includes
 #include <utility>
+#include <vector>
 
 // lib includes
 #include <boost/asio.hpp>
@@ -21,6 +22,25 @@ namespace stream {
   constexpr auto AUDIO_STREAM_PORT = 11;  ///< GameStream base-port offset used for the audio UDP stream.
 
   struct session_t;
+
+  /**
+   * @brief Data shard count and parity percentage for one PyroWave FEC block.
+   */
+  struct video_fec_block_t {
+    size_t data_shards;  ///< Consecutive RTP data packets in this block.
+    size_t percentage;  ///< Recovery percentage, zero for unprotected detail packets.
+  };
+
+  /**
+   * @brief Protect the critical PyroWave prefix while fitting the existing four-block transport.
+   *
+   * @param data_shards Total RTP data packets in the frame.
+   * @param critical_shards Leading packets required for decoding.
+   * @param percentage Host recovery percentage for the critical prefix.
+   * @param minimum_parity Client's minimum recovery packet count.
+   * @return At most four blocks, or an empty plan when the frame cannot be represented.
+   */
+  std::vector<video_fec_block_t> pyrowave_fec_blocks(size_t data_shards, size_t critical_shards, size_t percentage, size_t minimum_parity);
 
   /**
    * @brief Stream configuration shared by capture and network senders.

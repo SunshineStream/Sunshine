@@ -13,6 +13,7 @@ extern "C" {
 // standard includes
 #include <array>
 #include <cctype>
+#include <charconv>
 #include <format>
 #include <set>
 #include <unordered_map>
@@ -910,6 +911,13 @@ namespace rtsp_stream {
       ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
     }
 
+    if (video::active_pyrowave_profiles != 0) {
+      ss << "a=rtpmap:99 PYROWAVE/90000"sv << std::endl;
+      if (std::string_view {SUNSHINE_PYROWAVE_BITSTREAM_ID}.size()) {
+        ss << "a=x-ss-pyrowave.bitstream:"sv << SUNSHINE_PYROWAVE_BITSTREAM_ID << std::endl;
+      }
+    }
+
     if (!session.surround_params.empty()) {
       // If we have our own surround parameters, advertise them twice first
       ss << "a=fmtp:97 surround-params="sv << session.surround_params << std::endl;
@@ -1014,6 +1022,39 @@ namespace rtsp_stream {
   }
 
   /**
+   * @brief Select PyroWave framing from client capabilities and reject unsupported transports.
+   *
+   * @param config Stream configuration containing the final negotiated packet size.
+   * @param args Client ANNOUNCE attributes.
+   * @return True when the requested transport is supported.
+   */
+  bool configure_pyrowave(stream::config_t &config, const std::unordered_map<std::string_view, std::string_view> &args) {
+    if (config.monitor.videoFormat != video::pyrowave::video_format) {
+      return true;
+    }
+    uint32_t features = 0;
+    for (auto name : {"x-ss-video[0].pyrowaveFeatures"sv, "x-ss-video[0].pyrowaveCompression"sv, "x-ss-video[0].pyrowaveHybrid"sv}) {
+      auto value = args.find(name);
+      if (value == args.end()) {
+        continue;
+      }
+      uint32_t parsed = 0;
+      auto [end, error] = std::from_chars(value->second.data(), value->second.data() + value->second.size(), parsed);
+      if (error != std::errc {} || end != value->second.data() + value->second.size()) {
+        return false;
+      }
+      if (name == "x-ss-video[0].pyrowaveFeatures"sv) {
+        features = parsed;
+      } else if (parsed != 0) {
+        return false;
+      }
+    }
+    config.monitor.pyrowaveRecordFraming = args.contains("x-ss-video[0].pyrowaveAdaptiveFec"sv) || (features & 1);
+    config.monitor.packetSize = config.packetsize;
+    return config.packetsize >= config::PACKETSIZE_MIN && config.packetsize <= config::PACKETSIZE_MAX && config.minRequiredFecPackets >= 0;
+  }
+
+  /**
    * @brief Handle RTSP ANNOUNCE requests from the client.
    *
    * @param rtsp_server RTSP server instance handling the request.
@@ -1066,7 +1107,7 @@ namespace rtsp_stream {
         auto name = line.substr(2, pos - 2);
         auto val = line.substr(pos + 1);
 
-        if (val[val.size() - 1] == ' ') {
+        if (!val.empty() && val.back() == ' ') {
           val = val.substr(0, val.size() - 1);
         }
         args.try_emplace(name, val);
@@ -1165,6 +1206,12 @@ namespace rtsp_stream {
       return;
     }
 
+    if (!configure_pyrowave(config, args)) {
+      BOOST_LOG(warning) << "Client requested an unsupported PyroWave transport";
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
     // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
     // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
     // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
@@ -1228,6 +1275,12 @@ namespace rtsp_stream {
 
       BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
       config.monitor.bitrate = (int) configuredBitrateKbps;
+    }
+
+    if (config.monitor.videoFormat < 0 || config.monitor.videoFormat > video::pyrowave::video_format || (config.monitor.videoFormat == video::pyrowave::video_format && !video::pyrowave::supported(config.monitor, video::active_pyrowave_profiles))) {
+      BOOST_LOG(warning) << "Client requested an unavailable video format or PyroWave profile";
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
     }
 
     if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {

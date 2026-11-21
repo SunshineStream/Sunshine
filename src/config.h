@@ -75,6 +75,7 @@ namespace config {
 
     int hevc_mode;  ///< HEVC support mode advertised to clients.
     int av1_mode;  ///< AV1 support mode advertised to clients.
+    bool pyrowave;  ///< Advertise successfully probed PyroWave profiles unless explicitly disabled.
 
     int min_threads;  ///< Minimum number of threads or slices for CPU encoding.
 

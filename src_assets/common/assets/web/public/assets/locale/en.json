@@ -397,6 +397,8 @@
     "port_udp": "UDP",
     "port_warning": "Exposing the Web UI to the internet is a security risk! Proceed at your own risk!",
     "port_web_ui": "Web UI",
+    "pyrowave": "PyroWave Support",
+    "pyrowave_desc": "Allows compatible clients to request PyroWave 8-bit or 10-bit (HDR) video streams with 4:2:0 or 4:4:4 chroma sampling. Sunshine advertises support based on encoder capabilities.",
     "qp": "Quantization Parameter",
     "qp_desc": "Some devices may not support Constant Bit Rate. For those devices, QP is used instead. Higher value means more compression, but less quality.",
     "qsv_coder": "QuickSync Coder (H264)",

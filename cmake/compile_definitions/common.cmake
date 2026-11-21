@@ -106,6 +106,7 @@ if(WIN32)
     # add_nvenc_sdk_implementation: args = `target_name`, `sdk_version`, `sdk_include_dir`
     function(add_nvenc_sdk_implementation target_name sdk_version sdk_include_dir)
         add_library(${target_name} OBJECT ${NVENC_IMPLEMENTATION_SOURCES})
+        target_link_libraries(${target_name} PRIVATE sunshine_pyrowave)
         target_include_directories(${target_name} BEFORE PRIVATE "${sdk_include_dir}")
         target_compile_definitions(${target_name} PRIVATE
                 NVENC_FACTORY_SUFFIX=${sdk_version}

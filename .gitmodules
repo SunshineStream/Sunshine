@@ -37,6 +37,10 @@
 	path = third-party/plasma-wayland-protocols
 	url = https://github.com/KDE/plasma-wayland-protocols.git
 	branch = master
+[submodule "third-party/pyrowave"]
+	path = third-party/pyrowave
+	url = https://github.com/Themaister/pyrowave.git
+	branch = master
 [submodule "third-party/Simple-Web-Server"]
 	path = third-party/Simple-Web-Server
 	url = https://github.com/LizardByte-infrastructure/Simple-Web-Server.git

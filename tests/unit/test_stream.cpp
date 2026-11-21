@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,8 @@
 
 // local includes
 #include <src/network.h>
+#include <src/rtsp.h>
+#include <src/stream.h>
 
 namespace stream {
   std::vector<uint8_t> concat_and_insert(uint64_t insert_size, uint64_t slice_size, const std::string_view &data1, const std::string_view &data2);
@@ -99,6 +102,37 @@ TEST(ConcatAndInsertTests, ConcatSmallStrideTest) {
   auto res = stream::concat_and_insert(1, 1, std::string_view {b1.data(), b1.size()}, std::string_view {b2.data(), b2.size()});
   auto expected = std::vector<uint8_t> {0, 'a', 0, 'b', 0, 'c', 0, 'd', 0, 'e'};
   ASSERT_EQ(res, expected);
+}
+
+/**
+ * @brief Protect only the critical prefix and respect Reed-Solomon and wire-header limits.
+ */
+TEST(PyrowaveFecTest, ProtectsCriticalPacketsWithoutAddingParityToDetail) {
+  for (const auto &[total, critical, percentage, minimum, expected] : std::vector<std::tuple<size_t, size_t, size_t, size_t, std::vector<std::pair<size_t, size_t>>>> {
+         {100, 10, 20, 0, {{10, 20}, {90, 0}}},
+         {1, 1, 20, 0, {{1, 20}}},
+         {10, 10, 20, 10, {{10, 20}}},
+         {10, 1, 20, 3, {{10, 0}}},
+         {100, 10, 0, 0, {{100, 0}}},
+         {100, 0, 20, 0, {{100, 0}}},
+         {300, 213, 20, 0, {{300, 0}}},
+         {300, 212, 20, 0, {{212, 20}, {88, 0}}},
+         {300, 256, 20, 0, {{300, 0}}},
+         {300, 10, 20, 256, {{300, 0}}},
+         {3000, 10, 20, 0, {{10, 20}, {1023, 0}, {1023, 0}, {944, 0}}},
+         {4092, 10, 20, 0, {{1023, 0}, {1023, 0}, {1023, 0}, {1023, 0}}},
+         {0, 0, 20, 0, {}},
+         {4093, 0, 20, 0, {}},
+         {10, 11, 20, 0, {}},
+         {10, 1, 101, 0, {}}
+       }) {
+    auto plan = stream::pyrowave_fec_blocks(total, critical, percentage, minimum);
+    std::vector<std::pair<size_t, size_t>> actual;
+    for (const auto &block : plan) {
+      actual.emplace_back(block.data_shards, block.percentage);
+    }
+    EXPECT_EQ(actual, expected) << "packets " << total << ", critical " << critical << ", FEC " << percentage << ", minimum " << minimum;
+  }
 }
 
 TEST(ControlPacketTests, RejectsZeroLengthPacket) {

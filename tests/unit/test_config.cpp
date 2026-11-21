@@ -67,6 +67,13 @@ TEST(ConfigDefaultsTest, TreatsFp16SdrCapturesAsLinear) {
   EXPECT_FALSE(config::video.fp16_sdr_gamma_encoded);
 }
 
+/**
+ * @brief PyroWave profile probing is enabled without a configuration override.
+ */
+TEST(ConfigDefaultsTest, EnablesPyrowaveCapabilityDetection) {
+  EXPECT_TRUE(config::video.pyrowave);
+}
+
 TEST(ConfigDefaultsTest, PreservesAmdEncoderNumericDefaults) {
   EXPECT_EQ(config::video.amd.amd_usage_h264, 1);
   EXPECT_EQ(config::video.amd.amd_usage_hevc, 1);
@@ -261,6 +268,25 @@ TEST_F(ConfigPersistenceTest, ParsesBooleanOptionsCaseInsensitively) {
     config::apply_config_for_test(std::string {"fp16_sdr_gamma_encoded = "} + std::string {setting} + "\n");
     EXPECT_EQ(config::video.fp16_sdr_gamma_encoded, expected) << setting;
   }
+}
+
+/**
+ * @brief Loading defaults keeps PyroWave enabled and explicit overrides remain effective.
+ */
+TEST_F(ConfigPersistenceTest, PreservesPyrowaveDefaultAndParsesOverrides) {
+  const auto original_video = config::video;
+  const auto restore = util::fail_guard([original_video]() {
+    config::video = original_video;
+  });
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+  config::apply_config_for_test("");
+  EXPECT_TRUE(config::video.pyrowave);
+  config::apply_config_for_test("pyrowave = disabled\n");
+  EXPECT_FALSE(config::video.pyrowave);
+  config::apply_config_for_test("pyrowave = enabled\n");
+  EXPECT_TRUE(config::video.pyrowave);
 }
 
 TEST_F(ConfigPersistenceTest, ParsesHexIntegersWiderThanAnInt) {

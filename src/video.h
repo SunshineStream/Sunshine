@@ -8,9 +8,16 @@
 #include <chrono>
 #include <deque>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
+
+// lib includes
+#include <vulkan/vulkan_core.h>
+
+// PyroWave requires Vulkan declarations before its C API header.
+#include <pyrowave.h>
 
 // local includes
 #include "input.h"
@@ -47,10 +54,12 @@ namespace video {
     int slicesPerFrame;  ///< Number of slices per frame.
     int numRefFrames;  ///< Maximum number of reference frames.
     int encoderCscMode;  ///< Requested color range and SDR colorspace; HDR always uses BT.2020 and ST2084.
-    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1.
+    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1, 3 = PyroWave.
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
+    bool pyrowaveRecordFraming = false;  ///< Client accepts native PyroWave records and padding.
+    int packetSize = 1392;  ///< Negotiated video packet size, including the NV video header.
   };
 
   /**
@@ -618,6 +627,8 @@ namespace video {
     stream::session_t *channel_data = nullptr;  ///< Stream session that receives this packet.
     bool after_ref_frame_invalidation = false;  ///< Whether the frame follows reference-frame invalidation.
     std::optional<std::chrono::steady_clock::time_point> frame_timestamp;  ///< Capture timestamp associated with the frame.
+    uint16_t pyrowave_critical_packets = 0;  ///< Leading RTP data packets needed to decode the coarsest wavelet level.
+    std::vector<bool> pyrowave_record_starts;  ///< RTP data packets that start with a native or padding record.
   };
 
   /**
@@ -734,6 +745,196 @@ namespace video {
    */
   using packet_t = std::unique_ptr<packet_raw_t>;
 
+  namespace pyrowave {
+    inline constexpr int video_format = 3;  ///< Experimental GameStream bitStreamFormat value.
+    inline constexpr uint32_t scm_sdr = 0x00800000;  ///< ServerCodecModeSupport bit for 8-bit 4:2:0.
+    inline constexpr uint32_t scm_sdr_444 = 0x01000000;  ///< ServerCodecModeSupport bit for 8-bit 4:4:4.
+    inline constexpr uint32_t scm_hdr = 0x02000000;  ///< ServerCodecModeSupport bit for 10-bit 4:2:0.
+    inline constexpr uint32_t scm_hdr_444 = 0x04000000;  ///< ServerCodecModeSupport bit for 10-bit 4:4:4.
+    inline constexpr uint32_t scm_mask = scm_sdr | scm_sdr_444 | scm_hdr | scm_hdr_444;  ///< All PyroWave profile bits.
+    inline constexpr size_t packet_boundary = 1024;  ///< Native packet boundary used by legacy PyroWave clients.
+    inline constexpr size_t record_packet_boundary = 16384;  ///< Packet allocation large enough for any native block record.
+    inline constexpr size_t frame_header_size = 8;  ///< Sunshine short frame header preceding the codec payload.
+    inline constexpr size_t shard_overhead = 16;  ///< NV video header bytes included in the negotiated packet size.
+    inline constexpr size_t max_frame_packets = 4 * 1023;  ///< Four FEC blocks with ten-bit data packet counts.
+    inline constexpr size_t max_frame_size = 16 * 1024 * 1024;  ///< Bound on codec output allocation.
+
+    /**
+     * @brief Validate dimensions, color format, framerate, and bitrate for PyroWave.
+     *
+     * @param config Negotiated stream configuration.
+     * @return True for supported 8-bit or 10-bit 4:2:0 or 4:4:4 configurations.
+     */
+    bool valid_config(const config_t &config);
+
+    /**
+     * @brief Calculate the codec byte budget within host bitrate, packet capacity, and allocation limits.
+     *
+     * @param config Negotiated stream configuration.
+     * @return Maximum native bitstream bytes per frame, including headers, or zero for invalid input.
+     */
+    size_t frame_budget(const config_t &config);
+
+    /**
+     * @brief Check a requested profile against the last successful encoder probe.
+     *
+     * @param config Negotiated stream configuration.
+     * @param profiles Successfully probed ServerCodecModeSupport profile bits.
+     * @return Whether the requested profile may be accepted.
+     */
+    bool supported(const config_t &config, uint32_t profiles);
+
+    /**
+     * @brief Probe each color depth and chroma profile independently.
+     *
+     * @param validate Callback that tests capture, conversion, and encoding for a profile.
+     * @return ServerCodecModeSupport bits for successful profiles.
+     */
+    uint32_t probe_profiles(const std::function<bool(const config_t &)> &validate);
+
+    /**
+     * @brief Select the capture converter's pixel layout for a PyroWave profile.
+     *
+     * @param formats Capture backend's pixel formats.
+     * @param config Negotiated stream configuration.
+     * @return Pixel layout, or AV_PIX_FMT_NONE when unavailable.
+     */
+    AVPixelFormat capture_format(const encoder_platform_formats_t &formats, const config_t &config);
+
+    /**
+     * @brief Frame native codec packets for the client's negotiated transport.
+     *
+     * @param packets Native packet byte ranges returned by the encoder.
+     * @param bitstream Storage containing the native packets.
+     * @param config Negotiated framing and packet size.
+     * @param critical_blocks Native block indices below this value belong to the coarsest level.
+     * @param frame_index Monotonic frame index.
+     * @return Framed packet and recovery metadata, or null for malformed or oversized output.
+     */
+    packet_t frame_packets(std::span<const pyrowave_packet> packets, std::span<const uint8_t> bitstream, const config_t &config, size_t critical_blocks, int64_t frame_index);
+
+    /**
+     * @brief Describe YUV components as GPU image views without copying pixel data.
+     *
+     * @param format Pixel layout produced by the capture converter.
+     * @param images Images containing the planes or packed components.
+     * @param buffers Y, Cb, and Cr views returned for the encoder.
+     * @param scaling_factor Normalization for ten-bit samples stored in sixteen-bit images.
+     * @return True when the image formats match the pixel layout.
+     */
+    bool map_gpu_frame(AVPixelFormat format, std::span<const pyrowave_image_view> images, pyrowave_gpu_buffers &buffers, float &scaling_factor);
+
+    /**
+     * @brief PyroWave session interface used by the common capture pipeline.
+     */
+    class session_t: public encode_session_t {
+    public:
+      /**
+       * @brief Encode the converted frame using the client's negotiated framing.
+       *
+       * @param frame_index Monotonic GameStream frame index.
+       * @return Encoded frame, or null on failure.
+       */
+      virtual packet_t encode(int64_t frame_index) = 0;
+    };
+
+    /**
+     * @brief Create a session with the bundled PyroWave C API and an initialized frame conversion device.
+     *
+     * @param config Negotiated stream configuration.
+     * @param device Converter owning its input frame and hardware context, if any.
+     * @param frames Hardware pool retained for the converter and attached to borrowed VideoToolbox frames.
+     * @return Session, or null when the configuration is invalid or initialization fails.
+     */
+    std::unique_ptr<session_t> make_session(const config_t &config, std::unique_ptr<platf::avcodec_encode_device_t> device, avcodec_buffer_t frames = {});
+
+    /**
+     * @brief C API entry points, injectable for deterministic encoder failure tests.
+     */
+    struct api_t {
+      decltype(&pyrowave_get_api_version) get_api_version = pyrowave_get_api_version;  ///< Query the runtime ABI.
+      decltype(&pyrowave_create_default_device) create_device = pyrowave_create_default_device;  ///< Create the Vulkan device.
+      decltype(&pyrowave_create_device) share_device = pyrowave_create_device;  ///< Borrow the converter's Vulkan device.
+      decltype(&pyrowave_create_device_by_compat) match_device = pyrowave_create_device_by_compat;  ///< Select the capture adapter for external textures.
+      decltype(&pyrowave_device_destroy) destroy_device = pyrowave_device_destroy;  ///< Destroy the Vulkan device.
+      decltype(&pyrowave_device_set_command_buffer) set_command_buffer = pyrowave_device_set_command_buffer;  ///< Record encoding into the caller's command buffer.
+      decltype(&pyrowave_device_set_queue_type) set_queue_type = pyrowave_device_set_queue_type;  ///< Select the queue used for encoding.
+      decltype(&pyrowave_encoder_create) create_encoder = pyrowave_encoder_create;  ///< Create an encoder.
+      decltype(&pyrowave_encoder_destroy) destroy_encoder = pyrowave_encoder_destroy;  ///< Destroy an encoder before its device.
+      decltype(&pyrowave_encoder_encode_cpu) encode_cpu = pyrowave_encoder_encode_cpu;  ///< Upload and encode planar YUV.
+      decltype(&pyrowave_encoder_encode_gpu) encode_gpu = pyrowave_encoder_encode_gpu;  ///< Encode GPU-resident YUV images.
+      decltype(&pyrowave_encoder_set_ycbcr_scaling_factor) set_scaling_factor = pyrowave_encoder_set_ycbcr_scaling_factor;  ///< Normalize stored YUV samples.
+      decltype(&pyrowave_image_create) import_image = pyrowave_image_create;  ///< Import shared texture memory.
+      decltype(&pyrowave_image_get_image_view) image_view = pyrowave_image_get_image_view;  ///< Describe sampled components of an imported image.
+      decltype(&pyrowave_image_destroy) destroy_image = pyrowave_image_destroy;  ///< Release an imported image.
+      decltype(&pyrowave_sync_object_create) import_sync = pyrowave_sync_object_create;  ///< Import a shared GPU fence.
+      decltype(&pyrowave_sync_object_get_semaphore) sync_semaphore = pyrowave_sync_object_get_semaphore;  ///< Obtain the imported semaphore.
+      decltype(&pyrowave_sync_object_destroy) destroy_sync = pyrowave_sync_object_destroy;  ///< Release an imported fence.
+      decltype(&pyrowave_encoder_compute_num_packets) num_packets = pyrowave_encoder_compute_num_packets;  ///< Query the packet allocation.
+      decltype(&pyrowave_encoder_packetize) packetize = pyrowave_encoder_packetize;  ///< Read encoded packets.
+      decltype(&pyrowave_encoder_get_num_active_blocks) active_blocks = pyrowave_encoder_get_num_active_blocks;  ///< Query native block indices for the critical wavelet bands.
+    };
+
+    /**
+     * @brief Platform GPU input resources retained until after encoder destruction.
+     */
+    class gpu_input_t {
+    public:
+      /**
+       * @brief Retain the codec entry points used by this input path.
+       * @param api Codec entry points.
+       */
+      explicit gpu_input_t(const api_t &api):
+          api {api} {}
+
+      /**
+       * @brief Allow platform implementations to release their shared resources.
+       */
+      virtual ~gpu_input_t() = default;
+
+      /**
+       * @brief Prepare a converted hardware frame without transferring pixels to the CPU.
+       * @param frame Converted frame retained by the session.
+       * @return False when the session should use its CPU fallback.
+       */
+      virtual bool prepare(AVFrame *frame) = 0;
+
+      /**
+       * @brief Submit encoding and synchronize access to the prepared images.
+       * @param encoder Codec instance using this input's device.
+       * @param rate_control Encoded frame byte budget.
+       * @return Encoding status.
+       */
+      virtual pyrowave_result encode(pyrowave_encoder encoder, const pyrowave_rate_control &rate_control) = 0;
+
+      pyrowave_device device {};  ///< Device owned by the implementation; destroyed after its image resources.
+
+    protected:
+      api_t api;  ///< Codec entry points shared with the owning session.
+    };
+
+#ifdef _WIN32
+    /**
+     * @brief Create a D3D11 texture and fence bridge to the capture adapter's Vulkan device.
+     * @param frames Initialized D3D11 conversion frame pool.
+     * @param api Codec entry points.
+     * @return GPU input resources, or null when sharing is unsupported.
+     */
+    std::unique_ptr<gpu_input_t> make_d3d11_input(AVHWFramesContext *frames, const api_t &api);
+#endif
+
+    /**
+     * @brief Create a session with explicitly supplied PyroWave entry points.
+     *
+     * @param config Negotiated stream configuration.
+     * @param device Initialized frame conversion device.
+     * @param api C API implementation, copied into the session.
+     * @param frames Hardware pool retained for the converter and attached to borrowed VideoToolbox frames.
+     * @return Initialized session, or null on failure.
+     */
+    std::unique_ptr<session_t> make_session(const config_t &config, std::unique_ptr<platf::avcodec_encode_device_t> device, const api_t &api, avcodec_buffer_t frames = {});
+  }  // namespace pyrowave
+
   /**
    * @brief Raw HDR metadata fields parsed from the display backend.
    */
@@ -767,6 +968,7 @@ namespace video {
 
   extern int active_hevc_mode;
   extern int active_av1_mode;
+  extern uint32_t active_pyrowave_profiles;  ///< Independently probed PyroWave ServerCodecModeSupport profile bits.
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
   extern std::array<bool, 3> last_encoder_probe_supported_dynamic_range_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1

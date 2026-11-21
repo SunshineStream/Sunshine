@@ -47,3 +47,14 @@ CPMDeclarePackage(Boost
         URL_HASH SHA256=${BOOST_SHA256}
         DOWNLOAD_ONLY YES
 )
+
+# Granite/PyroWave (no official releases/versioning, so the commit hash is tracked)
+set(PYROWAVE_GRANITE_TAG fb178c8080d163419e8d20f10715c61c53c1ec9b)
+CPMDeclarePackage(pyrowave_granite
+        NAME pyrowave_granite
+        GITHUB_REPOSITORY Themaister/Granite
+        GIT_TAG ${PYROWAVE_GRANITE_TAG}
+        GIT_SUBMODULES third_party/volk third_party/khronos/vulkan-headers
+        GIT_SUBMODULES_RECURSE OFF
+        DOWNLOAD_ONLY YES
+)

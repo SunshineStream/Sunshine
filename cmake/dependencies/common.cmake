@@ -98,6 +98,7 @@ include_directories(SYSTEM ${MINIUPNP_INCLUDE_DIRS})
 
 # ffmpeg pre-compiled binaries
 include("${CMAKE_MODULE_PATH}/dependencies/ffmpeg.cmake")
+include("${CMAKE_MODULE_PATH}/dependencies/pyrowave.cmake")
 
 # Opus
 if(TARGET PkgConfig::SUNSHINE_BUNDLED_OPUS)

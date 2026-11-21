@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <span>
 
 // platform includes
@@ -2203,3 +2204,198 @@ namespace platf::dxgi {
     return 0;
   }
 }  // namespace platf::dxgi
+
+namespace video::pyrowave {
+  /**
+   * @brief Share converted D3D11 pixels and a timeline fence with Vulkan on the same adapter.
+   */
+  class d3d11_input_t final: public gpu_input_t {
+  public:
+    using gpu_input_t::gpu_input_t;
+
+    /**
+     * @brief Release imports before destroying the Vulkan device and their D3D11 resources.
+     */
+    ~d3d11_input_t() override {
+      if (image) {
+        api.destroy_image(image);
+      }
+      if (sync) {
+        api.destroy_sync(sync);
+      }
+      if (device) {
+        api.destroy_device(device);
+      }
+    }
+
+    /**
+     * @brief Import reusable shared resources and let PyroWave describe their sampled image views.
+     * @param frames D3D11 conversion pool.
+     * @return True when texture and fence imports succeed.
+     */
+    bool init(AVHWFramesContext *frames) {
+      if (!frames->device_ctx || frames->device_ctx->type != AV_HWDEVICE_TYPE_D3D11VA) {
+        return false;
+      }
+      const auto format = frames->sw_format;
+      VkFormat image_format;
+      switch (format) {
+        case AV_PIX_FMT_NV12:
+          dxgi_format = DXGI_FORMAT_NV12;
+          image_format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM;
+          break;
+        case AV_PIX_FMT_P010:
+          dxgi_format = DXGI_FORMAT_P010;
+          image_format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
+          break;
+        case AV_PIX_FMT_VUYX:
+          dxgi_format = DXGI_FORMAT_AYUV;
+          image_format = VK_FORMAT_R8G8B8A8_UNORM;
+          break;
+        case AV_PIX_FMT_XV30:
+          dxgi_format = DXGI_FORMAT_Y410;
+          image_format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+          break;
+        default:
+          return false;
+      }
+      auto source = static_cast<AVD3D11VADeviceContext *>(frames->device_ctx->hwctx)->device;
+      capture_device = source;
+      platf::dxgi::dxgi_t dxgi;
+      util::safe_ptr<IDXGIAdapter, &platf::dxgi::Release<IDXGIAdapter>> adapter;
+      platf::dxgi::device_ctx_t immediate;
+      DXGI_ADAPTER_DESC description {};
+      if (FAILED(source->QueryInterface(IID_ID3D11Device5, (void **) &d3d_device)) || FAILED(source->QueryInterface(IID_IDXGIDevice, (void **) &dxgi)) || FAILED(dxgi->GetAdapter(&adapter)) || FAILED(adapter->GetDesc(&description))) {
+        return false;
+      }
+      source->GetImmediateContext(&immediate);
+      if (FAILED(immediate->QueryInterface(IID_ID3D11DeviceContext4, (void **) &context))) {
+        return false;
+      }
+      pyrowave_luid luid {};
+      static_assert(sizeof(luid) == sizeof(description.AdapterLuid));
+      std::memcpy(&luid, &description.AdapterLuid, sizeof(luid));
+      if (api.match_device(0, 0, nullptr, nullptr, &luid, VK_QUEUE_GLOBAL_PRIORITY_MEDIUM, &device) != PYROWAVE_SUCCESS) {
+        return false;
+      }
+      width = frames->width;
+      height = frames->height;
+      D3D11_TEXTURE2D_DESC texture_info {};
+      texture_info.Width = width;
+      texture_info.Height = height;
+      texture_info.MipLevels = 1;
+      texture_info.ArraySize = 1;
+      texture_info.Format = dxgi_format;
+      texture_info.SampleDesc.Count = 1;
+      texture_info.Usage = D3D11_USAGE_DEFAULT;
+      texture_info.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+      texture_info.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+      platf::dxgi::resource1_t resource;
+      util::safe_ptr_v2<void, BOOL, &CloseHandle> texture_handle;
+      util::safe_ptr_v2<void, BOOL, &CloseHandle> fence_handle;
+      if (FAILED(d3d_device->CreateTexture2D(&texture_info, nullptr, &texture)) || FAILED(texture->QueryInterface(IID_IDXGIResource1, (void **) &resource)) || FAILED(resource->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE, nullptr, &texture_handle)) || FAILED(d3d_device->CreateFence(0, D3D11_FENCE_FLAG_SHARED, IID_ID3D11Fence, (void **) &fence)) || FAILED(fence->CreateSharedHandle(nullptr, GENERIC_ALL, nullptr, &fence_handle))) {
+        return false;
+      }
+      VkImageCreateInfo image_info {VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+      image_info.flags = VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
+      image_info.imageType = VK_IMAGE_TYPE_2D;
+      image_info.format = image_format;
+      image_info.extent = {uint32_t(width), uint32_t(height), 1};
+      image_info.mipLevels = 1;
+      image_info.arrayLayers = 1;
+      image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+      image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+      image_info.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+      image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+      pyrowave_image_create_info import {};
+      import.device = device;
+      import.external_handle = reinterpret_cast<pyrowave_os_handle>(texture_handle.get());
+      import.handle_type = VK_EXTERNAL_MEMORY_HANDLE_TYPE_D3D11_TEXTURE_BIT;
+      import.image_create_info = &image_info;
+      if (api.import_image(&import, &image) != PYROWAVE_SUCCESS) {
+        return false;
+      }
+      texture_handle.release();  // Successful imports take ownership of the NT handle.
+      pyrowave_sync_object_create_info sync_info {};
+      sync_info.device = device;
+      sync_info.external_handle = reinterpret_cast<pyrowave_os_handle>(fence_handle.get());
+      sync_info.handle_type = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_D3D12_FENCE_BIT;
+      sync_info.semaphore_type = VK_SEMAPHORE_TYPE_TIMELINE;
+      if (api.import_sync(&sync_info, &sync) != PYROWAVE_SUCCESS) {
+        return false;
+      }
+      fence_handle.release();
+      if (format == AV_PIX_FMT_VUYX || format == AV_PIX_FMT_XV30) {
+        pyrowave_image_view view {};
+        return api.image_view(image, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_USAGE_SAMPLED_BIT, &view) == PYROWAVE_SUCCESS &&
+               map_gpu_frame(format, std::span(&view, 1), buffers, scaling_factor);
+      }
+      for (int component = 0; component < 3; ++component) {
+        if (api.image_view(image, VkImageAspectFlagBits(VK_IMAGE_ASPECT_PLANE_0_BIT << component), VK_IMAGE_USAGE_SAMPLED_BIT, &buffers.planes[component]) != PYROWAVE_SUCCESS) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    /** @copydoc gpu_input_t::prepare */
+    bool prepare(AVFrame *frame) override {
+      if (frame->format != AV_PIX_FMT_D3D11 || !frame->data[0] || frame->width != width || frame->height != height) {
+        return false;
+      }
+      auto source = reinterpret_cast<ID3D11Texture2D *>(frame->data[0]);
+      platf::dxgi::device_t source_device;
+      source->GetDevice(&source_device);
+      D3D11_TEXTURE2D_DESC description {};
+      source->GetDesc(&description);
+      const auto layer = reinterpret_cast<uintptr_t>(frame->data[1]);
+      if (source_device.get() != capture_device || description.Format != dxgi_format || description.SampleDesc.Count != 1 || description.MipLevels != 1 || layer >= description.ArraySize || description.Width < uint32_t(width) || description.Height < uint32_t(height)) {
+        return false;
+      }
+      if (timeline && FAILED(context->Wait(fence.get(), timeline))) {
+        return false;
+      }
+      const D3D11_BOX region {0, 0, 0, uint32_t(width), uint32_t(height), 1};
+      context->CopySubresourceRegion(texture.get(), 0, 0, 0, 0, source, UINT(layer), &region);
+      if (FAILED(context->Signal(fence.get(), ++timeline))) {
+        return false;
+      }
+      context->Flush();
+      return true;
+    }
+
+    /** @copydoc gpu_input_t::encode */
+    pyrowave_result encode(pyrowave_encoder encoder, const pyrowave_rate_control &rate_control) override {
+      const pyrowave_gpu_external_reference reference {image, VK_QUEUE_FAMILY_EXTERNAL};
+      const auto semaphore = api.sync_semaphore(sync);
+      const pyrowave_gpu_sync_operation acquire {&reference, 1, {semaphore, timeline}};
+      const pyrowave_gpu_sync_operation release {&reference, 1, {semaphore, timeline + 1}};
+      api.set_scaling_factor(encoder, scaling_factor);
+      const auto result = api.encode_gpu(encoder, &acquire, &release, &buffers, &rate_control);
+      if (result == PYROWAVE_SUCCESS) {
+        ++timeline;
+      }
+      return result;
+    }
+
+  private:
+    util::safe_ptr<ID3D11Device5, &platf::dxgi::Release<ID3D11Device5>> d3d_device;  ///< Capture adapter's device.
+    ID3D11Device *capture_device = nullptr;  ///< Base interface retained through d3d_device, used to validate source textures.
+    util::safe_ptr<ID3D11DeviceContext4, &platf::dxgi::Release<ID3D11DeviceContext4>> context;  ///< Conversion and copy command stream.
+    util::safe_ptr<ID3D11Fence, &platf::dxgi::Release<ID3D11Fence>> fence;  ///< Shared timeline protecting the texture.
+    platf::dxgi::texture2d_t texture;  ///< Reusable shared copy of the converter's output.
+    pyrowave_image image {};  ///< Vulkan import of texture.
+    pyrowave_sync_object sync {};  ///< Vulkan import of fence.
+    pyrowave_gpu_buffers buffers {};  ///< Component views of the imported texture.
+    float scaling_factor = 1.0f;  ///< Normalization of the imported pixel format.
+    uint64_t timeline = 0;  ///< Last value queued by D3D11 or Vulkan.
+    DXGI_FORMAT dxgi_format = DXGI_FORMAT_UNKNOWN;  ///< Native texture layout.
+    int width = 0;  ///< Conversion output width.
+    int height = 0;  ///< Conversion output height.
+  };
+
+  std::unique_ptr<gpu_input_t> make_d3d11_input(AVHWFramesContext *frames, const api_t &api) {
+    auto input = std::make_unique<d3d11_input_t>(api);
+    return input->init(frames) ? std::move(input) : nullptr;
+  }
+}  // namespace video::pyrowave
