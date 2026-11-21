@@ -11,6 +11,7 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <map>
 #include <mutex>
 #include <string>
 #include <utility>
@@ -87,6 +88,36 @@ namespace nvhttp {
 
   protected:
     boost::asio::ssl::context context {boost::asio::ssl::context::tls_server};  ///< TLS server context configured with Sunshine's certificate and protocol policy.
+    using connection_key_t = std::pair<boost::asio::ip::tcp::endpoint, boost::asio::ip::tcp::endpoint>;  ///< Local and remote endpoints uniquely identifying an active TCP connection.
+    std::map<connection_key_t, std::weak_ptr<Connection>> client_connections;  ///< Live TLS connections indexed by both endpoints.
+    std::mutex client_connections_mutex;  ///< Protects connection lookup across HTTPS workers.
+
+    /**
+     * @brief Recheck the certificate on the request's own TLS connection before dispatch.
+     * @param handler Original HTTP route handler.
+     * @return Handler that rejects revoked identities and refreshes request-local identity.
+     */
+    std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> authorize_request(std::function<void(std::shared_ptr<Response>, std::shared_ptr<Request>)> handler) {
+      return [this, handler = std::move(handler)](auto response, auto request) {
+        std::shared_ptr<Connection> connection;
+        {
+          std::lock_guard lock {client_connections_mutex};
+          if (const auto it = client_connections.find({request->local_endpoint(), request->remote_endpoint()}); it != client_connections.end()) {
+            connection = it->second.lock();
+          }
+        }
+        if (!connection || !verify(connection->socket->native_handle())) {
+          response->close_connection_after_response = true;
+          if (on_verify_failed) {
+            on_verify_failed(response, request);
+          } else {
+            response->write(SimpleWeb::StatusCode::client_error_unauthorized);
+          }
+          return;
+        }
+        handler(response, request);
+      };
+    }
 
     /**
      * @brief Enable client-certificate verification after the listening socket is bound.
@@ -94,6 +125,14 @@ namespace nvhttp {
      */
     void after_bind() override {
       if (verify) {
+        for (auto &[pattern, methods] : resource) {
+          for (auto &[method, handler] : methods) {
+            handler = authorize_request(std::move(handler));
+          }
+        }
+        for (auto &[method, handler] : default_resource) {
+          handler = authorize_request(std::move(handler));
+        }
         context.set_verify_mode(boost::asio::ssl::verify_peer | boost::asio::ssl::verify_fail_if_no_peer_cert | boost::asio::ssl::verify_client_once);
         context.set_verify_callback([](int, boost::asio::ssl::verify_context &) {
           // To respond with an error message, a connection must be established
@@ -114,6 +153,14 @@ namespace nvhttp {
         if (verify && !verify(session->connection->socket->native_handle())) {
           this->write(session, on_verify_failed);
         } else {
+          if (verify) {
+            std::lock_guard lock {client_connections_mutex};
+            std::erase_if(client_connections, [](const auto &entry) {
+              return entry.second.expired();
+            });
+            const auto &socket = session->connection->socket->lowest_layer();
+            client_connections[{socket.local_endpoint(), socket.remote_endpoint()}] = session->connection;
+          }
           this->read(session);
         }
       } else if (this->on_error) {
@@ -184,6 +231,7 @@ namespace nvhttp {
     std::string uuid;  ///< Persistent Moonlight client UUID associated with the certificate.
     std::string cert;  ///< Certificate PEM string or path.
     bool enabled = true;  ///< Whether this persisted client entry may connect.
+    std::shared_ptr<std::atomic_bool> revoked = std::make_shared<std::atomic_bool>(false);  ///< Revocation state retained by pending and active launches.
   };
 
   /**
@@ -209,9 +257,9 @@ namespace nvhttp {
   client_t client_root;  ///< In-memory representation of the paired-client database.
   std::atomic<uint32_t> session_id_counter;  ///< Monotonic counter used to allocate GameStream session IDs.
 
-  // Set by TLS verify callback, read by launch/resume handler (single-threaded HTTPS server)
-  std::string last_verified_client_cert;  ///< Last client certificate accepted by the TLS verify callback.  // NOSONAR(cpp:S5421): intentionally mutable global
-  std::string last_verified_client_name;  ///< Friendly name of last client certificate accepted by the TLS verify callback. // NOSONAR(cpp:S5421): intentionally mutable global
+  // Revalidated immediately before each request; isolated across HTTPS worker threads.
+  thread_local std::string last_verified_client_cert;  ///< Last client certificate accepted by the TLS verify callback.  // NOSONAR(cpp:S5421): intentionally mutable global
+  thread_local std::string last_verified_client_name;  ///< Friendly name of last client certificate accepted by the TLS verify callback. // NOSONAR(cpp:S5421): intentionally mutable global
 
   /**
    * @brief Case-insensitive map used for HTTP headers and query parameters.
@@ -322,6 +370,7 @@ namespace nvhttp {
     cert_chain.clear();
     for (const auto &named_cert : client_root.named_devices) {
       if (!named_cert.enabled) {
+        named_cert.revoked->store(true, std::memory_order_release);
         continue;
       }
 
@@ -438,6 +487,9 @@ namespace nvhttp {
     }
 
     std::lock_guard lock {client_auth_mutex()};
+    for (const auto &previous : client_root.named_devices) {
+      previous.revoked->store(true, std::memory_order_release);
+    }
     client_root = std::move(client);
     rebuild_client_cert_chain();
   }
@@ -466,7 +518,11 @@ namespace nvhttp {
     std::lock_guard lock {client_auth_mutex()};
     std::erase_if(client_root.named_devices, [&certificate](const named_cert_t &existing_client) {
       auto existing_certificate = crypto::x509(existing_client.cert);
-      return existing_certificate && X509_cmp(existing_certificate.get(), certificate.get()) == 0;
+      const bool replaced = existing_certificate && X509_cmp(existing_certificate.get(), certificate.get()) == 0;
+      if (replaced) {
+        existing_client.revoked->store(true, std::memory_order_release);
+      }
+      return replaced;
     });
     client_root.named_devices.emplace_back(std::move(named_cert));
     rebuild_client_cert_chain();
@@ -475,6 +531,21 @@ namespace nvhttp {
       save_state();
     }
     return uuid;
+  }
+
+  /**
+   * @brief Look up the revocation state for an enabled canonical client identity.
+   * @param cert Canonical PEM certificate accepted for this request.
+   * @return Shared revocation state, or a revoked state for an unknown client.
+   */
+  std::shared_ptr<std::atomic_bool> client_revocation_state(std::string_view cert) {
+    std::lock_guard lock {client_auth_mutex()};
+    for (const auto &client : client_root.named_devices) {
+      if (client.cert == cert && client.enabled) {
+        return client.revoked;
+      }
+    }
+    return std::make_shared<std::atomic_bool>(true);
   }
 
   /**
@@ -533,6 +604,7 @@ namespace nvhttp {
     }
     launch_session->rtsp_url_scheme = launch_session->rtsp_cipher ? "rtspenc://"s : "rtsp://"s;
     launch_session->client_cert = last_verified_client_cert;
+    launch_session->revoked = client_revocation_state(launch_session->client_cert);
     launch_session->client_name = last_verified_client_name;
 
     // Generate the unique identifiers for this connection that we will send later during RTSP handshake
@@ -1415,8 +1487,19 @@ namespace nvhttp {
       return;
     }
 
+    if (util::from_view(get_arg(args, "corever", "0")) < 1) {
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Authenticated RTSP is required. Update your Moonlight client.");
+      return;
+    }
+
     host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     auto launch_session = make_launch_session(host_audio, args);
+    if (!rtsp_stream::accepts_rtsp(*launch_session)) {
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Client authorization was revoked");
+      return;
+    }
 
     if (rtsp_stream::session_count() == 0) {
       // The display should be restored in case something fails as there are no other sessions.
@@ -1524,6 +1607,12 @@ namespace nvhttp {
       return;
     }
 
+    if (util::from_view(get_arg(args, "corever", "0")) < 1) {
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Authenticated RTSP is required. Update your Moonlight client.");
+      return;
+    }
+
     // Newer Moonlight clients send localAudioPlayMode on /resume too,
     // so we should use it if it's present in the args and there are
     // no active sessions we could be interfering with.
@@ -1532,6 +1621,11 @@ namespace nvhttp {
       host_audio = util::from_view(get_arg(args, "localAudioPlayMode"));
     }
     const auto launch_session = make_launch_session(host_audio, args);
+    if (!rtsp_stream::accepts_rtsp(*launch_session)) {
+      tree.put("root.<xmlattr>.status_code", 403);
+      tree.put("root.<xmlattr>.status_message", "Client authorization was revoked");
+      return;
+    }
 
     if (no_active_sessions) {
       // We want to prepare display only if there are no active sessions at
@@ -1789,6 +1883,9 @@ namespace nvhttp {
 
   void erase_all_clients() {
     std::lock_guard lock {client_auth_mutex()};
+    for (const auto &client : client_root.named_devices) {
+      client.revoked->store(true, std::memory_order_release);
+    }
     client_root = {};
     cert_chain.clear();
     save_state();
@@ -1799,6 +1896,7 @@ namespace nvhttp {
     bool removed = false;
     for (auto it = client_root.named_devices.begin(); it != client_root.named_devices.end();) {
       if ((*it).uuid == uuid) {
+        it->revoked->store(true, std::memory_order_release);
         it = client_root.named_devices.erase(it);
         removed = true;
       } else {
@@ -1814,12 +1912,19 @@ namespace nvhttp {
   bool set_client_enabled(const std::string_view uuid, bool enabled) {
     std::lock_guard lock {client_auth_mutex()};
     for (auto &named_cert : client_root.named_devices) {
-      if (named_cert.uuid == uuid) {
-        named_cert.enabled = enabled;
-        rebuild_client_cert_chain();
-        save_state();
-        return true;
+      if (named_cert.uuid != uuid) {
+        continue;
       }
+      if (named_cert.enabled != enabled) {
+        named_cert.revoked->store(true, std::memory_order_release);
+        if (enabled) {
+          named_cert.revoked = std::make_shared<std::atomic_bool>(false);
+        }
+      }
+      named_cert.enabled = enabled;
+      rebuild_client_cert_chain();
+      save_state();
+      return true;
     }
     return false;
   }
@@ -1855,7 +1960,8 @@ namespace nvhttp {
     std::unique_ptr<SimpleWeb::ServerBase<SunshineHTTPS>> make_https_server(
       const std::string &certificate_file,
       const std::string &private_key_file,
-      std::shared_ptr<SimpleWeb::ScopeRunner> &handler_scope
+      std::shared_ptr<SimpleWeb::ScopeRunner> &handler_scope,
+      std::function<int(SSL *)> verifier
     ) {
       /**
        * @brief Expose the production HTTPS handler scope to lifetime regression tests.
@@ -1868,6 +1974,14 @@ namespace nvhttp {
 
       auto server = std::make_unique<test_https_server_t>(certificate_file, private_key_file);
       handler_scope = server->handler_runner;
+      server->verify = std::move(verifier);
+      server->default_resource["GET"] = [](auto response, auto) {
+        response->write("authorized");
+      };
+      server->on_verify_failed = [](auto response, auto) {
+        response->close_connection_after_response = true;
+        response->write(SimpleWeb::StatusCode::client_error_unauthorized);
+      };
       return server;
     }
 

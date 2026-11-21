@@ -2,6 +2,10 @@
  * @file src/crypto.cpp
  * @brief Definitions for cryptography functions.
  */
+// standard includes
+#include <algorithm>
+#include <limits>
+
 // lib includes
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
@@ -142,33 +146,31 @@ namespace crypto {
     }
 
     int gcm_t::decrypt(const std::string_view &tagged_cipher, std::vector<std::uint8_t> &plaintext, aes_t *iv) {
+      plaintext.clear();
+      if (tagged_cipher.size() < tag_size || tagged_cipher.size() - tag_size > static_cast<std::size_t>(std::numeric_limits<int>::max() - 16) || key.size() != 16 || iv == nullptr || iv->empty() || iv->size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        return -1;
+      }
       if (!decrypt_ctx && init_decrypt_gcm(decrypt_ctx, &key, iv, padding)) {
+        decrypt_ctx.reset();
         return -1;
       }
 
-      // Calling with cipher == nullptr results in a parameter change
-      // without requiring a reallocation of the internal cipher ctx.
+      // Reset message state while retaining the cipher context and negotiated key.
       if (EVP_DecryptInit_ex(decrypt_ctx.get(), nullptr, nullptr, nullptr, iv->data()) != 1) {
-        return false;
+        return -1;
       }
 
-      auto cipher = tagged_cipher.substr(tag_size);
-      auto tag = tagged_cipher.substr(0, tag_size);
-
-      plaintext.resize(round_to_pkcs7_padded(cipher.size()));
+      const auto cipher = tagged_cipher.substr(tag_size);
+      // OpenSSL accepts a mutable tag buffer, so retain a writable copy.
+      std::array<std::uint8_t, tag_size> tag;
+      std::copy_n(tagged_cipher.begin(), tag.size(), tag.begin());
+      // Reserve a writable output byte even for an authenticated empty message.
+      plaintext.resize(std::max<std::size_t>(16, round_to_pkcs7_padded(cipher.size())));
 
       int final_outlen;
       int update_outlen;
-
-      if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), (int) cipher.size()) != 1) {
-        return -1;
-      }
-
-      if (EVP_CIPHER_CTX_ctrl(decrypt_ctx.get(), EVP_CTRL_GCM_SET_TAG, (int) tag.size(), const_cast<char *>(tag.data())) != 1) {
-        return -1;
-      }
-
-      if (EVP_DecryptFinal_ex(decrypt_ctx.get(), plaintext.data() + update_outlen, &final_outlen) != 1) {
+      if (EVP_DecryptUpdate(decrypt_ctx.get(), plaintext.data(), &update_outlen, (const std::uint8_t *) cipher.data(), (int) cipher.size()) != 1 || EVP_CIPHER_CTX_ctrl(decrypt_ctx.get(), EVP_CTRL_GCM_SET_TAG, (int) tag.size(), tag.data()) != 1 || EVP_DecryptFinal_ex(decrypt_ctx.get(), plaintext.data() + update_outlen, &final_outlen) != 1) {
+        plaintext.clear();
         return -1;
       }
 

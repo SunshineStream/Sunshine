@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -102,10 +103,16 @@ namespace nvhttp {
         SimpleWeb::HTTPS(io_context, ctx) {
     }
 
+    /**
+     * @brief Send a best-effort TLS close notification without waiting for the peer.
+     */
     virtual ~SunshineHTTPS() {
-      // Gracefully shutdown the TLS connection
+      // A peer withholding close_notify must not block the HTTPS IO worker.
       SimpleWeb::error_code ec;
-      shutdown(ec);
+      lowest_layer().non_blocking(true, ec);
+      if (!ec) {
+        shutdown(ec);
+      }
     }
   };
 
@@ -398,12 +405,14 @@ namespace nvhttp {
      * @param certificate_file Path to the server certificate PEM file.
      * @param private_key_file Path to the matching private key PEM file.
      * @param handler_scope Receives the scope runner that prevents destruction during callbacks.
+     * @param verifier Optional production-path client verifier used for revocation tests.
      * @return HTTPS server ready for test endpoint configuration.
      */
     std::unique_ptr<SimpleWeb::ServerBase<SunshineHTTPS>> make_https_server(
       const std::string &certificate_file,
       const std::string &private_key_file,
-      std::shared_ptr<SimpleWeb::ScopeRunner> &handler_scope
+      std::shared_ptr<SimpleWeb::ScopeRunner> &handler_scope,
+      std::function<int(SSL *)> verifier = {}
     );
 
     /**

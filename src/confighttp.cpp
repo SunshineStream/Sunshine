@@ -640,17 +640,31 @@ namespace confighttp {
   }
 
   /**
-   * @brief Authenticate the user.
+   * @brief Enforce the Web UI remote-address policy, including initial setup.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
-   * @return True if the user is authenticated, false otherwise.
+   * @return True when the source address is allowed, false otherwise.
    */
-  bool authenticate(const resp_https_t &response, const req_https_t &request) {
+  bool check_access(const resp_https_t &response, const req_https_t &request) {
     auto address = net::addr_to_normalized_string(request->remote_endpoint().address());
 
     if (const auto ip_type = net::from_address(address); ip_type > http::origin_web_ui_allowed) {
       BOOST_LOG(info) << "Web UI: ["sv << address << "] -- denied"sv;
       response->write(SimpleWeb::StatusCode::client_error_forbidden);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * @brief Authenticate credentials after enforcing the Web UI network policy.
+   * @param response The HTTP response object.
+   * @param request The HTTP request object.
+   * @return True when the source address and credentials are authorized.
+   */
+  bool authenticate(const resp_https_t &response, const req_https_t &request) {
+    if (!check_access(response, request)) {
       return false;
     }
 
@@ -1519,8 +1533,13 @@ namespace confighttp {
       nlohmann::json output_tree;
       const nlohmann::json input_tree = nlohmann::json::parse(ss);
       const std::string uuid = input_tree.value("uuid", "");
+      const auto cert = nvhttp::get_cert_by_uuid(uuid);
       const bool removed = nvhttp::unpair_client(uuid);
       output_tree["status"] = removed;
+
+      if (removed && !cert.empty()) {
+        rtsp_stream::terminate_sessions_by_cert(cert);
+      }
 
       if (removed && nvhttp::get_all_clients().empty()) {
         proc::proc.terminate();
@@ -1829,6 +1848,9 @@ namespace confighttp {
    * @api_examples{/api/password|:| POST|:| {"currentUsername":"admin","currentPassword":"admin","newUsername":"admin","newPassword":"admin","confirmNewPassword":"admin"}}
    */
   void savePassword(const resp_https_t &response, const req_https_t &request) {
+    if (!check_access(response, request)) {
+      return;
+    }
     if (!check_content_type(response, request, "application/json")) {
       return;
     }

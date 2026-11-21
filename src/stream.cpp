@@ -22,6 +22,7 @@
 
 // local includes
 #include "config.h"
+#include "control_protocol.h"
 #include "display_device.h"
 #include "globals.h"
 #include "input.h"
@@ -81,6 +82,7 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace stream {
+  static_assert(control::TAG_SIZE == crypto::cipher::tag_size);
 
   /**
    * @brief Enumerates supported socket options.
@@ -562,6 +564,7 @@ namespace stream {
 
     std::uint32_t launch_session_id;  ///< RTSP launch-session ID associated with this stream.
     std::string client_cert;  ///< PEM certificate for the paired client owning the stream.
+    std::shared_ptr<std::atomic_bool> revoked;  ///< Launch revocation shared with accepted RTSP sockets.
     std::string input_session_id;  ///< Stable client identity used to retain input devices across resume.
 
     safe::mail_raw_t::event_t<bool> shutdown_event;  ///< Event raised when the stream should shut down.
@@ -762,6 +765,7 @@ namespace stream {
     auto res = enet_host_service(_host.get(), &event, (enet_uint32) timeout.count());
 
     if (res > 0) {
+      net::packet_t packet {event.type == ENET_EVENT_TYPE_RECEIVE ? event.packet : nullptr};
       auto session = get_session(event.peer, event.data);
       if (!session) {
         BOOST_LOG(warning) << "Rejected connection from ["sv << platf::from_sockaddr((sockaddr *) &event.peer->address.address) << "]: it's not properly set up"sv;
@@ -770,12 +774,16 @@ namespace stream {
         return;
       }
 
+      if (session->revoked->load(std::memory_order_acquire)) {
+        session::stop(*session);
+        enet_peer_disconnect_now(event.peer, 0);
+        return;
+      }
       session->pingTimeout = std::chrono::steady_clock::now() + config::stream.ping_timeout;
 
       switch (event.type) {
         case ENET_EVENT_TYPE_RECEIVE:
           {
-            net::packet_t packet {event.packet};
             auto message = parse_control_packet(*packet);
             if (message) {
               call(message->first, session, message->second, false);
@@ -1203,7 +1211,11 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_LOSS_STATS], [&](session_t *session, const std::string_view &payload) {
-      auto stats = (int32_t *) payload.data();
+      if (payload.size() < 4 * sizeof(std::int32_t)) {
+        return;
+      }
+      std::array<std::int32_t, 4> stats;
+      std::memcpy(stats.data(), payload.data(), sizeof(stats));
       auto count = stats[0];
       std::chrono::milliseconds t {stats[1]};
 
@@ -1225,7 +1237,11 @@ namespace stream {
     });
 
     server->map(packetTypes[IDX_INVALIDATE_REF_FRAMES], [&](session_t *session, const std::string_view &payload) {
-      auto frames = (std::int64_t *) payload.data();
+      if (payload.size() < 2 * sizeof(std::int64_t)) {
+        return;
+      }
+      std::array<std::int64_t, 2> frames;
+      std::memcpy(frames.data(), payload.data(), sizeof(frames));
       auto firstFrame = frames[0];
       auto lastFrame = frames[1];
 
@@ -1237,17 +1253,20 @@ namespace stream {
       session->video.invalidate_ref_frames_events->raise(std::make_pair(firstFrame, lastFrame));
     });
 
-    server->map(packetTypes[IDX_INPUT_DATA], [&](session_t *session, const std::string_view &payload) {
+    server->map(packetTypes[IDX_INPUT_DATA], [](session_t *session, const std::string_view &payload) {
       BOOST_LOG(debug) << "type [IDX_INPUT_DATA]"sv;
 
-      auto tagged_cipher_length = util::endian::big(*(int32_t *) payload.data());
-      std::string_view tagged_cipher {payload.data() + sizeof(tagged_cipher_length), (size_t) tagged_cipher_length};
+      const auto message = control::parse_legacy_input(payload);
+      if (!message) {
+        BOOST_LOG(warning) << "Dropping malformed legacy input envelope"sv;
+        return;
+      }
+      const auto tagged_cipher = *message;
 
       std::vector<uint8_t> plaintext;
 
-      auto &cipher = session->control.cipher;
       auto &iv = session->control.legacy_input_enc_iv;
-      if (cipher.decrypt(tagged_cipher, plaintext, &iv)) {
+      if (session->control.cipher.decrypt(tagged_cipher, plaintext, &iv)) {
         // something went wrong :(
 
         BOOST_LOG(error) << "Failed to verify tag"sv;
@@ -1256,8 +1275,8 @@ namespace stream {
         return;
       }
 
-      if (tagged_cipher_length >= 16 + iv.size()) {
-        std::copy(payload.end() - 16, payload.end(), std::begin(iv));
+      if (tagged_cipher.size() >= crypto::cipher::tag_size + iv.size()) {
+        std::copy(tagged_cipher.end() - iv.size(), tagged_cipher.end(), std::begin(iv));
       }
 
       input::passthrough(session->input, std::move(plaintext));
@@ -1266,18 +1285,13 @@ namespace stream {
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
       BOOST_LOG(verbose) << "type [IDX_ENCRYPTED]"sv;
 
-      auto header = (control_encrypted_p) (payload.data() - 2);
-
-      auto length = util::endian::little(header->length);
-      auto seq = util::endian::little(header->seq);
-
-      if (length < (16 + 4 + 4)) {
-        BOOST_LOG(warning) << "Control: Runt packet"sv;
+      const auto message = control::parse_encrypted(payload);
+      if (!message) {
+        BOOST_LOG(warning) << "Dropping malformed encrypted control envelope"sv;
         return;
       }
-
-      auto tagged_cipher_length = length - 4;
-      std::string_view tagged_cipher {(char *) header->payload(), (size_t) tagged_cipher_length};
+      auto seq = message->sequence;
+      const auto tagged_cipher = message->tagged_cipher;
 
       auto &cipher = session->control.cipher;
       auto &iv = session->control.incoming_iv;
@@ -1311,8 +1325,13 @@ namespace stream {
         return;
       }
 
-      auto type = *(std::uint16_t *) plaintext.data();
-      std::string_view next_payload {(char *) plaintext.data() + 4, plaintext.size() - 4};
+      const auto inner_message = control::parse_plaintext({reinterpret_cast<const char *>(plaintext.data()), plaintext.size()});
+      if (!inner_message) {
+        BOOST_LOG(warning) << "Dropping malformed decrypted control header"sv;
+        session::stop(*session);
+        return;
+      }
+      const auto &[type, next_payload] = *inner_message;
 
       if (type == packetTypes[IDX_ENCRYPTED]) {
         BOOST_LOG(error) << "Bad packet type [IDX_ENCRYPTED] found"sv;
@@ -1354,6 +1373,9 @@ namespace stream {
 
           auto session = *pos;
 
+          if (session->revoked->load(std::memory_order_acquire)) {
+            session::stop(*session);
+          }
           if (now > session->pingTimeout) {
             auto address = session->control.peer ? platf::from_sockaddr((sockaddr *) &session->control.peer->address.address) : session->control.expected_peer_address;
             BOOST_LOG(info) << address << ": Ping Timeout"sv;
@@ -2395,6 +2417,7 @@ namespace stream {
       session->shutdown_event = mail->event<bool>(mail::shutdown);
       session->launch_session_id = launch_session.id;
       session->client_cert = launch_session.client_cert;
+      session->revoked = launch_session.revoked;
       session->input_session_id = launch_session.client_cert.empty() ? launch_session.unique_id : launch_session.client_cert;
 
       session->config = config;

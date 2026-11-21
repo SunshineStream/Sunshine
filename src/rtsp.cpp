@@ -401,6 +401,10 @@ namespace rtsp_stream {
      * @param req Parsed RTSP request being handled.
      */
     void handle_data(msg_t &&req) {
+      if (!accepts_rtsp(*session)) {
+        respond(sock, *session, nullptr, 403, "Forbidden", req->sequenceNumber, {});
+        return;
+      }
       handle_data_fn(sock, *session, std::move(req));
     }
 
@@ -505,7 +509,7 @@ namespace rtsp_stream {
       auto socket = std::move(next_socket);
 
       auto launch_session {launch_event.view(0s)};
-      if (launch_session) {
+      if (launch_session && accepts_rtsp(*launch_session)) {
         // Associate the current RTSP session with this socket and start reading
         socket->session = launch_session;
         socket->read();
@@ -545,7 +549,7 @@ namespace rtsp_stream {
      */
     void session_raise(std::shared_ptr<launch_session_t> launch_session) {
       // If a launch event is still pending, don't overwrite it.
-      if (launch_event.view(0s)) {
+      if (const auto pending = launch_event.view(0s); pending && !pending->revoked->load(std::memory_order_acquire)) {
         return;
       }
 
@@ -636,22 +640,28 @@ namespace rtsp_stream {
     }
 
     /**
+     * @brief Start and register a stream atomically with respect to revocation.
+     * @param stream_session Allocated stream whose workers have not started.
+     * @param launch Launch authorization shared with RTSP sockets.
+     * @param address Remote address to use for the stream.
+     * @return Zero on success, or -1 when revoked or startup fails.
+     */
+    int start_session(const std::shared_ptr<stream::session_t> &stream_session, const launch_session_t &launch, const std::string &address) {
+      auto lg = _session_slots.lock();
+      if (!accepts_rtsp(launch) || stream::session::start(*stream_session, address)) {
+        return -1;
+      }
+      _session_slots->emplace(stream_session);
+      return 0;
+    }
+
+    /**
      * @brief Removes the provided session from the set of sessions.
      * @param session The session to remove.
      */
     void remove(const std::shared_ptr<stream::session_t> &session) {
       auto lg = _session_slots.lock();
       _session_slots->erase(session);
-    }
-
-    /**
-     * @brief Inserts the provided session into the set of sessions.
-     * @param session The session to insert.
-     */
-    void insert(const std::shared_ptr<stream::session_t> &session) {
-      auto lg = _session_slots.lock();
-      _session_slots->emplace(session);
-      BOOST_LOG(info) << "New streaming session started [active sessions: "sv << _session_slots->size() << ']';
     }
 
     /**
@@ -687,6 +697,20 @@ namespace rtsp_stream {
 
     std::shared_ptr<socket_t> next_socket;
   };
+
+#ifdef SUNSHINE_TESTS
+  namespace test_support {
+    /**
+     * @brief Exercise denied stream admission before any stream object is accessed.
+     * @param launch Plaintext or revoked launch to reject.
+     * @return Stream startup result from the production admission boundary.
+     */
+    int reject_stream_for_testing(const launch_session_t &launch) {
+      rtsp_server_t isolated_server;
+      return isolated_server.start_session({}, launch, "127.0.0.1");
+    }
+  }  // namespace test_support
+#endif
 
   rtsp_server_t server {};  ///< Singleton RTSP server used by GameStream launch sessions.
 
@@ -1254,9 +1278,7 @@ namespace rtsp_stream {
     }
 
     auto stream_session = stream::session::alloc(config, session);
-    rtsp_server->insert(stream_session);
-
-    if (stream::session::start(*stream_session, sock.remote_endpoint().address().to_string())) {
+    if (rtsp_server->start_session(stream_session, session, sock.remote_endpoint().address().to_string())) {
       BOOST_LOG(error) << "Failed to start a streaming session"sv;
 
       rtsp_server->remove(stream_session);

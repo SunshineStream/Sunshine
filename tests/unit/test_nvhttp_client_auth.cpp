@@ -17,6 +17,16 @@
 // local includes
 #include <src/config.h>
 #include <src/nvhttp.h>
+#include <src/rtsp.h>
+
+namespace nvhttp {
+  /**
+   * @brief Read the production authorization lifetime shared by streams and RTSP.
+   * @param cert Canonical PEM client identity.
+   * @return Revocation state for that identity, revoked when it is not authorized.
+   */
+  std::shared_ptr<std::atomic_bool> client_revocation_state(std::string_view cert);
+}  // namespace nvhttp
 
 namespace fs = std::filesystem;
 
@@ -199,4 +209,92 @@ TEST_F(ClientAuthorizationTest, ConcurrentStateChangesRemainConsistent) {
   EXPECT_TRUE(operations_succeeded);
   ASSERT_TRUE(nvhttp::set_client_enabled(uuid, false));
   EXPECT_FALSE(nvhttp::test_support::authorize_client_certificate(credentials.x509));
+}
+
+/**
+ * @brief Removing one client revokes retained sessions while preserving other identities.
+ */
+TEST_F(ClientAuthorizationTest, UnpairRevokesExistingLaunchStateWithoutRevokingOtherClients) {
+  const auto first = crypto::gen_creds("revoked client", 2048);
+  const auto second = crypto::gen_creds("retained client", 2048);
+  const auto first_id = nvhttp::test_support::add_client("first", first.x509, true);
+  ASSERT_FALSE(first_id.empty());
+  ASSERT_FALSE(nvhttp::test_support::add_client("second", second.x509, true).empty());
+  const auto pending_or_active = nvhttp::client_revocation_state(first.x509);
+  const auto other = nvhttp::client_revocation_state(second.x509);
+  EXPECT_FALSE(pending_or_active->load());
+  ASSERT_TRUE(nvhttp::unpair_client(first_id));
+  EXPECT_TRUE(pending_or_active->load());
+  EXPECT_TRUE(nvhttp::client_revocation_state(first.x509)->load());
+  EXPECT_FALSE(other->load());
+  EXPECT_TRUE(nvhttp::test_support::authorize_client_certificate(second.x509));
+}
+
+/**
+ * @brief Re-enable creates a new authorization lifetime, while repeated updates preserve it.
+ */
+TEST_F(ClientAuthorizationTest, ReenableDoesNotRestoreOldLaunchAuthorization) {
+  const auto credentials = crypto::gen_creds("reenabled client", 2048);
+  const auto uuid = nvhttp::test_support::add_client("client", credentials.x509, true);
+  ASSERT_FALSE(uuid.empty());
+  const auto old = nvhttp::client_revocation_state(credentials.x509);
+  EXPECT_FALSE(nvhttp::set_client_enabled("unknown client", false));
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
+  EXPECT_EQ(nvhttp::client_revocation_state(credentials.x509), old);
+  EXPECT_FALSE(old->load());
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, false));
+  EXPECT_TRUE(old->load());
+  EXPECT_TRUE(nvhttp::client_revocation_state(credentials.x509)->load());
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
+  EXPECT_TRUE(old->load());
+  const auto current = nvhttp::client_revocation_state(credentials.x509);
+  EXPECT_FALSE(current->load());
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
+  EXPECT_EQ(nvhttp::client_revocation_state(credentials.x509), current);
+  EXPECT_FALSE(current->load());
+  EXPECT_TRUE(nvhttp::client_revocation_state("unknown certificate")->load());
+}
+
+/**
+ * @brief Re-pairing and removing all clients invalidate previously retained launch state.
+ */
+TEST_F(ClientAuthorizationTest, RePairAndUnpairAllInvalidateRetainedLaunches) {
+  const auto credentials = crypto::gen_creds("repaired client", 2048);
+  ASSERT_FALSE(nvhttp::test_support::add_client("original", credentials.x509, true).empty());
+  const auto old = nvhttp::client_revocation_state(credentials.x509);
+  ASSERT_FALSE(nvhttp::test_support::add_client("replacement", credentials.x509, true).empty());
+  EXPECT_TRUE(old->load());
+  const auto replacement = nvhttp::client_revocation_state(credentials.x509);
+  EXPECT_FALSE(replacement->load());
+  nvhttp::erase_all_clients();
+  EXPECT_TRUE(replacement->load());
+}
+
+/**
+ * @brief Teardown from an earlier disable cannot invalidate a subsequent authorized launch.
+ */
+TEST_F(ClientAuthorizationTest, DelayedTeardownPreservesReenabledPendingLaunch) {
+  const auto credentials = crypto::gen_creds("reenabled pending client", 2048);
+  const auto uuid = nvhttp::test_support::add_client("client", credentials.x509, true);
+  ASSERT_FALSE(uuid.empty());
+  const auto old = nvhttp::client_revocation_state(credentials.x509);
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, false));
+  ASSERT_TRUE(nvhttp::set_client_enabled(uuid, true));
+
+  auto pending = std::make_shared<rtsp_stream::launch_session_t>();
+  pending->id = 42;
+  pending->client_cert = credentials.x509;
+  pending->revoked = nvhttp::client_revocation_state(credentials.x509);
+  pending->rtsp_cipher.emplace(crypto::aes_t(16, 0), false);
+  rtsp_stream::launch_session_raise(pending);
+  const auto cleanup = util::fail_guard([pending]() {
+    rtsp_stream::launch_session_clear(pending->id);
+  });
+
+  // The disable's teardown is delayed until after the new enabled lifetime is in use.
+  rtsp_stream::terminate_sessions_by_cert(credentials.x509);
+  EXPECT_TRUE(old->load());
+  EXPECT_FALSE(pending->revoked->load());
+  EXPECT_TRUE(rtsp_stream::accepts_rtsp(*pending));
+  EXPECT_EQ(nvhttp::client_revocation_state(credentials.x509), pending->revoked);
 }

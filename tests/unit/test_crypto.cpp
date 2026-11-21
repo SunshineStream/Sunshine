@@ -7,6 +7,8 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <array>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -100,4 +102,52 @@ TEST(CryptoTest, CertificateChainRequiresExactPairedIdentity) {
 
   EXPECT_EQ(certificate_chain.verify(paired_certificate.get()), nullptr);
   EXPECT_NE(certificate_chain.verify(derived_certificate.get()), nullptr);
+}
+
+/**
+ * @brief GCM rejects incomplete tags and invalid key or IV inputs without plaintext.
+ */
+TEST(CryptoTest, GcmRejectsMalformedInputsBeforeReadingCiphertext) {
+  crypto::cipher::gcm_t cipher {crypto::aes_t(16, 0), false};
+  crypto::aes_t iv(12, 0);
+  std::vector<std::uint8_t> plaintext {1, 2, 3};
+  for (std::size_t size = 0; size < crypto::cipher::tag_size; ++size) {
+    const std::string truncated(size, '\0');
+    EXPECT_EQ(cipher.decrypt(truncated, plaintext, &iv), -1);
+    EXPECT_TRUE(plaintext.empty());
+  }
+  const std::string tag(crypto::cipher::tag_size, '\0');
+  EXPECT_EQ(cipher.decrypt(tag, plaintext, nullptr), -1);
+  crypto::aes_t empty_iv;
+  EXPECT_EQ(cipher.decrypt(tag, plaintext, &empty_iv), -1);
+  for (const auto size : {0U, 15U, 17U}) {
+    crypto::cipher::gcm_t invalid_key {crypto::aes_t(size, 0), false};
+    EXPECT_EQ(invalid_key.decrypt(tag, plaintext, &iv), -1);
+    EXPECT_TRUE(plaintext.empty());
+  }
+}
+
+/**
+ * @brief Authentication failure clears output and does not poison later valid messages.
+ */
+TEST(CryptoTest, GcmAuthenticatesEmptyAndNonemptyMessagesAndRecoversAfterFailure) {
+  crypto::aes_t key(16, 0x42);
+  crypto::aes_t iv(12, 0x24);
+  crypto::cipher::gcm_t sender {key, false};
+  crypto::cipher::gcm_t receiver {key, false};
+  for (const std::string &message : {std::string {}, std::string {"control message"}}) {
+    std::vector<std::uint8_t> ciphertext(crypto::cipher::tag_size + message.size() + 16);
+    ASSERT_EQ(sender.encrypt(message, ciphertext.data(), &iv), message.size());
+    ciphertext.resize(crypto::cipher::tag_size + message.size());
+    const std::string valid(ciphertext.begin(), ciphertext.end());
+    std::vector<std::uint8_t> plaintext;
+    ASSERT_EQ(receiver.decrypt(valid, plaintext, &iv), 0);
+    EXPECT_EQ(std::string(plaintext.begin(), plaintext.end()), message);
+    auto forged = valid;
+    forged[0] = valid[0] == 'x' ? 'y' : 'x';
+    EXPECT_EQ(receiver.decrypt(forged, plaintext, &iv), -1);
+    EXPECT_TRUE(plaintext.empty());
+    ASSERT_EQ(receiver.decrypt(valid, plaintext, &iv), 0);
+    EXPECT_EQ(std::string(plaintext.begin(), plaintext.end()), message);
+  }
 }

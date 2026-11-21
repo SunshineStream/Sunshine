@@ -61,6 +61,15 @@ TEST(RtspHeaderTest, ConstAccessorsPreserveTheSerializedHeader) {
 namespace rtsp_stream {
   class rtsp_server_t;
 
+  namespace test_support {
+    /**
+     * @brief Attempt production stream admission with an unauthorized launch.
+     * @param launch Plaintext or revoked launch to reject before starting workers.
+     * @return Production stream startup result.
+     */
+    int reject_stream_for_testing(const launch_session_t &launch);
+  }  // namespace test_support
+
   /**
    * @brief Release a parsed RTSP message and its allocation.
    * @param message Message to release.
@@ -184,4 +193,35 @@ TEST(RtspDescribeTest, SurroundParamsCompensateClientRotationForEveryStreamConfi
   for (std::size_t x = 0; x < expected.size(); ++x) {
     EXPECT_EQ(advertised[x], expected[x].second) << "stream config " << expected[x].first;
   }
+}
+
+/**
+ * @brief Only encrypted, unrevoked launches can accept RTSP messages.
+ */
+TEST(RtspAuthorizationTest, RejectsPlaintextAndRevokedLaunches) {
+  rtsp_stream::launch_session_t session {};
+  EXPECT_FALSE(rtsp_stream::accepts_rtsp(session));
+  session.rtsp_cipher.emplace(crypto::aes_t(16, 0), false);
+  EXPECT_TRUE(rtsp_stream::accepts_rtsp(session));
+  const auto retained_authorization = session.revoked;
+  retained_authorization->store(true, std::memory_order_release);
+  EXPECT_FALSE(rtsp_stream::accepts_rtsp(session));
+}
+
+/**
+ * @brief Plaintext launch state cannot reach stream startup.
+ */
+TEST(RtspAuthorizationTest, RejectsPlaintextAtStreamAdmission) {
+  rtsp_stream::launch_session_t launch {};
+  EXPECT_EQ(rtsp_stream::test_support::reject_stream_for_testing(launch), -1);
+}
+
+/**
+ * @brief An accepted socket cannot restart a stream after its client is revoked.
+ */
+TEST(RtspAuthorizationTest, RejectsRevokedLaunchAtStreamAdmission) {
+  rtsp_stream::launch_session_t launch {};
+  launch.rtsp_cipher.emplace(crypto::aes_t(16, 0), false);
+  launch.revoked->store(true, std::memory_order_release);
+  EXPECT_EQ(rtsp_stream::test_support::reject_stream_for_testing(launch), -1);
 }
