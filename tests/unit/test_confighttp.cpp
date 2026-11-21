@@ -12,6 +12,7 @@
 
 // standard includes
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <format>
@@ -1193,6 +1194,318 @@ TEST_F(ConfigHttpTest, ServerResourcePrefixesDoNotFallBackToSpaEntry) {
     const auto response = client->request("GET", std::string {path});
     EXPECT_EQ(response->status_code, "404 Not Found") << path;
   }
+}
+
+/**
+ * @brief Fixture that serves an SPA entry document with a root base element and configures a Web UI base path.
+ */
+class WebUiBasePathTest: public ConfigHttpTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::string saved_web_ui_base_path;
+
+  void SetUp() override {
+    ConfigHttpTest::SetUp();
+    saved_web_ui_base_path = config::sunshine.web_ui_base_path;
+    config::sunshine.web_ui_base_path = "/proxy/config";
+
+    std::ofstream entry(web_dir_test_file);
+    entry << R"(<html><head><base href="/" /></head><body>Test Page Content</body></html>)";
+  }
+
+  void TearDown() override {
+    config::sunshine.web_ui_base_path = saved_web_ui_base_path;
+    ConfigHttpTest::TearDown();
+  }
+
+  /**
+   * @brief Request a page with valid credentials.
+   *
+   * @param path Request path.
+   * @return The response.
+   */
+  std::shared_ptr<SimpleWeb::Client<SimpleWeb::HTTPS>::Response> get_authenticated(const std::string &path) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    return client->request("GET", path, "", headers);
+  }
+};
+
+// Test: requests under the configured base path get it as the document base; direct requests keep the root
+TEST_F(WebUiBasePathTest, SpaEntryUsesBasePathOnlyUnderThePrefix) {
+  for (const std::string_view path : {"/proxy/config", "/proxy/config/", "/proxy/config/apps", "/proxy/config/unknown/deep/link"}) {
+    const auto response = get_authenticated(std::string {path});
+    ASSERT_EQ(response->status_code, "200 OK") << path;
+    const auto body = response->content.string();
+    EXPECT_NE(body.find(R"(<base href="/proxy/config/" />)"), std::string::npos) << path;
+    EXPECT_EQ(body.find(R"(<base href="/" />)"), std::string::npos) << path;
+  }
+
+  // Direct access, such as the system tray opening /pin, is not under the prefix
+  for (const std::string_view path : {"/", "/pin", "/apps/", "/config", "/proxy/configs", "/unknown/deep/link"}) {
+    const auto response = get_authenticated(std::string {path});
+    ASSERT_EQ(response->status_code, "200 OK") << path;
+    EXPECT_NE(response->content.string().find(R"(<base href="/" />)"), std::string::npos) << path;
+  }
+}
+
+// Test: redirects stay under the prefix that the request came through
+TEST_F(WebUiBasePathTest, RedirectsKeepThePrefixOfTheRequest) {
+  const std::string saved = config::sunshine.username;
+  config::sunshine.username = "";
+  const auto restore_username = util::fail_guard([&saved]() {
+    config::sunshine.username = saved;
+  });
+
+  const auto prefixed = client->request("GET", "/proxy/config/apps");
+  ASSERT_EQ(prefixed->status_code, "307 Temporary Redirect");
+  EXPECT_EQ(prefixed->header.find("Location")->second, "/proxy/config/welcome");
+
+  const auto direct = client->request("GET", "/apps");
+  ASSERT_EQ(direct->status_code, "307 Temporary Redirect");
+  EXPECT_EQ(direct->header.find("Location")->second, "/welcome");
+}
+
+// Test: server-owned prefixes under the base path keep their 404 behavior
+TEST_F(WebUiBasePathTest, ServerResourcePrefixesUnderThePrefixDoNotFallBackToSpaEntry) {
+  for (const std::string_view path : {"/proxy/config/api", "/proxy/config/api/unknown", "/proxy/config/assets/missing.js", "/proxy/config/images/missing.png"}) {
+    const auto response = client->request("GET", std::string {path});
+    EXPECT_EQ(response->status_code, "404 Not Found") << path;
+  }
+}
+
+// Test: server routes match with and without the base path, using the regex engine of the server
+TEST_F(WebUiBasePathTest, RoutesMatchDirectAndPrefixedPaths) {
+  const auto matches = [](const std::string_view pattern, const std::string &path) {
+    return SimpleWeb::regex::regex_match(path, SimpleWeb::regex::regex(confighttp::web_ui_route(pattern)));
+  };
+
+  EXPECT_TRUE(matches("^/api/apps$", "/api/apps"));
+  EXPECT_TRUE(matches("^/api/apps$", "/proxy/config/api/apps"));
+  EXPECT_FALSE(matches("^/api/apps$", "/proxy/api/apps"));
+  EXPECT_FALSE(matches("^/api/apps$", "/proxy/configapi/apps"));
+  EXPECT_TRUE(matches("^/assets\\/.+$", "/proxy/config/assets/index.js"));
+  EXPECT_TRUE(matches("^/logout/?$", "/proxy/config/logout/"));
+
+  SimpleWeb::regex::smatch match;
+  const std::string cover = "/proxy/config/api/covers/12";
+  ASSERT_TRUE(SimpleWeb::regex::regex_match(cover, match, SimpleWeb::regex::regex(confighttp::web_ui_route("^/api/covers/([0-9]+)$"))));
+  EXPECT_EQ(match[1].str(), "12");
+
+  config::sunshine.web_ui_base_path = "/my.host";
+  EXPECT_TRUE(matches("^/pin$", "/my.host/pin"));
+  EXPECT_FALSE(matches("^/pin$", "/myxhost/pin"));
+}
+
+// Test: the injected base path is HTML-escaped
+TEST_F(WebUiBasePathTest, PageContentEscapesTheBasePath) {
+  EXPECT_EQ(
+    confighttp::web_ui_page_content(R"(<head><base href="/" /></head>)", "/a\"><x>&'"),
+    R"(<head><base href="/a&quot;&gt;&lt;x&gt;&amp;&#39;/" /></head>)"
+  );
+  EXPECT_EQ(confighttp::web_ui_page_content(R"(<head><base href="/" /></head>)", ""), R"(<head><base href="/" /></head>)");
+  EXPECT_EQ(confighttp::web_ui_page_content("<head></head>", "/sunshine"), "<head></head>");
+}
+
+// Test: a request under the base path only matches a route by its path relative to the base path
+TEST_F(WebUiBasePathTest, RoutesUnderTheBasePathDoNotMatchUnprefixed) {
+  const auto matches = [](const std::string_view pattern, const std::string &path) {
+    return SimpleWeb::regex::regex_match(path, SimpleWeb::regex::regex(confighttp::web_ui_route(pattern)));
+  };
+
+  config::sunshine.web_ui_base_path = "/welcome";
+  EXPECT_FALSE(matches("^/welcome/?$", "/welcome"));
+  EXPECT_FALSE(matches("^/welcome/?$", "/welcome/"));
+  EXPECT_TRUE(matches("^/welcome/?$", "/welcome/welcome"));
+  EXPECT_TRUE(matches("^/welcome/?$", "/welcome/welcome/"));
+  EXPECT_TRUE(matches("^/logout/?$", "/welcome/logout"));
+  EXPECT_TRUE(matches("^/logout/?$", "/logout"));
+  EXPECT_FALSE(matches("^/welcome/?$", "/welcomes"));
+
+  config::sunshine.web_ui_base_path = "/logout";
+  EXPECT_FALSE(matches("^/logout/?$", "/logout/"));
+  EXPECT_TRUE(matches("^/logout/?$", "/logout/logout"));
+  EXPECT_TRUE(matches("^/welcome/?$", "/welcome"));
+
+  config::sunshine.web_ui_base_path = "/apps";
+  EXPECT_TRUE(matches("^/api/apps$", "/api/apps"));
+  EXPECT_TRUE(matches("^/api/apps$", "/apps/api/apps"));
+  EXPECT_FALSE(matches("^/api/apps$", "/apps/apps/api/apps"));
+
+  config::sunshine.web_ui_base_path = "/a/api";
+  EXPECT_TRUE(matches("^/api/apps$", "/a/api/api/apps"));
+  EXPECT_FALSE(matches("^/api/apps$", "/a/api/apps"));
+
+  SimpleWeb::regex::smatch match;
+  config::sunshine.web_ui_base_path = "/api/covers/1";
+  const std::string cover = "/api/covers/1/api/covers/12";
+  ASSERT_TRUE(SimpleWeb::regex::regex_match(cover, match, SimpleWeb::regex::regex(confighttp::web_ui_route("^/api/covers/([0-9]+)$"))));
+  EXPECT_EQ(match[1].str(), "12");
+  EXPECT_FALSE(matches("^/api/covers/([0-9]+)$", "/api/covers/1"));
+}
+
+/**
+ * @brief Fixture that serves the production Web UI routes from register_web_ui_routes().
+ */
+class WebUiProductionRoutesTest: public WebUiBasePathTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  std::unique_ptr<SimpleWeb::Server<SimpleWeb::HTTPS>> production_server;
+  std::unique_ptr<SimpleWeb::Client<SimpleWeb::HTTPS>> production_client;
+  std::jthread production_thread;
+  std::atomic<unsigned short> production_port = 0;
+  std::filesystem::path asset_file;
+
+  void SetUp() override {
+    WebUiBasePathTest::SetUp();
+    asset_file = std::filesystem::path(WEB_DIR) / "assets" / "web-ui-base-path-test.js";
+    std::filesystem::create_directories(asset_file.parent_path());
+    std::ofstream(asset_file) << "export {}";
+  }
+
+  void TearDown() override {
+    stop_production_server();
+    std::error_code ec;
+    std::filesystem::remove(asset_file, ec);
+    WebUiBasePathTest::TearDown();
+  }
+
+  void stop_production_server() {
+    if (production_server) {
+      production_server->stop();
+    }
+    if (production_thread.joinable()) {
+      production_thread.join();
+    }
+    production_client.reset();
+    production_server.reset();
+    production_port = 0;
+  }
+
+  /**
+   * @brief Start a server with the production routes for a Web UI base path.
+   *
+   * @param base_path Normalized Web UI base path.
+   */
+  void start_production_server(const std::string_view base_path) {
+    stop_production_server();
+    config::sunshine.web_ui_base_path = base_path;
+
+    production_server = std::make_unique<SimpleWeb::Server<SimpleWeb::HTTPS>>(cert_file.string(), key_file.string());
+    production_server->config.port = 0;
+    production_server->config.reuse_address = true;
+    production_server->config.timeout_request = 5;
+    confighttp::register_web_ui_routes(*production_server);
+
+    production_thread = std::jthread([this]() {
+      production_server->start([this](const unsigned short assigned_port) {
+        production_port = assigned_port;
+      });
+    });
+    for (int i = 0; i < 100 && production_port == 0; ++i) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_NE(production_port.load(), 0) << "Production route server failed to start";
+
+    production_client = std::make_unique<SimpleWeb::Client<SimpleWeb::HTTPS>>(std::format("localhost:{}", production_port.load()), false);
+    production_client->config.timeout = 5;
+  }
+
+  std::shared_ptr<SimpleWeb::Client<SimpleWeb::HTTPS>::Response> get(const std::string &path, const bool authenticated = true) {
+    SimpleWeb::CaseInsensitiveMultimap headers;
+    if (authenticated) {
+      headers.emplace("Authorization", create_auth_header("testuser", "testpass"));
+    }
+    return production_client->request("GET", path, "", headers);
+  }
+
+  void expect_page(const std::string &path, const std::string_view base_href) {
+    const auto response = get(path);
+    ASSERT_EQ(response->status_code, "200 OK") << path;
+    EXPECT_NE(response->content.string().find(std::format(R"(<base href="{}" />)", base_href)), std::string::npos) << path;
+  }
+
+  void expect_redirect(const std::string &path, const std::string_view location, const bool authenticated = true) {
+    const auto response = get(path, authenticated);
+    ASSERT_EQ(response->status_code, "307 Temporary Redirect") << path;
+    EXPECT_EQ(response->header.find("Location")->second, location) << path;
+  }
+};
+
+// Test: the "/welcome" base path serves Home on its landing page instead of redirecting to itself
+TEST_F(WebUiProductionRoutesTest, WelcomeBasePathServesHomeWhenCredentialsExist) {
+  ASSERT_NO_FATAL_FAILURE(start_production_server("/welcome"));
+
+  expect_page("/welcome/", "/welcome/");
+  expect_page("/welcome", "/welcome/");
+  expect_redirect("/welcome/welcome", "/welcome/");
+  expect_redirect("/welcome/welcome/", "/welcome/");
+
+  // Direct access outside the base path keeps the root base
+  expect_page("/", "/");
+  expect_page("/pin", "/");
+  expect_page("/welcomes", "/");
+}
+
+// Test: without credentials, the "/welcome" base path sends its landing page to the prefixed welcome page
+TEST_F(WebUiProductionRoutesTest, WelcomeBasePathRedirectsToPrefixedWelcomeWithoutCredentials) {
+  const std::string saved = config::sunshine.username;
+  config::sunshine.username = "";
+  const auto restore_username = util::fail_guard([&saved]() {
+    config::sunshine.username = saved;
+  });
+  ASSERT_NO_FATAL_FAILURE(start_production_server("/welcome"));
+
+  expect_redirect("/welcome/", "/welcome/welcome", false);
+  expect_redirect("/welcome/apps", "/welcome/welcome", false);
+  expect_page("/welcome/welcome", "/welcome/");
+  expect_redirect("/pin", "/welcome", false);
+}
+
+// Test: base paths equal to page routes dispatch requests under them relative to the base path
+TEST_F(WebUiProductionRoutesTest, BasePathsEqualToPageRoutesDispatchRelativeToTheBasePath) {
+  for (const std::string base_path : {"/apps", "/logout", "/pin", "/config", "/troubleshooting", "/proxy/config"}) {
+    SCOPED_TRACE(base_path);
+    ASSERT_NO_FATAL_FAILURE(start_production_server(base_path));
+    const auto base_href = base_path + "/";
+
+    expect_page(base_path + "/", base_href);
+    expect_page(base_path + "/apps", base_href);
+    expect_page(base_path + "/unknown/deep/link", base_href);
+    expect_redirect(base_path + "/welcome", base_href);
+
+    // The landing page requires authentication even when the base path is a public route such as "/logout"
+    EXPECT_EQ(get(base_path + "/", false)->status_code, "401 Unauthorized");
+    const auto logout = get(base_path + "/logout", false);
+    ASSERT_EQ(logout->status_code, "200 OK");
+    EXPECT_NE(logout->content.string().find(std::format(R"(<base href="{}" />)", base_href)), std::string::npos);
+
+    // API and assets resolve under the base path and directly
+    EXPECT_EQ(get(base_path + "/api/apps", false)->status_code, "401 Unauthorized");
+    EXPECT_EQ(get("/api/apps", false)->status_code, "401 Unauthorized");
+    EXPECT_EQ(get(base_path + "/assets/web-ui-base-path-test.js")->status_code, "200 OK");
+    EXPECT_EQ(get("/assets/web-ui-base-path-test.js")->status_code, "200 OK");
+    EXPECT_EQ(get(base_path + "/api/unknown")->status_code, "404 Not Found");
+
+    // Direct access to the root and to /welcome
+    expect_page("/", "/");
+    expect_redirect("/welcome", "/");
+    if (base_path != "/pin") {
+      expect_page("/pin", "/");
+    }
+  }
+}
+
+// Test: without a base path, the production routes keep their direct behavior
+TEST_F(WebUiProductionRoutesTest, NoBasePathKeepsDirectRoutes) {
+  ASSERT_NO_FATAL_FAILURE(start_production_server(""));
+
+  expect_page("/", "/");
+  expect_page("/pin", "/");
+  expect_redirect("/welcome/", "/");
+  expect_redirect("/welcome", "/");
+  EXPECT_EQ(get("/logout", false)->status_code, "200 OK");
+  EXPECT_EQ(get("/api/apps", false)->status_code, "401 Unauthorized");
+  EXPECT_EQ(get("/assets/web-ui-base-path-test.js")->status_code, "200 OK");
+  expect_page("/proxy/config/api/apps", "/");
 }
 
 // Test: confighttp::getLocale() returns locale JSON

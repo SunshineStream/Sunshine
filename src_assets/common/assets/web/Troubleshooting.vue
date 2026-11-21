@@ -805,7 +805,7 @@
       },
       created() {
         this._logsCopyTimeout = null;
-        fetch("/api/config")
+        fetch("./api/config")
           .then((r) => r.json())
           .then((r) => {
             this.platform = r.platform;
@@ -1003,7 +1003,7 @@
         },
         ddResetPersistence() {
           this.ddResetPressed = true;
-          apiFetch("/api/reset-display-device-persistence", {
+          apiFetch("./api/reset-display-device-persistence", {
             method: "POST",
             headers: {
               "Content-Type": "application/json"
@@ -1084,7 +1084,7 @@
             });
         },
         refreshVirtualInputStatus() {
-          fetch("/api/virtual-input/status")
+          fetch("./api/virtual-input/status")
             .then((r) => r.json())
             .then((r) => {
               const virtualhid = r.virtualhid || {};
@@ -1216,7 +1216,7 @@
         refreshLicenseStatus() {
           this.licenseBusy = true;
           this.licenseError = '';
-          fetch("/api/virtual-input/license")
+          fetch("./api/virtual-input/license")
             .then(async (response) => {
               const status = await response.json();
               if (!response.ok) {
@@ -1243,7 +1243,7 @@
             body.license_key = this.licenseKey.trim();
           }
 
-          apiFetch("/api/virtual-input/license", {
+          apiFetch("./api/virtual-input/license", {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

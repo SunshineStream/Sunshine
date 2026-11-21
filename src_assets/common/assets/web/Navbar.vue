@@ -103,13 +103,13 @@ export default {
   methods: {
     logout() {
       const cacheBuster = Date.now().toString()
-      const logoutPageUrl = new URL('/logout', globalThis.location.href)
+      const logoutPageUrl = new URL('logout', document.baseURI)
       const request = new XMLHttpRequest()
       const finish = () => {
         globalThis.location.replace(logoutPageUrl.toString())
       }
 
-      request.open('GET', '/', true, 'sunshine-logout', cacheBuster)
+      request.open('GET', './', true, 'sunshine-logout', cacheBuster)
       request.setRequestHeader('Cache-Control', 'no-store')
       request.onload = finish
       request.onerror = finish

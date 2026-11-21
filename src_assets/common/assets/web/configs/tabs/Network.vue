@@ -131,6 +131,17 @@ const effectivePort = computed(() => Number(config.value?.port ?? defaultMoonlig
       <div class="form-text">{{ $t('config.csrf_allowed_origins_desc') }}</div>
     </div>
 
+    <!-- Web UI Base Path -->
+    <div class="mb-3">
+      <label for="web_ui_base_path" class="form-label">{{ $t('config.web_ui_base_path') }}</label>
+      <input type="text"
+             class="form-control"
+             id="web_ui_base_path"
+             placeholder="/sunshine/"
+             v-model="config.web_ui_base_path" />
+      <div class="form-text">{{ $t('config.web_ui_base_path_desc') }}</div>
+    </div>
+
     <!-- External IP -->
     <div class="mb-3">
       <label for="external_ip" class="form-label">{{ $t('config.external_ip') }}</label>

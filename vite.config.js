@@ -60,7 +60,7 @@ export default defineConfig({
             vue: 'vue/dist/vue.esm-bundler.js'
         }
     },
-    base: '/',
+    base: './',
     plugins: [
         vue(),
         emitTrayIconsPlugin,

@@ -36,10 +36,55 @@ namespace confighttp {
   // Main server start function
   void start();
 
+  /**
+   * @brief Register the Web UI routes of the configuration server.
+   *
+   * Routes are built from the current `web_ui_base_path`, so register them after the configuration is loaded.
+   *
+   * @param server Server to register the routes on.
+   */
+  void register_web_ui_routes(https_server_t &server);
+
   void print_req(const req_https_t &request);
   void send_response(const resp_https_t &response, const nlohmann::json &output_tree);
   void send_unauthorized(const resp_https_t &response, const req_https_t &request);
   void send_redirect(const resp_https_t &response, const req_https_t &request, const char *path);
+  /**
+   * @brief Get the configured Web UI base path when a request path is under it.
+   *
+   * Requests under the configured `web_ui_base_path` come through the external prefix; any other request is direct
+   * access, such as the system tray opening /pin, and keeps the root base path.
+   *
+   * @param request_path Path of the HTTP request.
+   * @return The configured base path without a trailing slash, or an empty view for direct access.
+   */
+  std::string_view web_ui_base_path_of(std::string_view request_path);
+  /**
+   * @brief Remove the configured Web UI base path from a request path.
+   *
+   * @param request_path Path of the HTTP request.
+   * @return The path relative to the Web UI root, starting with '/'.
+   */
+  std::string_view strip_web_ui_base_path(std::string_view request_path);
+  /**
+   * @brief Build a server route pattern that also matches under the configured Web UI base path.
+   *
+   * A request under the base path, as defined by web_ui_base_path_of(), only matches by its path relative to the base
+   * path, so a base path that equals a route, such as "/welcome", cannot select that route for its own landing page.
+   * Any other request matches the pattern unchanged.
+   *
+   * @param pattern Route regular expression anchored with "^/".
+   * @return The route pattern with an escaped base path prefix that is either consumed or excluded.
+   */
+  std::string web_ui_route(std::string_view pattern);
+  /**
+   * @brief Point the SPA entry document at the Web UI base path of the request.
+   *
+   * @param content SPA entry document containing the root base element.
+   * @param base_path Base path from web_ui_base_path_of(); empty keeps the root base element.
+   * @return The document with an HTML-escaped base element for the base path.
+   */
+  std::string web_ui_page_content(std::string content, std::string_view base_path);
   bool authenticate(const resp_https_t &response, const req_https_t &request);
   void not_found(const resp_https_t &response, const std::string &error_message = "Not Found");
   void bad_request(const resp_https_t &response, const std::string &error_message = "Bad Request");
