@@ -394,7 +394,7 @@ namespace platf::virtualhid {
       event.uses_normalized_key_code = (static_cast<std::byte>(flags) & static_cast<std::byte>(SS_KBE_FLAG_NON_NORMALIZED)) == std::byte {};
       event.prefer_native_scan_code = config::input.always_send_scancodes;
 #else
-      (void) flags;
+      event.uses_normalized_key_code = (static_cast<std::byte>(flags) & static_cast<std::byte>(SS_KBE_FLAG_NON_NORMALIZED)) == std::byte {};
 #endif
       return event;
     }

@@ -864,10 +864,11 @@ TEST_F(VirtualHidDeviceTest, TranslatesMouseAndKeyboardInput) {
   keyboard_event = context()->keyboard->last_submitted_event();
   EXPECT_FALSE(keyboard_event.uses_normalized_key_code);
 #else
-  EXPECT_FALSE(keyboard_event.uses_normalized_key_code);
+  EXPECT_TRUE(keyboard_event.uses_normalized_key_code);
   EXPECT_FALSE(keyboard_event.prefer_native_scan_code);
-  platf::virtualhid::keyboard_update(*context(), 0x41, true, 0xFF);
+  platf::virtualhid::keyboard_update(*context(), 0x41, true, SS_KBE_FLAG_NON_NORMALIZED);
   keyboard_event = context()->keyboard->last_submitted_event();
+  EXPECT_FALSE(keyboard_event.uses_normalized_key_code);
 #endif
   EXPECT_FALSE(keyboard_event.pressed);
   platf::virtualhid::keyboard_update(*context(), 0x0D, false, 0, true);
