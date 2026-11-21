@@ -29,7 +29,7 @@ int main(int argc, char *argv[]) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
   dxgi::factory1_t::pointer factory_p {};
-  const HRESULT status = CreateDXGIFactory1(IID_IDXGIFactory1, static_cast<void **>(static_cast<void *>(&factory_p)));
+  HRESULT status = CreateDXGIFactory1(IID_IDXGIFactory1, static_cast<void **>(static_cast<void *>(&factory_p)));
   dxgi::factory1_t factory {factory_p};
   if (FAILED(status)) {
     std::cout << "Failed to create DXGIFactory1 [0x"sv << util::hex(status).to_string_view() << ']' << std::endl;
@@ -37,7 +37,8 @@ int main(int argc, char *argv[]) {
   }
 
   dxgi::adapter_t::pointer adapter_p {};
-  for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
+  int x = 0;
+  while (SUCCEEDED(status = factory->EnumAdapters1(x++, &adapter_p))) {
     dxgi::adapter_t adapter {adapter_p};
 
     DXGI_ADAPTER_DESC1 adapter_desc;
@@ -53,7 +54,8 @@ int main(int argc, char *argv[]) {
 
     dxgi::output_t::pointer output_p {};
     bool has_outputs = false;
-    for (int y = 0; adapter->EnumOutputs(y, &output_p) != DXGI_ERROR_NOT_FOUND; ++y) {
+    int y = 0;
+    while (SUCCEEDED(status = adapter->EnumOutputs(y++, &output_p))) {
       // Print the header only when we find the first output
       if (!has_outputs) {
         std::cout << std::endl
@@ -73,7 +75,13 @@ int main(int argc, char *argv[]) {
       std::cout << "    AttachedToDesktop : " << (desc.AttachedToDesktop ? "yes" : "no") << std::endl;
       std::cout << "    Resolution        : " << std::format("{}x{}", width, height) << std::endl;
     }
+    if (FAILED(status) && status != DXGI_ERROR_NOT_FOUND) {
+      std::cout << "Failed to enumerate DXGI outputs [0x"sv << util::hex(status).to_string_view() << ']' << std::endl;
+    }
     std::cout << std::endl;
+  }
+  if (FAILED(status) && status != DXGI_ERROR_NOT_FOUND) {
+    std::cout << "Failed to enumerate DXGI adapters [0x"sv << util::hex(status).to_string_view() << ']' << std::endl;
   }
 
   return 0;
