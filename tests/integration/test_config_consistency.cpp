@@ -369,7 +369,8 @@ TEST_F(ConfigConsistencyTest, AllConfigOptionsExistInAllFiles) {
 
   // Options that are internal/special and shouldn't be in UI/docs
   const std::set<std::string, std::less<>> internalOptions = {
-    "flags"  // Internal config flags, not user-configurable
+    "flags",  // Internal config flags, not user-configurable
+    "external_audio"  // Deprecated migration-only key, unified into keep_default_sink: remove this exception together with the external_audio migration shim in config parsing (legacy_external_audio in src/config.cpp) when that migration is dropped
   };
 
   std::vector<std::string> missingFromFiles;
