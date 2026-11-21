@@ -139,6 +139,15 @@ if(SUNSHINE_ENABLE_TRAY AND (WIN32 OR APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux
                 COPYONLY)
     endforeach()
 
+    if(APPLE)
+        foreach(icon IN ITEMS sunshine playing pausing)
+            configure_file(
+                    "${CMAKE_SOURCE_DIR}/src_assets/macos/tray/macos-tray-${icon}.svg"
+                    "${SUNSHINE_TRAY_TEST_ICON_DESTINATION_DIR}/macos-tray-${icon}.svg"
+                    COPYONLY)
+        endforeach()
+    endif()
+
     add_library(sunshine_tray_test_helpers STATIC
             ${CMAKE_SOURCE_DIR}/third-party/tray/tests/notification_utils.cpp
             ${CMAKE_SOURCE_DIR}/third-party/tray/tests/screenshot_utils.cpp)
