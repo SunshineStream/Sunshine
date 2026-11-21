@@ -19,6 +19,7 @@ namespace stream {
 }
 
 namespace audio {
+  constexpr std::size_t MAX_DOLBY_PACKET_SIZE = 2560;  ///< Maximum 640 kbit/s AC-3 access unit at 48 kHz.
   /**
    * @brief Supported Opus channel layouts advertised to Moonlight clients.
    */
