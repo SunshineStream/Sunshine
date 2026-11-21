@@ -5,6 +5,10 @@
 #pragma once
 
 // standard includes
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <vector>
 
 // local includes
@@ -85,6 +89,24 @@ namespace platf {
    * @return True when Sunshine can capture the screen.
    */
   bool is_screen_capture_allowed();
+
+  /**
+   * @brief Get the UUID that macOS assigns to a display.
+   *
+   * Unlike the numeric CoreGraphics display id, the UUID stays the same when a
+   * display (including a virtual display) is disconnected and reconnected.
+   * @param display_id CoreGraphics display id.
+   * @return Upper-case UUID string such as `3F69A49E-CDF5-44A5-B791-62FF4EDB0951`, or empty when unavailable.
+   */
+  std::string display_uuid(std::uint32_t display_id);
+
+  /**
+   * @brief Find the online display with the given UUID.
+   *
+   * @param uuid Display UUID, compared case-insensitively.
+   * @return CoreGraphics display id, or empty when no online display has this UUID.
+   */
+  std::optional<std::uint32_t> display_id_from_uuid(std::string_view uuid);
 }  // namespace platf
 
 namespace dyn {

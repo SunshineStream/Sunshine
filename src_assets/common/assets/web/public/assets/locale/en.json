@@ -376,7 +376,7 @@
     "origin_web_ui_allowed_pc": "Only localhost may access Web UI",
     "origin_web_ui_allowed_wan": "Anyone may access Web UI",
     "output_name": "Display Id",
-    "output_name_desc_macos": "During Sunshine startup, you should see the list of detected displays. Note: You need to use the id value inside the parenthesis. Below is an example; the actual output can be found in the Troubleshooting tab.",
+    "output_name_desc_macos": "During Sunshine startup, you should see the list of detected displays. Note: You can use either the id or the uuid value inside the parenthesis. The id may change when a display is reconnected, while the uuid stays the same. Below is an example; the actual output can be found in the Troubleshooting tab.",
     "output_name_desc_unix": "During Sunshine startup, you should see the list of detected displays. Note: It is recommended to use the display's connector name (e.g. DP-0) but depending on the capture backend used other values may be possible (see documentation for details). Below is an example; the actual output can be found in the Troubleshooting tab.",
     "output_name_desc_windows": "Manually specify a display device id to use for capture. If unset, the primary display is captured. Note: If you specified a GPU above, this display must be connected to that GPU. During Sunshine startup, you should see the list of detected displays. Below is an example; the actual output can be found in the Troubleshooting tab.",
     "packetsize": "Packet Size Limit",

@@ -14,6 +14,7 @@
 
 // standard includes
 #include <algorithm>
+#include <cctype>
 #include <future>
 #include <memory>
 
@@ -21,6 +22,7 @@
 #include <AppKit/AppKit.h>
 #include <arpa/inet.h>
 #include <AVFoundation/AVFoundation.h>
+#include <ColorSync/ColorSync.h>
 #include <CoreGraphics/CoreGraphics.h>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -333,6 +335,52 @@ namespace platf {
    */
   bool is_screen_capture_allowed() {
     return screen_capture_allowed;
+  }
+
+  std::string display_uuid(std::uint32_t display_id) {
+    CFUUIDRef uuid {CGDisplayCreateUUIDFromDisplayID(display_id)};
+    if (!uuid) {
+      return {};
+    }
+
+    std::string result;
+    if (CFStringRef uuid_string {CFUUIDCreateString(kCFAllocatorDefault, uuid)}) {
+      char buffer[64] {};
+      if (CFStringGetCString(uuid_string, buffer, sizeof(buffer), kCFStringEncodingASCII)) {
+        result = buffer;
+      }
+      CFRelease(uuid_string);
+    }
+    CFRelease(uuid);
+    return result;
+  }
+
+  std::optional<std::uint32_t> display_id_from_uuid(std::string_view uuid) {
+    if (uuid.empty()) {
+      return std::nullopt;
+    }
+
+    std::uint32_t display_count {};
+    if (CGGetOnlineDisplayList(0, nullptr, &display_count) != kCGErrorSuccess || display_count == 0) {
+      return std::nullopt;
+    }
+
+    std::vector<CGDirectDisplayID> displays(display_count);
+    if (CGGetOnlineDisplayList(display_count, displays.data(), &display_count) != kCGErrorSuccess) {
+      return std::nullopt;
+    }
+    displays.resize(display_count);
+
+    const auto case_insensitive_equal {[](unsigned char lhs, unsigned char rhs) {
+      return std::tolower(lhs) == std::tolower(rhs);
+    }};
+    for (const auto display_id : displays) {
+      if (std::ranges::equal(display_uuid(display_id), uuid, case_insensitive_equal)) {
+        return display_id;
+      }
+    }
+
+    return std::nullopt;
   }
 
   std::unique_ptr<deinit_t> init() {

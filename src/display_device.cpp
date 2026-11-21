@@ -36,6 +36,8 @@
 #endif
 
 #ifdef __APPLE__
+  #include "platform/macos/misc.h"
+
   #include <display_device/macos/display_power.h>
   #include <display_device/macos/mac_api_layer.h>
   #include <display_device/macos/mac_display_device.h>
@@ -941,8 +943,15 @@ namespace display_device {
     })};
 
 #ifdef __APPLE__
-    if (mapped_name.empty() && is_unsigned_integer(output_name)) {
-      return output_name;
+    if (mapped_name.empty()) {
+      if (is_unsigned_integer(output_name)) {
+        return output_name;
+      }
+
+      // Display UUIDs stay stable across reconnects, unlike the numeric display ids used by the capture backend.
+      if (const auto display_id {platf::display_id_from_uuid(output_name)}) {
+        return std::to_string(*display_id);
+      }
     }
 #endif
 
