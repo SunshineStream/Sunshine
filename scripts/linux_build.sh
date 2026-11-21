@@ -17,6 +17,7 @@ cuda_patches=0
 cuda_system_package=0
 cuda_system_package_name=""
 force_cuda_runfile=0
+require_local_cuda=0
 num_processors=$(nproc)
 publisher_name="Third Party Publisher"
 publisher_website=""
@@ -67,9 +68,17 @@ function cuda_target_dir() {
 }
 
 function use_cuda_redistributables() {
-  # Use archives only for the AppImage fallback with a verified set of pins.
-  [[ "$appimage_build" == 1 && "$force_cuda_runfile" == 0 && "$cuda_system_package" == 0 &&
+  # Use archives only for toolkit versions with a verified set of pins.
+  [[ "$force_cuda_runfile" == 0 && "$cuda_system_package" == 0 &&
      "$cuda_version" == "13.5.0" && ( "$architecture" == "x86_64" || "$architecture" == "$AARCH64" ) ]]
+}
+
+function cuda_local_toolkit_path() {
+  if use_cuda_redistributables; then
+    echo "${build_dir}/cuda/redistributables-${cuda_version}"
+  else
+    echo "${build_dir}/cuda"
+  fi
 }
 
 function cuda_math_functions_patch_applied() {
@@ -81,7 +90,7 @@ function cuda_math_functions_patch_applied() {
     return 1
   fi
 
-  # Ubuntu's CUDA packages provide the same glibc fix through this specifier macro.
+  # Newer CUDA headers provide the same glibc fix through this specifier macro.
   local exception_specifier='(noexcept[[:space:]]*\(true\)|_NV_RSQRT_SPECIFIER)'
   grep -Eq "rsqrt\(double x\) ${exception_specifier};" "$math_functions_file" && \
     grep -Eq "rsqrtf\(float x\) ${exception_specifier};" "$math_functions_file" && \
@@ -142,23 +151,24 @@ function apply_cuda_patches() {
 
 # Reusable function to detect nvcc path
 function detect_nvcc_path() {
-  local nvcc_path=""
+  local nvcc_path
 
-  # First check for system-installed CUDA
-  nvcc_path=$(command -v nvcc 2>/dev/null) || true
-  if [[ -n "$nvcc_path" ]]; then
-    echo "$nvcc_path"
-    return 0
+  if [[ "$force_cuda_runfile" == 0 && "$require_local_cuda" == 0 ]]; then
+    # Keep system-installed CUDA and existing local runfile installs when allowed.
+    if nvcc_path=$(command -v nvcc 2>/dev/null); then
+      echo "$nvcc_path"
+      return 0
+    fi
+    if [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
+      echo "${build_dir}/cuda/bin/nvcc"
+      return 0
+    fi
   fi
 
-  # Then check for locally installed CUDA in build directory
-  if [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
-    echo "${build_dir}/cuda/bin/nvcc"
-    return 0
-  fi
   # Keep archive and runfile installs separate so --cuda-runfile can override.
-  if use_cuda_redistributables && [[ -f "${build_dir}/cuda/redistributables/bin/nvcc" ]]; then
-    echo "${build_dir}/cuda/redistributables/bin/nvcc"
+  nvcc_path="$(cuda_local_toolkit_path)/bin/nvcc"
+  if [[ -f "$nvcc_path" ]]; then
+    echo "$nvcc_path"
     return 0
   fi
 
@@ -202,7 +212,7 @@ Options:
   --cuda-patches           Apply cuda patches. Enabled automatically on Ubuntu 26.04.
   --cuda-runfile           Force CUDA installation from the NVIDIA runfile.
   --cuda-system-package=*  The CUDA package to install when system CUDA is enabled.
-                           Opt in on Ubuntu 26.04/26.10 instead of using the NVIDIA runfile.
+                           Opt in on Ubuntu 26.04/26.10 instead of downloading the pinned NVIDIA toolkit.
   --num-processors         The number of processors to use for compilation. Default is the value of 'nproc'.
   --publisher-name         The name of the publisher (not developer) of the application.
   --publisher-website      The URL of the publisher's website.
@@ -553,7 +563,8 @@ function install_cuda_redistributables() (
   trap 'rm -rf -- "$staging_dir"' EXIT
 
   local toolkit_dir="${staging_dir}/toolkit"
-  local target_dir="${toolkit_dir}/targets/$(cuda_target_dir)"
+  local target_dir
+  target_dir="${toolkit_dir}/targets/$(cuda_target_dir)"
   mkdir -p -- "$target_dir"
 
   # Component versions and architecture-specific SHA-256 digests from
@@ -570,7 +581,7 @@ function install_cuda_redistributables() (
   )
 
   local start_seconds=$SECONDS
-  echo "Installing AppImage CUDA ${cuda_version} redistributables (${cuda_redist_arch})"
+  echo "Installing CUDA ${cuda_version} redistributables (${cuda_redist_arch})"
   local component name component_version destination sha_x86_64 sha_sbsa sha archive extract_dir url
   for component in "${components[@]}"; do
     IFS=: read -r name component_version destination sha_x86_64 sha_sbsa <<< "$component"
@@ -599,20 +610,19 @@ function install_cuda_redistributables() (
   apply_cuda_patches "$toolkit_dir"
 
   # Publish the complete directory only after verification and extraction.
-  mv -T -- "$toolkit_dir" "${build_dir}/cuda/redistributables"
-  echo "Installed AppImage CUDA redistributables in $((SECONDS - start_seconds)) seconds"
+  mv -T -- "$toolkit_dir" "$(cuda_local_toolkit_path)"
+  echo "Installed CUDA redistributables in $((SECONDS - start_seconds)) seconds"
 )
 
 function install_cuda() {
   setup_cuda_system_package_environment
 
   # Check if CUDA is already available
-  if [[ "$force_cuda_runfile" == 1 ]] && [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
-    apply_cuda_patches "${build_dir}/cuda"
-    return
-  elif [[ "$force_cuda_runfile" == 0 ]] && detect_nvcc_path > /dev/null 2>&1; then
+  if detect_nvcc_path > /dev/null 2>&1; then
     if [[ "$cuda_system_package" == 1 ]]; then
       apply_cuda_patches "$(cuda_system_toolkit_path)"
+    elif [[ "$force_cuda_runfile" == 1 || "$require_local_cuda" == 1 ]]; then
+      apply_cuda_patches "$(cuda_local_toolkit_path)"
     fi
     return
   fi
@@ -809,10 +819,9 @@ function run_step_cmake() {
   # Detect CUDA path using the reusable function
   nvcc_path=""
   if [[ "$skip_cuda" == 0 ]]; then
-    if [[ "$force_cuda_runfile" == 1 ]] && [[ -f "${build_dir}/cuda/bin/nvcc" ]]; then
-      nvcc_path="${build_dir}/cuda/bin/nvcc"
-    else
-      nvcc_path=$(detect_nvcc_path)
+    if ! nvcc_path=$(detect_nvcc_path); then
+      echo "CUDA compiler not found. Run the dependency installation step with the same CUDA options."
+      return 1
     fi
   fi
 
@@ -1024,7 +1033,7 @@ case "${distro}:${version}" in
     if [[ "$force_cuda_runfile" == 0 && -n "$cuda_system_package_name" ]]; then
       cuda_system_package=1
     else
-      force_cuda_runfile=1
+      require_local_cuda=1
     fi
     gcc_version="14"
     nvm_node=0
