@@ -68,37 +68,15 @@ CUDA is used for NVFBC capture and direct GPU-memory NVENC encoding.
 > Arch Linux package from LizardByte's [pacman-repo](https://github.com/LizardByte/pacman-repo) is already built with
 > CUDA support, so its users do not need to install the CUDA Toolkit.
 
-> [!NOTE]
-> See [CUDA GPUS](https://developer.nvidia.com/cuda-gpus) to cross-reference Compute Capability to your GPU.
-> The table below applies to packages provided by LizardByte.
+For official Linux packages built with CUDA 13, the CUDA paths require a GPU with compute capability 7.5 (Turing)
+or newer. [CUDA Toolkit 13 removed offline compilation support for Maxwell, Pascal, and Volta](https://docs.nvidia.com/cuda/cuda-features-archive/index.html).
+These GPUs can still have an NVENC hardware encoder, but that does not make the CUDA kernels in these packages
+compatible with them. Installing a different CUDA Toolkit alongside a prebuilt package does not change those kernels.
 
-<table>
-    <caption>CUDA Compatibility</caption>
-    <tr>
-        <th>CUDA Version</th>
-        <th>Min Driver</th>
-        <th>CUDA Compute Capabilities</th>
-        <th>Package</th>
-    </tr>
-    <tr>
-        <td rowspan="5">13.1.1</td>
-        <td rowspan="5">590.48.01</td>
-        <td rowspan="5">50;52;60;61;62;70;72;75;80;86;87;89;90;100;101;103;120;121</td>
-        <td>Sunshine_{version}_{arch}.AppImage</td>
-    </tr>
-    <tr>
-        <td>sunshine_{version}-1+{distro}{distro-version}_{arch}.deb</td>
-    </tr>
-    <tr>
-        <td>sunshine_{arch}.flatpak</td>
-    </tr>
-    <tr>
-        <td>Sunshine-{version}-1.{distro+version}.{arch}.rpm</td>
-    </tr>
-    <tr>
-        <td>sunshine.pkg.tar.zst</td>
-    </tr>
-</table>
+Use [NVIDIA's GPU list](https://developer.nvidia.com/cuda-gpus) to check your GPU's compute capability.
+Toolkit versions can vary by package. For example, the Copr build configuration for Fedora 43 and earlier uses CUDA
+12.9, not CUDA 13. Use an NVIDIA driver compatible with the package's toolkit and your GPU; see
+[NVIDIA's CUDA compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/).
 
 #### Alpine Linux
 
