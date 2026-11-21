@@ -10,7 +10,7 @@
   ],
   "build-commands": [
     "chmod u+x ./cuda.run",
-    "./cuda.run --silent --toolkit --toolkitpath=$FLATPAK_DEST/cuda --no-opengl-libs --no-man-page --no-drm --tmpdir=$FLATPAK_BUILDER_BUILDDIR || { echo '=== cuda-installer.log ==='; cat /tmp/cuda-installer.log 2>/dev/null; true; }",
+    "./cuda.run --silent --toolkit --toolkitpath=$FLATPAK_DEST/cuda --no-man-page --tmpdir=$FLATPAK_BUILDER_BUILDDIR || { echo '=== cuda-installer.log ==='; cat /tmp/cuda-installer.log 2>/dev/null; true; }",
     "test -f $FLATPAK_DEST/cuda/bin/nvcc",
     "rm -rf $FLATPAK_DEST/cuda/nsight-systems-*",
     "rm ./cuda.run"
@@ -56,8 +56,8 @@
         "depName": "cuda",
         "enabled": false
       },
-      "url": "https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_595.45.04_linux.run",
-      "sha256": "c599b651582c8f345ebde7bcf089b7dcfcd8afd7d3ea7f50525698c563a239d7",
+      "url": "https://developer.download.nvidia.com/compute/cuda/13.5.0/local_installers/cuda_13.5.0_linux.run",
+      "sha256": "1937d4d55633b699b539581dfa7e443f74d83cfe6dde455ba5f0f4f514914236",
       "dest-filename": "cuda.run",
       "x-checker-data": {
         "type": "html",
@@ -74,8 +74,8 @@
         "depName": "cuda",
         "enabled": false
       },
-      "url": "https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_595.45.04_linux_sbsa.run",
-      "sha256": "9684ebc64988f71ef1c70846cc9d158fb27950c1355bf37c8795c346346b6a72",
+      "url": "https://developer.download.nvidia.com/compute/cuda/13.5.0/local_installers/cuda_13.5.0_linux_sbsa.run",
+      "sha256": "f13c0b09e44447d9d20186bd367bdcf2b365494f4ae5fa9e581446cf198e92f9",
       "dest-filename": "cuda.run",
       "x-checker-data": {
         "type": "html",

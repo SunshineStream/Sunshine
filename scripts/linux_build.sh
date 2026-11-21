@@ -7,13 +7,12 @@ target_cmake_version="4.3.0"
 doxygen_min="1.10.0"
 _doxygen_min="${doxygen_min//\./_}"  # Convert dots to underscores for URL
 doxygen_max="1.12.0"
-default_cuda_version="13.1.1"
-default_cuda_build="590.48.01"
+default_cuda_version="13.5.0"
+default_cuda_system_minor_version="13.1"
 
 # Default value for arguments
 appimage_build=0
 cuda_version="$default_cuda_version"
-cuda_build="$default_cuda_build"
 cuda_patches=0
 cuda_system_package=0
 cuda_system_package_name=""
@@ -52,7 +51,10 @@ function setup_cuda_system_package_environment() {
 }
 
 function cuda_system_toolkit_path() {
-  local cuda_minor_version="${cuda_version%.*}"
+  local cuda_minor_version="$default_cuda_system_minor_version"
+  if [[ "$cuda_system_package_name" =~ ^cuda-toolkit-([0-9]+)-([0-9]+)$ ]]; then
+    cuda_minor_version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+  fi
   echo "/usr/local/cuda-${cuda_minor_version}"
 }
 
@@ -189,7 +191,7 @@ Options:
   --cuda-patches           Apply cuda patches. Enabled automatically on Ubuntu 26.04.
   --cuda-runfile           Force CUDA installation from the NVIDIA runfile.
   --cuda-system-package=*  The CUDA package to install when system CUDA is enabled.
-                           Default for Ubuntu 26.04 and 26.10 is cuda-toolkit-13-1.
+                           Opt in on Ubuntu 26.04/26.10 instead of using the NVIDIA runfile.
   --num-processors         The number of processors to use for compilation. Default is the value of 'nproc'.
   --publisher-name         The name of the publisher (not developer) of the application.
   --publisher-website      The URL of the publisher's website.
@@ -538,9 +540,9 @@ function install_cuda() {
     return 1
   fi
 
-  local cuda_override_arg=""
+  local cuda_override_args=()
   if [[ "$distro" == "$DISTRO_FEDORA" ]]; then
-    cuda_override_arg="--override"
+    cuda_override_args+=(--override)
   fi
 
   local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
@@ -570,11 +572,11 @@ function install_cuda() {
     fi
   fi
 
-  local url="${cuda_prefix}${cuda_version}/local_installers/cuda_${cuda_version}_${cuda_build}_linux${cuda_suffix}.run"
+  local url="${cuda_prefix}${cuda_version}/local_installers/cuda_${cuda_version}_linux${cuda_suffix}.run"
   echo "cuda url: ${url}"
   wget "$url" --max-redirect=0 --progress=bar:force:noscroll -q --show-progress -O "${build_dir}/cuda.run"
   chmod a+x "${build_dir}/cuda.run"
-  "${build_dir}/cuda.run" --silent --toolkit --toolkitpath="${build_dir}/cuda" --no-opengl-libs --no-man-page --no-drm "$cuda_override_arg"
+  "${build_dir}/cuda.run" --silent --toolkit --toolkitpath="${build_dir}/cuda" --no-man-page "${cuda_override_args[@]}"
   rm "${build_dir}/cuda.run"
 
   apply_cuda_patches "${build_dir}/cuda"
@@ -911,8 +913,6 @@ case "${distro}:${version}" in
   "${DISTRO_FEDORA}":45)
     package_update_command="${sudo_cmd} dnf update -y"
     package_install_command="${sudo_cmd} dnf install -y"
-    cuda_version="13.1.1"
-    cuda_build="590.48.01"
     gcc_version="15"
     nvm_node=0
     ;;
@@ -928,27 +928,16 @@ case "${distro}:${version}" in
     gcc_version="14"
     nvm_node=0
     ;;
-  "${DISTRO_UBUNTU}":26.04)
+  "${DISTRO_UBUNTU}":26.04|"${DISTRO_UBUNTU}":26.10)
     package_update_command="${sudo_cmd} apt-get update"
     package_install_command="${sudo_cmd} apt-get install -y"
-    cuda_patches=1
-    if [[ "$force_cuda_runfile" == 0 ]]; then
-      cuda_system_package=1
-      if [[ -z "$cuda_system_package_name" ]]; then
-        cuda_system_package_name="cuda-toolkit-13-1"
-      fi
+    if [[ "$version" == "26.04" ]]; then
+      cuda_patches=1
     fi
-    gcc_version="14"
-    nvm_node=0
-    ;;
-  "${DISTRO_UBUNTU}":26.10)
-    package_update_command="${sudo_cmd} apt-get update"
-    package_install_command="${sudo_cmd} apt-get install -y"
-    if [[ "$force_cuda_runfile" == 0 ]]; then
+    if [[ "$force_cuda_runfile" == 0 && -n "$cuda_system_package_name" ]]; then
       cuda_system_package=1
-      if [[ -z "$cuda_system_package_name" ]]; then
-        cuda_system_package_name="cuda-toolkit-13-1"
-      fi
+    else
+      force_cuda_runfile=1
     fi
     gcc_version="14"
     nvm_node=0
