@@ -540,9 +540,9 @@ function install_cuda() {
     return 1
   fi
 
-  local cuda_override_arg=""
+  local cuda_override_args=()
   if [[ "$distro" == "$DISTRO_FEDORA" ]]; then
-    cuda_override_arg="--override"
+    cuda_override_args+=(--override)
   fi
 
   local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
@@ -576,7 +576,7 @@ function install_cuda() {
   echo "cuda url: ${url}"
   wget "$url" --max-redirect=0 --progress=bar:force:noscroll -q --show-progress -O "${build_dir}/cuda.run"
   chmod a+x "${build_dir}/cuda.run"
-  "${build_dir}/cuda.run" --silent --toolkit --toolkitpath="${build_dir}/cuda" --no-man-page "$cuda_override_arg"
+  "${build_dir}/cuda.run" --silent --toolkit --toolkitpath="${build_dir}/cuda" --no-man-page "${cuda_override_args[@]}"
   rm "${build_dir}/cuda.run"
 
   apply_cuda_patches "${build_dir}/cuda"
