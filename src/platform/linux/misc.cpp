@@ -1347,6 +1347,26 @@ namespace platf {
 #endif
   }
 
+  /**
+   * @brief Log why no capture method was found at startup and whether initialization can go on.
+   *
+   * With KMS, no capture method only means that no display is lit yet (every screen blanked by power saving at
+   * startup). display_names() and display() check KMS again before each probe, so a display lit later is used;
+   * giving up here left the process without capture until it was restarted.
+   *
+   * @return `true` when KMS is checked again before each stream; `false` when initialization must fail.
+   */
+  static bool continue_without_capture_method() {
+    if (!kms_retry_allowed()) {
+      BOOST_LOG(error) << "Unable to initialize capture method"sv;
+      log_missing_graphical_session_hint();
+      return false;
+    }
+    BOOST_LOG(warning) << "No display lit to capture yet: checking KMS again before each stream"sv;
+    log_missing_graphical_session_hint();
+    return true;
+  }
+
   bool choose_kms_capture_if_none() {
     if (sources.any()) {
       return true;
@@ -1574,16 +1594,8 @@ namespace platf {
     }
 #endif
 
-    if (sources.none()) {
-      if (!kms_retry_allowed()) {
-        BOOST_LOG(error) << "Unable to initialize capture method"sv;
-        log_missing_graphical_session_hint();
-        return nullptr;
-      }
-      // With KMS, no capture method only means that no display is lit yet (every screen blanked by power saving at
-      // startup). display_names() and display() check KMS again before each probe, so a display lit later is used;
-      // giving up here left the process without capture until it was restarted.
-      BOOST_LOG(warning) << "No display lit to capture yet: checking KMS again before each stream"sv;
+    if (sources.none() && !continue_without_capture_method()) {
+      return nullptr;
     }
 
     if (!gladLoaderLoadEGL(NULL)) {
