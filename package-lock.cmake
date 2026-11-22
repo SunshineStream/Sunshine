@@ -19,11 +19,18 @@ set(PATCH_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/patches")
 set(BOOST_TAG boost-1.92.0)
 set(BOOST_SHA256 9bed76128d4e46755dbe818487788c6fceb6f72b378f4daa49b7e1e600d9088d)
 string(REGEX REPLACE "^boost-" "" BOOST_VERSION "${BOOST_TAG}")
+set(BOOST_PATCH_ARGS)
+if(NOT WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL "4.5" AND BOOST_TAG STREQUAL "boost-1.92.0")
+    # Backport the Boost.Locale source grouping fix for CMake 4.5.
+    # https://github.com/boostorg/locale/pull/273
+    set(BOOST_PATCH_ARGS PATCHES "${PATCH_DIRECTORY}/boost-locale-cmake-4.5.patch")
+endif()
 CPMDeclarePackage(Boost
         NAME Boost
         VERSION ${BOOST_VERSION}
         URL https://github.com/boostorg/boost/releases/download/${BOOST_TAG}/${BOOST_TAG}-cmake.tar.xz
         URL_HASH SHA256=${BOOST_SHA256}
+        ${BOOST_PATCH_ARGS}
         DOWNLOAD_ONLY YES
 )
 
