@@ -34,6 +34,7 @@
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "src/platform/virtualhid_input.h"
+#include "src/text_context.h"
 
 namespace platf {
   using namespace std::literals;
@@ -1328,7 +1329,9 @@ namespace platf {
    * @return Capability flags.
    */
   platform_caps::caps_t get_capabilities() {
-    platform_caps::caps_t caps = 0;
+    platform_caps::caps_t caps = config::input.remote_text_context && config::input.mouse && config::input.keyboard ?
+                                   text_context::host_flag :
+                                   0;
 
     if (config::input.gamepad_driver != config::GAMEPAD_DRIVER_NONE && virtualhid::configured_gamepad_supports_controller_extensions()) {
       caps |= platform_caps::controller_touch;

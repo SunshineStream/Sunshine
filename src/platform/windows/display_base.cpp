@@ -527,6 +527,8 @@ namespace platf::dxgi {
           if (desc.AttachedToDesktop && test_dxgi_duplication(adapter_tmp, output_tmp, false)) {
             output = std::move(output_tmp);
 
+            capture_left = desc.DesktopCoordinates.left;
+            capture_top = desc.DesktopCoordinates.top;
             offset_x = desc.DesktopCoordinates.left;
             offset_y = desc.DesktopCoordinates.top;
             width = desc.DesktopCoordinates.right - offset_x;

@@ -30,6 +30,9 @@
 #include "platform/common.h"
 #include "process.h"
 #include "stream.h"
+#ifdef _WIN32
+  #include "src/platform/windows/text_context.h"
+#endif
 #include "sync.h"
 #include "system_tray.h"
 #include "thread_safe.h"
@@ -561,6 +564,7 @@ namespace stream {
     } control;  ///< Runtime state for the encrypted GameStream control channel.
 
     std::uint32_t launch_session_id;  ///< RTSP launch-session ID associated with this stream.
+    std::uint64_t focus_session {};  ///< Nonzero only for a negotiated encrypted text-context connection.
     std::string client_cert;  ///< PEM certificate for the paired client owning the stream.
     std::string input_session_id;  ///< Stable client identity used to retain input devices across resume.
 
@@ -1184,6 +1188,27 @@ namespace stream {
     return 0;
   }
 
+  /** @brief Flush this peer's reliable focus updates on the control thread. */
+  void send_text_context([[maybe_unused]] session_t *session) {
+#ifdef _WIN32
+    if (session->focus_session) {
+      for (const auto &packet : text_context::windows::drain(session->focus_session)) {
+        struct {
+          control_header_v2 header;
+          text_context::packet_t body;
+        } plaintext {{text_context::message_type, sizeof(packet)}, packet};
+
+        static_assert(sizeof(plaintext) == sizeof(control_header_v2) + sizeof(packet));
+        std::array<std::uint8_t, sizeof(control_encrypted_t) + crypto::cipher::round_to_pkcs7_padded(sizeof(plaintext)) + crypto::cipher::tag_size> encrypted;
+        auto payload = encode_control(session, util::view(plaintext), encrypted);
+        if (session->broadcast_ref->control_server.send(payload, session->control.peer)) {
+          BOOST_LOG(warning) << "Could not send remote text context";
+        }
+      }
+    }
+#endif
+  }
+
   /**
    * @brief Run the broadcast control-channel worker thread.
    *
@@ -1260,7 +1285,7 @@ namespace stream {
         std::copy(payload.end() - 16, payload.end(), std::begin(iv));
       }
 
-      input::passthrough(session->input, std::move(plaintext));
+      input::passthrough(session->input, std::move(plaintext), session->focus_session);
     });
 
     server->map(packetTypes[IDX_ENCRYPTED], [server](session_t *session, const std::string_view &payload) {
@@ -1323,7 +1348,7 @@ namespace stream {
       // IDX_INPUT_DATA callback will attempt to decrypt unencrypted data, therefore we need pass it directly
       if (type == packetTypes[IDX_INPUT_DATA]) {
         plaintext.erase(std::begin(plaintext), std::begin(plaintext) + 4);
-        input::passthrough(session->input, std::move(plaintext));
+        input::passthrough(session->input, std::move(plaintext), session->focus_session);
       } else {
         server->call(type, session, next_payload, true);
       }
@@ -1382,6 +1407,7 @@ namespace stream {
           if (!session->control.peer) {
             has_session_awaiting_peer = true;
           } else {
+            send_text_context(session);
             auto &feedback_queue = session->control.feedback_queue;
             while (feedback_queue->peek()) {
               auto feedback_msg = feedback_queue->pop();
@@ -2312,6 +2338,11 @@ namespace stream {
       session.audioThread.join();
       BOOST_LOG(debug) << "Waiting for control to end..."sv;
       session.controlEnd.view();
+#ifdef _WIN32
+      if (session.focus_session) {
+        text_context::windows::stop(session.focus_session);
+      }
+#endif
       // Reset input on session stop to avoid stuck repeated keys
       BOOST_LOG(debug) << "Resetting Input..."sv;
       input::reset(session.input);
@@ -2353,6 +2384,12 @@ namespace stream {
       session.control.expected_peer_address = addr_string;
       BOOST_LOG(debug) << "Expecting incoming session connections from "sv << addr_string;
 
+#ifdef _WIN32
+      if (config::input.remote_text_context && config::input.mouse && config::input.keyboard && session.config.controlProtocolType == 13 && (session.config.mlFeatureFlags & text_context::client_flag)) {
+        session.focus_session = std::uint64_t {session.launch_session_id} + 1;
+        text_context::windows::start(session.focus_session);
+      }
+#endif
       // Insert this session into the session list
       {
         auto lg = session.broadcast_ref->control_server._sessions.lock();

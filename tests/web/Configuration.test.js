@@ -161,7 +161,7 @@ describe('FEC configuration', () => {
   })
 })
 
-describe('gamepad input configuration', () => {
+describe('input configuration', () => {
   function mountInputs(platform, gamepadDriver = '', gamepad = 'auto', controller = 'enabled') {
     return mount(Inputs, {
       props: {
@@ -185,6 +185,10 @@ describe('gamepad input configuration', () => {
       },
     })
   }
+
+  it.each(['freebsd', 'linux', 'macos', 'windows'])('shows remote editable focus only on Windows (%s)', platform => {
+    expect(mountInputs(platform).find('#remote_text_context').exists()).toBe(platform === 'windows')
+  })
 
   it.each(['freebsd', 'linux', 'macos', 'windows'])('offers all profiles and automatic detection on %s', platform => {
     const wrapper = mountInputs(platform, platform === 'windows' ? 'virtualhid' : '')

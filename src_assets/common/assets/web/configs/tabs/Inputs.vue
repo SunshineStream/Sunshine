@@ -340,6 +340,14 @@ watch(
               default="true"
     ></Checkbox>
 
+    <!-- Remote editable focus hints -->
+    <Checkbox v-if="platform === 'windows'" class="mb-3"
+              id="remote_text_context"
+              locale-prefix="config"
+              v-model="config.remote_text_context"
+              default="true"
+    ></Checkbox>
+
     <!-- Native pen/touch support -->
     <Checkbox v-if="config.mouse === 'enabled'"
               class="mb-3"

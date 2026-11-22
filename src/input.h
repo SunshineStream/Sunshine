@@ -51,7 +51,7 @@ namespace input {
   /**
    * @brief Queue a raw input message for platform passthrough.
    */
-  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data);
+  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data, std::uint64_t focus_session = 0);
 
   /**
    * @brief Initialize global input resources and platform backends.
@@ -236,6 +236,8 @@ namespace input {
 
     int env_logical_width;  ///< Width of the full capture environment after display scaling.
     int env_logical_height;  ///< Height of the full capture environment after display scaling.
+    int capture_left {}, capture_top {};  ///< Windows global physical display origin.
+    int capture_width {}, capture_height {};  ///< Physical pixel extent of the captured display.
 
     /**
      * @brief Check whether the touch-port bounds are initialized.

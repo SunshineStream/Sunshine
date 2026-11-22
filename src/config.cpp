@@ -863,6 +863,7 @@ namespace config {
     true,  // always send scancodes
     true,  // high resolution scrolling
     true,  // native pen/touch support
+    true,  // remote text context on supported Windows sessions
   };
 
   /**
@@ -1915,6 +1916,7 @@ namespace config {
     bool_f(vars, "virtualhid_randomize_mac", input.virtualhid_randomize_mac);
 
     bool_f(vars, "mouse", input.mouse);
+    bool_f(vars, "remote_text_context", input.remote_text_context);
     bool_f(vars, "keyboard", input.keyboard);
     bool_f(vars, "controller", input.controller);
 

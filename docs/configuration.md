@@ -728,6 +728,14 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### remote_text_context
+
+Windows only. Enabled by default. A client that negotiates remote text context over an encrypted
+control channel receives the position of a writable Windows UI Automation Edit control after a
+matching remote click or tap. The client controls keyboard visibility. Custom editors that do not
+expose writable Edit semantics may require opening the keyboard manually. Set
+`remote_text_context = disabled` to disable observation and capability advertisement.
+
 ### native_pen_touch
 
 <table>
