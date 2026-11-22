@@ -2287,8 +2287,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Allows clients implementing the [legacy codec protocol](contributing.md#legacy-codec-protocol)
-            to request MPEG-2/H.262 video streams.
+            Allows any client implementing the Sunshine codec extension to request MPEG-2/H.262 video streams.
             Support is unadvertised by default and must be enabled here. Sunshine probes MPEG-2 independently of
             H.264, preferring the selected backend before trying other available backends. Enabling H.263+ does not
             displace a working hardware MPEG-2 encoder. Streams using different encoder backends use separate
@@ -2330,8 +2329,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Allows clients implementing the [legacy codec protocol](contributing.md#legacy-codec-protocol)
-            to request H.263+ video streams.
+            Allows any client implementing the Sunshine codec extension to request H.263+ video streams.
             Support is unadvertised by default and must be enabled here. Sunshine selects and probes its H.263+
             backend independently of MPEG-2 and modern codecs; H.264 support is not a prerequisite.
             @warning{H.263+ uses software encoding in Sunshine and may reduce host performance.}
