@@ -22,6 +22,19 @@
  * delivery until one is returned, and frames must never be filtered by SCFrameStatus.
  */
 API_AVAILABLE(macos(14.0))
+/**
+ * @brief Check whether a window is the macOS privacy indicator.
+ *
+ * While a screen or audio recording runs, macOS draws a purple dot in the top-right corner of every
+ * display, as a WindowServer window titled "StatusIndicator" with no owning bundle. Capturing it
+ * puts the dot into the stream, so it is excluded from the content filter.
+ *
+ * @param title Window title (`SCWindow.title`).
+ * @param bundle_identifier Bundle identifier of the window's owning application, or nil.
+ * @return `YES` for the privacy indicator.
+ */
+BOOL SCIsPrivacyIndicatorWindow(NSString *title, NSString *bundle_identifier);
+
 @interface SCCapture: NSObject <SCStreamDelegate, SCStreamOutput>
 
 /**
