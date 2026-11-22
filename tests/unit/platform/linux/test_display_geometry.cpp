@@ -53,14 +53,14 @@ namespace {
 TEST(KmsDisplayEnumerationTest, KeepsPlaneAndDesktopGeometryWithTheSelectedBackend) {
   platf::kms::display_enumeration_t hardware;
   hardware.cards.push_back({"/dev/dri/card1", {}});
-  hardware.outputs.push_back({"DP-1", 0, 31, 51});
+  hardware.outputs.emplace_back("DP-1", 0U, 31U, 51U);
   hardware.desktop.add({.offset_x = 0, .offset_y = 0, .width = 1920, .height = 1080});
 
   platf::kms::display_enumeration_t software;
   software.cards.push_back({"/dev/dri/card0", {}});
   software.cards.push_back({"/dev/dri/card1", {}});
-  software.outputs.push_back({"HDMI-A-1", 0, 57, 67});
-  software.outputs.push_back({"DP-1", 1, 31, 51});
+  software.outputs.emplace_back("HDMI-A-1", 0U, 57U, 67U);
+  software.outputs.emplace_back("DP-1", 1U, 31U, 51U);
   software.desktop.add({.offset_x = -1280, .offset_y = 0, .width = 1280, .height = 720});
   software.desktop.add({.offset_x = 0, .offset_y = 0, .width = 1920, .height = 1080});
 

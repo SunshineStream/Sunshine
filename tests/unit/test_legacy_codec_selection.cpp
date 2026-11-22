@@ -84,13 +84,15 @@ TEST(LegacyCodecNegotiationTest, MatchesSunshineAdvertisementsAndStrictClientReq
  */
 TEST(LegacyCodecSelectionTest, ReusesCachedHardwareProbeWithLegacySupport) {
   const auto previous_modes = video::probed_codec_modes();
-  auto restore = util::fail_guard([&] {
+  auto restore = util::fail_guard([previous_modes] {
     video::probed_codec_modes() = previous_modes;
   });
   video::probed_codec_modes() = {true, 2, 2};
 
   video::encoder_t hardware {};
-  const auto unchanged = [] {
+  int reenumeration_checks = 0;
+  const auto unchanged = [&reenumeration_checks] {
+    ++reenumeration_checks;
     return false;
   };
   const auto changed = [] {
@@ -100,4 +102,5 @@ TEST(LegacyCodecSelectionTest, ReusesCachedHardwareProbeWithLegacySupport) {
   EXPECT_FALSE(video::can_reuse_encoder_probe(&hardware, changed));
   EXPECT_FALSE(video::can_reuse_encoder_probe(&video::software, unchanged));
   EXPECT_FALSE(video::can_reuse_encoder_probe(nullptr, unchanged));
+  EXPECT_EQ(reenumeration_checks, 1);
 }

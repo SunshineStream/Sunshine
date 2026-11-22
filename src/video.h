@@ -878,7 +878,7 @@ namespace video {
    * @param needs_reenumeration Platform check for changes that invalidate encoder results.
    * @return True when the cached results can be reused.
    */
-  bool can_reuse_encoder_probe(const encoder_t *encoder, bool (*needs_reenumeration)());
+  bool can_reuse_encoder_probe(const encoder_t *encoder, const std::function<bool()> &needs_reenumeration);
 
   /**
    * @brief Probe encoders and select the preferred encoder.

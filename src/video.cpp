@@ -1454,18 +1454,17 @@ namespace video {
       {},  // capabilities
     },
     {
-      // Common options
-      {
+      .common_options = {
         {"async_depth"s, 1},
         {"idr_interval"s, std::numeric_limits<int>::max()},
       },
-      {},  // SDR-specific options
-      {},  // HDR-specific options
-      {},  // YUV444 SDR-specific options
-      {},  // YUV444 HDR-specific options
-      {},  // Fallback options
-      "mpeg2_vaapi"s,
-      {},  // capabilities
+      .sdr_options = {},
+      .hdr_options = {},
+      .sdr444_options = {},
+      .hdr444_options = {},
+      .fallback_options = {},
+      .name = "mpeg2_vaapi"s,
+      .capabilities = {},
     },
     {},  // H.263+
     // RC buffer size will be set in platform code if supported
@@ -1629,7 +1628,7 @@ namespace video {
      * @brief Track the selected backend and advertised modes from encoder probing.
      */
     struct encoder_probe_state_t {
-      std::array<encoder_t *, VIDEO_FORMAT_COUNT> encoders {};  ///< Backend selected for each wire codec.
+      std::array<encoder_t *, VIDEO_FORMAT_COUNT> encoders_by_format {};  ///< Backend selected for each wire codec.
       probed_codec_modes_t modes;  ///< Baseline and legacy codec modes from the probe.
     };
 
@@ -1689,7 +1688,7 @@ namespace video {
     if (config.videoFormat < 0 || config.videoFormat >= VIDEO_FORMAT_COUNT) {
       return nullptr;
     }
-    return encoder_probe_state().encoders[config.videoFormat];
+    return encoder_probe_state().encoders_by_format[config.videoFormat];
   }
 
   /**
@@ -3656,7 +3655,7 @@ namespace video {
     return 2 + static_cast<int>(codec[encoder_t::DYNAMIC_RANGE]) + 2 * static_cast<int>(codec[encoder_t::DYNAMIC_RANGE_YUV444]);
   }
 
-  bool can_reuse_encoder_probe(const encoder_t *encoder, bool (*needs_reenumeration)()) {
+  bool can_reuse_encoder_probe(const encoder_t *encoder, const std::function<bool()> &needs_reenumeration) {
     return encoder && !(encoder->flags & ALWAYS_REPROBE) && !needs_reenumeration();
   }
 

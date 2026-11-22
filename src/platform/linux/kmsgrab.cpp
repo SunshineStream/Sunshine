@@ -1102,7 +1102,7 @@ namespace platf {
         delay = ::video::capture_frame_interval(config);
 
         const auto index = enumeration.display_index(display_name);
-        if (!index) {
+        if (!index.has_value()) {
           BOOST_LOG(warning) << "Couldn't map '"sv << display_name << "' to a kmsgrab monitor. Falling back to the first output."sv;
         }
         const auto monitor_index = index.value_or(0);
@@ -2240,13 +2240,10 @@ namespace platf {
         it->second.monitor_index = enumeration.outputs.size();
 
         kms::print(plane.get(), fb.get(), crtc.get());
-        enumeration.outputs.push_back({output_name, enumeration.cards.size(), plane->plane_id, plane->crtc_id});
+        enumeration.outputs.emplace_back(output_name, enumeration.cards.size(), plane->plane_id, plane->crtc_id);
       }
 
-      enumeration.cards.push_back({
-        entry.path().string(),
-        std::move(crtc_to_monitor),
-      });
+      enumeration.cards.emplace_back(entry.path().string(), std::move(crtc_to_monitor));
     }
 
     if (!wl::init()) {

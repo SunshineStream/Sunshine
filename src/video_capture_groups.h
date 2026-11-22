@@ -40,7 +40,7 @@ namespace video {
        * @param applied_generation Last switch applied by this worker.
        */
       void apply(int &display_index, std::size_t display_count, std::uint64_t &applied_generation) const {
-        if (generation == applied_generation || !index || display_count == 0) {
+        if (generation == applied_generation || !index.has_value() || display_count == 0) {
           return;
         }
         display_index = std::clamp(*index, 0, static_cast<int>(display_count) - 1);

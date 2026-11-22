@@ -67,8 +67,8 @@ namespace platf::kms {
       }
 
       std::size_t index;
-      const auto [end, error] = std::from_chars(name.data(), name.data() + name.size(), index);
-      if (end == name.data() + name.size() && error == std::errc {}) {
+      const auto [end, parse_error] = std::from_chars(name.data(), name.data() + name.size(), index);
+      if (end == name.data() + name.size() && parse_error == std::errc {}) {
         return index;
       }
 
