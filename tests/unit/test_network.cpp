@@ -16,6 +16,25 @@
 // local includes
 #include <src/network.h>
 
+namespace {
+  /**
+   * @brief Copy the leading bytes of a socket address storage into a concrete socket address type.
+   *
+   * Copying avoids the strict-aliasing violation of reinterpreting the storage in place.
+   *
+   * @tparam T Concrete socket address type, such as `sockaddr_in` or `sockaddr_in6`.
+   * @param storage The socket address storage to copy from.
+   * @return A copy of the address as `T`.
+   */
+  template<typename T>
+  T sockaddr_as(const sockaddr_storage &storage) {
+    static_assert(sizeof(T) <= sizeof(sockaddr_storage));
+    T address {};
+    std::memcpy(&address, &storage, sizeof(address));
+    return address;
+  }
+}  // namespace
+
 TEST(NetworkClassificationTest, DeducedNetworkListsPreserveAddressScopes) {
   EXPECT_EQ(net::from_address("127.0.0.1"), net::PC);
   EXPECT_EQ(net::from_address("192.168.1.2"), net::LAN);
@@ -271,10 +290,10 @@ TEST(SetEnetAddressTest, ConvertsIpv6Wildcard) {
 
   ASSERT_EQ(addr.address.ss_family, AF_INET6);
   ASSERT_EQ(addr.addressLength, sizeof(sockaddr_in6));
-  const auto *sin6 = reinterpret_cast<const sockaddr_in6 *>(&addr.address);
-  EXPECT_EQ(sin6->sin6_port, ENET_HOST_TO_NET_16(47999));
+  const auto sin6 = sockaddr_as<sockaddr_in6>(addr.address);
+  EXPECT_EQ(sin6.sin6_port, ENET_HOST_TO_NET_16(47999));
   const auto bytes = boost::asio::ip::make_address_v6("::").to_bytes();
-  EXPECT_EQ(std::memcmp(&sin6->sin6_addr, bytes.data(), bytes.size()), 0);
+  EXPECT_EQ(std::memcmp(&sin6.sin6_addr, bytes.data(), bytes.size()), 0);
 }
 
 /**
@@ -287,10 +306,10 @@ TEST(SetEnetAddressTest, ConvertsIpv4Address) {
 
   ASSERT_EQ(addr.address.ss_family, AF_INET);
   ASSERT_EQ(addr.addressLength, sizeof(sockaddr_in));
-  const auto *sin = reinterpret_cast<const sockaddr_in *>(&addr.address);
-  EXPECT_EQ(sin->sin_port, ENET_HOST_TO_NET_16(48010));
+  const auto sin = sockaddr_as<sockaddr_in>(addr.address);
+  EXPECT_EQ(sin.sin_port, ENET_HOST_TO_NET_16(48010));
   const auto bytes = boost::asio::ip::make_address_v4("192.0.2.1").to_bytes();
-  EXPECT_EQ(std::memcmp(&sin->sin_addr, bytes.data(), bytes.size()), 0);
+  EXPECT_EQ(std::memcmp(&sin.sin_addr, bytes.data(), bytes.size()), 0);
 }
 
 /**
