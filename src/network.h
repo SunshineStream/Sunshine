@@ -5,6 +5,7 @@
 #pragma once
 
 // standard includes
+#include <string>
 #include <tuple>
 #include <utility>
 
@@ -96,6 +97,19 @@ namespace net {
    * @return ENet host bound to the requested address and port, or an empty handle on failure.
    */
   host_t host_create(af_e af, ENetAddress &addr, std::uint16_t port);
+
+  /**
+   * @brief Fill an ENet address from a host string and port.
+   *
+   * Numeric IPv4 and IPv6 addresses are converted directly, so wildcard addresses such as `::` work even when the
+   * host has no non-loopback address of that family. Host names are resolved through ENet.
+   *
+   * @param addr ENet address to fill.
+   * @param host Numeric address or host name.
+   * @param port UDP port number.
+   * @return `true` if the address was filled, `false` if the host could not be resolved.
+   */
+  bool set_enet_address(ENetAddress &addr, const std::string &host, std::uint16_t port);
 
   /**
    * @brief Convert a config address-family string to the matching enum.
