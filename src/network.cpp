@@ -4,8 +4,6 @@
  */
 // standard includes
 #include <algorithm>
-#include <cerrno>
-#include <cstring>
 #include <sstream>
 
 // local includes
@@ -237,9 +235,7 @@ namespace net {
     // Maximum of 128 clients, which should be enough for anyone
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
     if (!host) {
-      // ENet returns null when it cannot create or bind the socket
-      const auto create_error = errno;
-      BOOST_LOG(error) << "Failed to create ENet host on ["sv << bind_addr << "]:"sv << port << ": "sv << std::strerror(create_error);
+      BOOST_LOG(error) << "Failed to create ENet host on ["sv << bind_addr << "]:"sv << port;
       return host;
     }
 

@@ -261,7 +261,7 @@ TEST_F(BindAddressTest, HostCreateBindsAvailablePort) {
 
   ASSERT_TRUE(host);
   ASSERT_EQ(host->address.address.ss_family, AF_INET);
-  EXPECT_NE(reinterpret_cast<const sockaddr_in *>(&host->address.address)->sin_port, 0);
+  EXPECT_NE(sockaddr_as<sockaddr_in>(host->address.address).sin_port, 0);
 }
 
 /**
