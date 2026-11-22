@@ -49,7 +49,7 @@ modules:
   - "modules/miniupnpc.json"
   - "modules/numactl.json"
 
-  # Caching is configured until here, not including CUDA, since it is too large for GitHub cache
+  # CI caches the modules above and starts the next build stage at CUDA.
   - "modules/cuda.json"
 
   # FFmpeg prebuilt binaries
