@@ -209,11 +209,11 @@ TEST(RtspAnnounceTest, ValidatesH263PlusDimensionsAfterApplyingResolutionCap) {
   auto &lan_encryption = config::stream.lan_encryption_mode;
   auto &max_width = config::video.max_stream_width;
   auto &max_height = config::video.max_stream_height;
-  auto restore = util::fail_guard([&h263p, &lan_encryption, &max_width, &max_height, old_h263p = h263p, old_encryption = lan_encryption, old_width = max_width, old_height = max_height] {
-    h263p = old_h263p;
-    lan_encryption = old_encryption;
-    max_width = old_width;
-    max_height = old_height;
+  auto restore = util::fail_guard([old_h263p = h263p, old_encryption = lan_encryption, old_width = max_width, old_height = max_height] {
+    video::probed_codec_modes().h263p = old_h263p;
+    config::stream.lan_encryption_mode = old_encryption;
+    config::video.max_stream_width = old_width;
+    config::video.max_stream_height = old_height;
   });
   h263p = 2;
   // Valid resolutions reach the encryption gate without starting a stream.

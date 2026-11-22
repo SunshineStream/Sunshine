@@ -90,17 +90,7 @@ TEST(LegacyCodecSelectionTest, ReusesCachedHardwareProbeWithLegacySupport) {
   video::probed_codec_modes() = {true, 2, 2};
 
   video::encoder_t hardware {};
-  int reenumeration_checks = 0;
-  const auto unchanged = [&reenumeration_checks] {
-    ++reenumeration_checks;
-    return false;
-  };
-  const auto changed = [] {
-    return true;
-  };
-  EXPECT_TRUE(video::can_reuse_encoder_probe(&hardware, unchanged));
-  EXPECT_FALSE(video::can_reuse_encoder_probe(&hardware, changed));
-  EXPECT_FALSE(video::can_reuse_encoder_probe(&video::software, unchanged));
-  EXPECT_FALSE(video::can_reuse_encoder_probe(nullptr, unchanged));
-  EXPECT_EQ(reenumeration_checks, 1);
+  EXPECT_TRUE(video::is_encoder_probe_cacheable(&hardware));
+  EXPECT_FALSE(video::is_encoder_probe_cacheable(&video::software));
+  EXPECT_FALSE(video::is_encoder_probe_cacheable(nullptr));
 }

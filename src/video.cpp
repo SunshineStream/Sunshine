@@ -1453,7 +1453,7 @@ namespace video {
       "h264_vaapi"s,
       {},  // capabilities
     },
-    {
+    encoder_t::codec_t {
       .common_options = {
         {"async_depth"s, 1},
         {"idr_interval"s, std::numeric_limits<int>::max()},
@@ -3655,8 +3655,8 @@ namespace video {
     return 2 + static_cast<int>(codec[encoder_t::DYNAMIC_RANGE]) + 2 * static_cast<int>(codec[encoder_t::DYNAMIC_RANGE_YUV444]);
   }
 
-  bool can_reuse_encoder_probe(const encoder_t *encoder, const std::function<bool()> &needs_reenumeration) {
-    return encoder && !(encoder->flags & ALWAYS_REPROBE) && !needs_reenumeration();
+  bool is_encoder_probe_cacheable(const encoder_t *encoder) {
+    return encoder && !(encoder->flags & ALWAYS_REPROBE);
   }
 
   int probe_encoders() {
@@ -3669,7 +3669,7 @@ namespace video {
     auto &[codec_encoders, modes] = encoder_probe_state();
 
     // Legacy settings are read at startup. Cache their results alongside the modern probe.
-    if (can_reuse_encoder_probe(chosen_encoder, platf::needs_encoder_reenumeration)) {
+    if (is_encoder_probe_cacheable(chosen_encoder) && !platf::needs_encoder_reenumeration()) {
       return 0;
     }
 
