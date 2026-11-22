@@ -1,0 +1,15 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "git-refs",
+      "depName": "LizardByte/libvirtualhid",
+      "versioning": "exact",
+      "ref": "master"
+    },
+    "url": "https://github.com/LizardByte/libvirtualhid.git",
+    "commit": "dd8153df338c6fb399ea4a048fa97b4c536f12a0",
+    "dest": "flatpak-cpm/libvirtualhid",
+    "disable-submodules": true
+  }
+]

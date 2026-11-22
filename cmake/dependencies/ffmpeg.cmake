@@ -18,50 +18,11 @@ if(NOT DEFINED FFMPEG_PREPARED_BINARIES)
     # Determine download location
     set(FFMPEG_DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/_deps")
 
-    # Fetch tags for the build-deps submodule so tag lookups work in CI shallow clones
-    execute_process(
-        COMMAND git -C "${CMAKE_SOURCE_DIR}/third-party/build-deps" fetch --tags --depth=1
-        OUTPUT_QUIET
-        ERROR_QUIET
-    )
-
-    # Get the current commit/tag from the build-deps submodule
-    execute_process(
-        COMMAND git -C "${CMAKE_SOURCE_DIR}/third-party/build-deps" describe --tags --exact-match
-        OUTPUT_VARIABLE FFMPEG_RELEASE_TAG
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        ERROR_QUIET
-    )
-
-    # If no exact tag match, try to get the commit hash and look for a tag
-    if(NOT FFMPEG_RELEASE_TAG)
-        execute_process(
-            COMMAND git -C "${CMAKE_SOURCE_DIR}/third-party/build-deps" rev-parse HEAD
-            OUTPUT_VARIABLE BUILD_DEPS_COMMIT
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-
-        # Try to find a tag that points to this commit
-        execute_process(
-            COMMAND git -C "${CMAKE_SOURCE_DIR}/third-party/build-deps" tag --points-at ${BUILD_DEPS_COMMIT}
-            OUTPUT_VARIABLE FFMPEG_RELEASE_TAG
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-        )
-    endif()
-
-    # Set GitHub release URL
+    # Use the release pinned alongside the build-deps-owned codec headers.
     set(FFMPEG_GITHUB_REPO "LizardByte/build-deps")
-    if(FFMPEG_RELEASE_TAG)
-        set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/download/${FFMPEG_RELEASE_TAG}")
-        set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-${FFMPEG_RELEASE_TAG}")
-        message(STATUS "Using FFmpeg from build-deps tag: ${FFMPEG_RELEASE_TAG}")
-    else()
-        set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/latest/download")
-        set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-latest")
-        message(STATUS "Using FFmpeg from latest build-deps release")
-    endif()
+    set(FFMPEG_RELEASE_URL "https://github.com/${FFMPEG_GITHUB_REPO}/releases/download/${BUILD_DEPS_TAG}")
+    set(FFMPEG_VERSION_DIR "${FFMPEG_DOWNLOAD_DIR}/ffmpeg-${BUILD_DEPS_TAG}")
+    message(STATUS "Using FFmpeg from build-deps tag: ${BUILD_DEPS_TAG}")
 
     # Set extraction directory and prepared binaries path
     set(FFMPEG_EXTRACT_DIR "${FFMPEG_VERSION_DIR}")
@@ -294,9 +255,6 @@ if(UNIX AND NOT APPLE)
         file(COPY "${FFMPEG_PREPARED_BINARIES}/include/" DESTINATION "${FFMPEG_INCLUDE_DIRS}" PATTERN "va" EXCLUDE)
     endif()
     set(_sunshine_bundled_include "${FFMPEG_PREPARED_BINARIES}/include")
-    if(NV_CODEC_HEADERS_13_1_INCLUDE_DIR STREQUAL _sunshine_bundled_include)
-        set(NV_CODEC_HEADERS_13_1_INCLUDE_DIR "${FFMPEG_INCLUDE_DIRS}")
-    endif()
     foreach(dependency FFMPEG OPUS)
         if(TARGET PkgConfig::SUNSHINE_BUNDLED_${dependency})
             get_target_property(_sunshine_include_dirs

@@ -65,7 +65,7 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture_loop.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.mm"
-        "${CMAKE_SOURCE_DIR}/third-party/TPCircularBuffer/TPCircularBuffer.c"
-        "${CMAKE_SOURCE_DIR}/third-party/TPCircularBuffer/TPCircularBuffer.h"
+        "${tpcircularbuffer_SOURCE_DIR}/TPCircularBuffer.c"
+        "${tpcircularbuffer_SOURCE_DIR}/TPCircularBuffer.h"
         ${APPLE_ENTITLEMENTS_FILE}
         ${APPLE_PLIST_FILE})

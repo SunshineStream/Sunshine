@@ -42,8 +42,8 @@ const emitTrayIconsPlugin = {
             source: fs.readFileSync(resolve(projectRoot, 'sunshine.svg')),
         });
 
-        const virtualHidIcon = resolve(projectRoot, 'third-party/libvirtualhid/libvirtualhid.svg');
-        if ((process.platform === 'win32' || process.platform === 'darwin') && fs.existsSync(virtualHidIcon)) {
+        const virtualHidIcon = process.env.SUNSHINE_LIBVIRTUALHID_ICON;
+        if ((process.platform === 'win32' || process.platform === 'darwin') && virtualHidIcon) {
             this.emitFile({
                 type: 'asset',
                 fileName: 'images/logo-libvirtualhid.svg',

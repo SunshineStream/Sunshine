@@ -17,3 +17,6 @@ FIND_LIBRARY(VIDEO_TOOLBOX_LIBRARY VideoToolbox)
 if(SUNSHINE_ENABLE_TRAY)
     FIND_LIBRARY(COCOA Cocoa REQUIRED)
 endif()
+
+CPMAddPackage(NAME tpcircularbuffer DOWNLOAD_ONLY YES)
+include_directories(SYSTEM "${tpcircularbuffer_SOURCE_DIR}")

@@ -94,6 +94,16 @@ modules:
       - -DSUNSHINE_PUBLISHER_NAME='LizardByte'
       - -DSUNSHINE_PUBLISHER_WEBSITE='https://app.lizardbyte.dev'
       - -DSUNSHINE_PUBLISHER_ISSUE_URL='https://app.lizardbyte.dev/support'
+      # Use the sources that Flatpak Builder stages from modules/sunshine/.
+      - -DCPM_glad_SOURCE=/run/build/sunshine/flatpak-cpm/glad
+      - -DCPM_libdisplaydevice_SOURCE=/run/build/sunshine/flatpak-cpm/libdisplaydevice
+      - -DCPM_libvirtualhid_SOURCE=/run/build/sunshine/flatpak-cpm/libvirtualhid
+      - -DCPM_moonlight-common-c_SOURCE=/run/build/sunshine/flatpak-cpm/moonlight-common-c
+      - -DCPM_plasma_wayland_protocols_SOURCE=/run/build/sunshine/flatpak-cpm/plasma_wayland_protocols
+      - -DCPM_simple_web_server_SOURCE=/run/build/sunshine/flatpak-cpm/simple_web_server
+      - -DCPM_tray_SOURCE=/run/build/sunshine/flatpak-cpm/tray
+      - -DCPM_wayland_protocols_SOURCE=/run/build/sunshine/flatpak-cpm/wayland_protocols
+      - -DCPM_wlr_protocols_SOURCE=/run/build/sunshine/flatpak-cpm/wlr_protocols
     no-make-install: false
     post-install:
       - install -D $FLATPAK_BUILDER_BUILDDIR/packaging/linux/flatpak/scripts/* /app/bin
@@ -107,5 +117,14 @@ modules:
       - type: git
         url: "@GITHUB_CLONE_URL@"
         commit: "@GITHUB_COMMIT@"
+      - modules/sunshine/glad.json
+      - modules/sunshine/libdisplaydevice.json
+      - modules/sunshine/libvirtualhid.json
+      - modules/sunshine/moonlight-common-c.json
+      - modules/sunshine/plasma-wayland-protocols.json
+      - modules/sunshine/simple-web-server.json
+      - modules/sunshine/tray.json
+      - modules/sunshine/wayland-protocols.json
+      - modules/sunshine/wlr-protocols.json
       - type: file
         path: package-lock.json

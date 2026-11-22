@@ -122,7 +122,7 @@ if(SUNSHINE_ENABLE_TRAY AND (WIN32 OR APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux
 
     if(WIN32 OR APPLE)
         configure_file(
-                "${CMAKE_SOURCE_DIR}/third-party/libvirtualhid/libvirtualhid.svg"
+                "${libvirtualhid_SOURCE_DIR}/libvirtualhid.svg"
                 "${SUNSHINE_TRAY_TEST_ICON_DESTINATION_DIR}/logo-libvirtualhid.svg"
                 COPYONLY)
     endif()
@@ -140,13 +140,12 @@ if(SUNSHINE_ENABLE_TRAY AND (WIN32 OR APPLE OR CMAKE_SYSTEM_NAME STREQUAL "Linux
     endforeach()
 
     add_library(sunshine_tray_test_helpers STATIC
-            ${CMAKE_SOURCE_DIR}/third-party/tray/tests/notification_utils.cpp
-            ${CMAKE_SOURCE_DIR}/third-party/tray/tests/screenshot_utils.cpp)
+            "${tray_SOURCE_DIR}/tests/notification_utils.cpp"
+            "${tray_SOURCE_DIR}/tests/screenshot_utils.cpp")
     set_target_properties(sunshine_tray_test_helpers PROPERTIES
             CXX_STANDARD 17
             CXX_STANDARD_REQUIRED ON)
-    target_include_directories(sunshine_tray_test_helpers PRIVATE
-            ${CMAKE_SOURCE_DIR}/third-party/tray)
+    target_include_directories(sunshine_tray_test_helpers PUBLIC "${tray_SOURCE_DIR}/tests")
     target_link_libraries(sunshine_tray_test_helpers PRIVATE
             lizardbyte::common)
 

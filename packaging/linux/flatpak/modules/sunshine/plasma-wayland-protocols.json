@@ -1,0 +1,14 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "github-tags",
+      "depName": "KDE/plasma-wayland-protocols"
+    },
+    "url": "https://github.com/KDE/plasma-wayland-protocols.git",
+    "tag": "v1.23.0",
+    "commit": "c5ac4db818f4a575a6ccfe0065b73ecfaba6e93e",
+    "dest": "flatpak-cpm/plasma_wayland_protocols",
+    "disable-submodules": true
+  }
+]

@@ -17,10 +17,9 @@ dependencies = [
 ]
 
 [dependency-groups]
-# glad2 declares Jinja2>=2.7,<4.0 as a dependency, so installing it pulls in jinja2 transitively.
-# The platform marker limits this to Linux where the glad generator is actually used.
+# The CPM-fetched glad generator runs from its source tree and needs Jinja2.
 glad = [
-    "glad2",
+    "jinja2>=2.7,<4.0",
 ]
 
 flatpak = [
@@ -39,5 +38,4 @@ py-modules = []
 [tool.uv.sources]
 flatpak_node_generator = { path = "packaging/linux/flatpak/deps/flatpak-builder-tools/node" }
 flatpak_pip_generator = { path = "packaging/linux/flatpak/deps/flatpak-builder-tools/pip" }
-glad2 = { path = "third-party/glad" }
 lizardbyte-common = { path = "third-party/lizardbyte-common" }

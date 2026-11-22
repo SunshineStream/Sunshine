@@ -7,8 +7,8 @@
 #include "../tests_common.h"
 #if defined(SUNSHINE_TRAY) && SUNSHINE_TRAY >= 1
   #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
-    #include "third-party/tray/tests/notification_utils.h"
-    #include "third-party/tray/tests/screenshot_utils.h"
+    #include "notification_utils.h"
+    #include "screenshot_utils.h"
   #endif
 #endif
 

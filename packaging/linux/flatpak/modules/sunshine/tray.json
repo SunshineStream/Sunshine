@@ -1,0 +1,14 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "github-tags",
+      "depName": "LizardByte/tray"
+    },
+    "url": "https://github.com/LizardByte/tray.git",
+    "tag": "v2026.1117.200659",
+    "commit": "c7b35bb6e3d32b5ce03ce9ef14c25cc178927b2e",
+    "dest": "flatpak-cpm/tray",
+    "disable-submodules": true
+  }
+]

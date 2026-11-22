@@ -14,6 +14,9 @@ It is recommended to use one of the following compilers:
 
 ### Dependencies
 
+CMake fetches pinned source dependencies through CPM on the first configure. Initialize the remaining Git submodules
+with `git submodule update --init --recursive` before configuring.
+
 Boost `1.89.0` or newer can be supplied as a system package. When a compatible system package is unavailable, CMake
 downloads the project-locked Boost release through CPM. Static Boost libraries are preferred on every platform by
 default; pass `-DBOOST_USE_STATIC=OFF` to use shared system libraries instead.

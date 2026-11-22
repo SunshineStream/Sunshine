@@ -68,7 +68,7 @@ elseif(UNIX)
 endif()
 
 # libvirtualhid
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/libvirtualhid")
+CPMGetPackage(libvirtualhid)
 list(APPEND SUNSHINE_EXTERNAL_LIBRARIES libvirtualhid::libvirtualhid)
 list(APPEND PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/virtualhid_input.h"
@@ -131,13 +131,13 @@ endif()
 list(APPEND PLATFORM_TARGET_FILES ${NVENC_SOURCES})
 
 set(SUNSHINE_TARGET_FILES
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Input.h"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Rtsp.h"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/RtspParser.c"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/src/Video.h"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors/deps/obl/oblas_common.c"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors/deps/obl/oblas_lite.c"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors/rs.c"
+        "${moonlight-common-c_SOURCE_DIR}/src/Input.h"
+        "${moonlight-common-c_SOURCE_DIR}/src/Rtsp.h"
+        "${moonlight-common-c_SOURCE_DIR}/src/RtspParser.c"
+        "${moonlight-common-c_SOURCE_DIR}/src/Video.h"
+        "${moonlight-common-c_SOURCE_DIR}/nanors/deps/obl/oblas_common.c"
+        "${moonlight-common-c_SOURCE_DIR}/nanors/deps/obl/oblas_lite.c"
+        "${moonlight-common-c_SOURCE_DIR}/nanors/rs.c"
         "${CMAKE_SOURCE_DIR}/src/upnp.cpp"
         "${CMAKE_SOURCE_DIR}/src/upnp.h"
         "${CMAKE_SOURCE_DIR}/src/cbs.cpp"
@@ -213,9 +213,10 @@ include_directories(
         BEFORE
         SYSTEM
         "${CMAKE_SOURCE_DIR}/third-party"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/enet/include"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors"
-        "${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/nanors/deps/obl"
+        "${moonlight-common-c_SOURCE_DIR}/enet/include"
+        "${moonlight-common-c_SOURCE_DIR}/nanors"
+        "${moonlight-common-c_SOURCE_DIR}/nanors/deps/obl"
+        "${SUNSHINE_DEPENDENCY_INCLUDE_DIR}"
         ${OPENSSL_INCLUDE_DIR}
         ${Opus_INCLUDE_DIR}
         ${FFMPEG_INCLUDE_DIRS}
