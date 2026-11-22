@@ -225,6 +225,23 @@ TEST(SCCaptureLoop, BackendPolicyPrefersSckitUntilAStreamFailsToStart) {
   EXPECT_FALSE(policy.prefer_sckit(false));
 }
 
+TEST(SCCaptureLoop, BackendPolicyStreamStartFailureExpiresAfterBackoff) {
+  using policy_t = platf::sckit::backend_policy_t;
+  policy_t policy;
+  const auto failed_at = policy_t::clock::now();
+
+  policy.note_stream_start_failure(failed_at);
+
+  EXPECT_TRUE(policy.stream_start_failed(failed_at));
+  EXPECT_TRUE(policy.stream_start_failed(failed_at + policy_t::failure_backoff - std::chrono::milliseconds {1}));
+  EXPECT_FALSE(policy.stream_start_failed(failed_at + policy_t::failure_backoff));
+
+  // A later failure restarts the backoff.
+  const auto failed_again_at = failed_at + policy_t::failure_backoff * 2;
+  policy.note_stream_start_failure(failed_again_at);
+  EXPECT_TRUE(policy.stream_start_failed(failed_again_at + std::chrono::seconds {1}));
+}
+
 TEST(SCCaptureLoop, StopDelegateMarksStreamFailedUnlessStopping) {
   if (@available(macOS 14.0, *)) {
     SCCapture *capture = [[SCCapture alloc] init];

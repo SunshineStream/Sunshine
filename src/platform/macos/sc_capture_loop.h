@@ -7,6 +7,7 @@
 // standard includes
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <functional>
 
 // platform includes
@@ -21,21 +22,31 @@ namespace platf::sckit {
    *
    * ScreenCaptureKit is selected when a display is created, but its stream can only be started once
    * capture begins. A stream that fails to start flips this policy so that the display is rebuilt
-   * on AVFoundation instead.
+   * on AVFoundation instead, for `failure_backoff`. Start failures are often transient (the session
+   * locking, a display being added), and AVFoundation can't capture those cases either, so a
+   * permanent switch would leave later sessions on the weaker backend until Sunshine restarts.
    */
   class backend_policy_t {
   public:
-    /**
-     * @brief Record that an SCStream could not be started.
-     */
-    void note_stream_start_failure();
+    using clock = std::chrono::steady_clock;  ///< Clock the backoff is measured on.
+
+    /// How long a stream start failure keeps ScreenCaptureKit from being preferred.
+    static constexpr std::chrono::seconds failure_backoff {30};
 
     /**
-     * @brief Check whether an SCStream previously failed to start in this process.
+     * @brief Record that an SCStream could not be started.
      *
-     * @return `true` once a stream start failure was recorded.
+     * @param now Time of the failure.
      */
-    [[nodiscard]] bool stream_start_failed() const;
+    void note_stream_start_failure(clock::time_point now = clock::now());
+
+    /**
+     * @brief Check whether an SCStream failed to start within the last `failure_backoff`.
+     *
+     * @param now Time to evaluate the backoff at.
+     * @return `true` while the most recent stream start failure is younger than `failure_backoff`.
+     */
+    [[nodiscard]] bool stream_start_failed(clock::time_point now = clock::now()) const;
 
     /**
      * @brief Decide whether ScreenCaptureKit should be used for a new display.
@@ -46,7 +57,8 @@ namespace platf::sckit {
     [[nodiscard]] bool prefer_sckit(bool sckit_available) const;
 
   private:
-    std::atomic<bool> _stream_start_failed {false};  ///< Set once an SCStream fails to start.
+    /// Time of the most recent stream start failure, as `clock` ticks; 0 when there was none.
+    std::atomic<clock::rep> _last_failure {0};
   };
 
   /**

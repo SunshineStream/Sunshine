@@ -3,6 +3,7 @@
  * @brief Definitions for the ScreenCaptureKit capture loop and backend fallback policy on macOS.
  */
 // standard includes
+#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -11,16 +12,18 @@
 #include "src/utility.h"
 
 namespace platf::sckit {
-  void backend_policy_t::note_stream_start_failure() {
-    _stream_start_failed = true;
+  void backend_policy_t::note_stream_start_failure(clock::time_point now) {
+    // 0 means "no failure", so never store it.
+    _last_failure = std::max<clock::rep>(now.time_since_epoch().count(), 1);
   }
 
-  bool backend_policy_t::stream_start_failed() const {
-    return _stream_start_failed;
+  bool backend_policy_t::stream_start_failed(clock::time_point now) const {
+    const auto last {_last_failure.load()};
+    return last != 0 && now - clock::time_point {clock::duration {last}} < failure_backoff;
   }
 
   bool backend_policy_t::prefer_sckit(bool sckit_available) const {
-    return sckit_available && !_stream_start_failed;
+    return sckit_available && !stream_start_failed();
   }
 
   backend_policy_t &backend_policy() {
