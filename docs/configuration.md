@@ -2287,7 +2287,8 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Allows any client implementing the Sunshine codec extension to request MPEG-2/H.262 video streams.
+            Allows clients implementing the [legacy codec protocol](contributing.md#legacy-codec-protocol)
+            to request MPEG-2/H.262 video streams.
             Support is unadvertised by default and must be enabled here. Sunshine probes MPEG-2 independently of
             H.264, preferring the selected backend before trying other available backends. Enabling H.263+ does not
             displace a working hardware MPEG-2 encoder. Streams using different encoder backends use separate
@@ -2319,7 +2320,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
     <tr>
         <td>2</td>
-        <td>advertise support for MPEG-2/H.262 video</td>
+        <td>advertise support for MPEG-2/H.262 video after a successful encoder probe</td>
     </tr>
 </table>
 
@@ -2329,7 +2330,8 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     <tr>
         <td>Description</td>
         <td colspan="2">
-            Allows any client implementing the Sunshine codec extension to request H.263+ video streams.
+            Allows clients implementing the [legacy codec protocol](contributing.md#legacy-codec-protocol)
+            to request H.263+ video streams.
             Support is unadvertised by default and must be enabled here. Sunshine selects and probes its H.263+
             backend independently of MPEG-2 and modern codecs; H.264 support is not a prerequisite.
             @warning{H.263+ uses software encoding in Sunshine and may reduce host performance.}
@@ -2358,25 +2360,9 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
     <tr>
         <td>2</td>
-        <td>advertise support for H.263+ video</td>
+        <td>advertise support for H.263+ video after a successful encoder probe</td>
     </tr>
 </table>
-
-### Legacy codec protocol
-
-MPEG-2 and H.263+ are opt-in Sunshine protocol extensions available to any implementing client. Both require
-8-bit 4:2:0 video. Sunshine advertises a codec only after its backend passes a probe; enabling an option does
-not guarantee that the codec is available on the host. Client automatic selection prefers AV1, HEVC, then H.264
-before the legacy codecs. A client requesting only one codec fails negotiation if that codec is unavailable.
-
-| Codec        | `ServerCodecModeSupport` flag | RTSP DESCRIBE marker | `x-nv-vqos[0].bitStreamFormat` |
-|--------------|-------------------------------|----------------------|--------------------------------|
-| MPEG-2/H.262 | `0x00800000`                  | `MPV/90000`          | `3`                            |
-| H.263+       | `0x02000000`                  | `H263-1998/90000`    | `4`                            |
-
-The streams retain GameStream video framing, frame headers, recovery requests, and FEC. The SDP codec names do
-not imply RFC 2250 or RFC 4629 RTP payload packetization. Clients must implement the extension's negotiation,
-GameStream depacketization, and matching video decoder; changing a client name does not enable codec support.
 
 ### capture
 

@@ -10,6 +10,23 @@ Read our contribution guide in our organization level
 
 ## Project Patterns
 
+### Legacy codec protocol
+
+MPEG-2 and H.263+ are opt-in Sunshine protocol extensions available to any implementing client. Both require
+8-bit 4:2:0 video. The host settings [mpeg2_mode](configuration.md#mpeg2_mode) and
+[h263p_mode](configuration.md#h263p_mode) enable probing for the respective codec. Sunshine advertises a codec
+only after its backend passes the probe. Automatic negotiation in `moonlight-common-c` prefers AV1, HEVC, then
+H.264 before the legacy codecs. A client requesting only one codec fails negotiation if that codec is unavailable.
+
+| Codec        | `ServerCodecModeSupport` flag | RTSP DESCRIBE marker | `x-nv-vqos[0].bitStreamFormat` |
+|--------------|-------------------------------|----------------------|--------------------------------|
+| MPEG-2/H.262 | `0x00800000`                  | `MPV/90000`          | `3`                            |
+| H.263+       | `0x02000000`                  | `H263-1998/90000`    | `4`                            |
+
+The SDP markers identify the codecs. Sunshine uses GameStream video framing, frame headers, recovery requests,
+and FEC for both codecs. RFC 2250 and RFC 4629 specify separate RTP payload formats. Clients need to implement
+the extension's negotiation, GameStream depacketization, and a matching video decoder.
+
 ### Web UI
 * The Web UI uses [Vite](https://vitejs.dev) as its build system.
 * The Web UI is a [Vue Router](https://router.vuejs.org) single-page application. Vite builds one `index.html` entry
