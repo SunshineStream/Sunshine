@@ -19,8 +19,8 @@
         "versioning": "regex:^miniupnpc_(?<major>[0-9]+)_(?<minor>[0-9]+)_(?<patch>[0-9]+)$"
       },
       "url": "https://github.com/miniupnp/miniupnp.git",
-      "tag": "miniupnpc_2_3_4",
-      "commit": "ca489177b12004b8fe5992d5229ae76e802ced14",
+      "tag": "miniupnpc_2_3_5",
+      "commit": "e1db7c47295d38b2b416c892779dae9afa434016",
       "x-checker-data": {
         "type": "anitya",
         "project-id": 1986,
