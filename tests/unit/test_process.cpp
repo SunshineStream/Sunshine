@@ -27,6 +27,8 @@
 #endif
 
 // local includes
+#include <src/config.h>
+#include <src/nvhttp.h>
 #include <src/process.h>
 #include <src/utility.h>
 
@@ -841,4 +843,297 @@ TEST_F(ProcessRefreshTest, FileTimeType_DefaultValueComparison) {
   // The actual correctness is verified by Refresh_ParsesFileOnFirstCall above —
   // if that test passes, the optional fix works regardless of platform behavior.
   SUCCEED();
+}
+
+/**
+ * @brief Test fixture for the synthetic "Input Only" app entry.
+ */
+class ProcessInputOnlyTest: public ProcessRefreshTest {  // NOSONAR(cpp:S3656): protected members are intentional for test fixture subclassing
+protected:
+  bool saved_enable_input_only_mode;  ///< Input-only mode setting restored after each test.
+  std::string saved_input_only_app_id;  ///< Cached placeholder app id restored after each test.
+
+  void SetUp() override {
+    ProcessRefreshTest::SetUp();
+    saved_enable_input_only_mode = config::input.enable_input_only_mode;
+    saved_input_only_app_id = proc::input_only_app_id;
+  }
+
+  void TearDown() override {
+    config::input.enable_input_only_mode = saved_enable_input_only_mode;
+    proc::input_only_app_id = saved_input_only_app_id;
+    ProcessRefreshTest::TearDown();
+  }
+
+  /**
+   * @brief Build a context matching the synthetic "Input Only" placeholder.
+   *
+   * @param id Identifier of the placeholder entry.
+   * @return Context that launches no command and streams no captured video.
+   */
+  static proc::ctx_t make_placeholder_ctx(const std::string &id) {
+    proc::ctx_t ctx;
+    ctx.name = "Input Only";
+    ctx.id = id;
+    ctx.auto_detach = true;
+    ctx.wait_all = true;
+    ctx.exit_timeout = std::chrono::seconds {5};
+    ctx.input_only = true;
+    return ctx;
+  }
+
+  /**
+   * @brief Build a context matching an ordinary application.
+   *
+   * @param id Identifier of the application entry.
+   * @return Context that launches no command and captures video normally.
+   */
+  static proc::ctx_t make_regular_ctx(const std::string &id) {
+    proc::ctx_t ctx;
+    ctx.name = "Desktop";
+    ctx.id = id;
+    return ctx;
+  }
+
+  /**
+   * @brief Create a process manager owning only the supplied application contexts.
+   *
+   * @param apps Application contexts owned by the manager.
+   * @return Process manager using the current environment and the supplied apps.
+   */
+  static proc::proc_t make_process(std::vector<proc::ctx_t> apps) {
+    boost::process::v1::environment env = boost::this_process::environment();
+    return proc::proc_t {std::move(env), std::move(apps)};
+  }
+};
+
+/**
+ * @brief Parsing adds the synthetic placeholder entry and caches its id when input-only mode is enabled.
+ */
+TEST_F(ProcessInputOnlyTest, Parse_AddsInputOnlyEntryWhenEnabled) {
+  config::input.enable_input_only_mode = true;
+  proc::input_only_app_id.clear();
+
+  const auto path = test_dir / "apps_input_only_enabled.json";
+  writeAppsJson(path, {"Game One", "Game Two"});
+
+  auto parsed = proc::parse(path.string());
+  ASSERT_TRUE(parsed.has_value());
+
+  const auto &apps = parsed->get_apps();
+  ASSERT_EQ(apps.size(), 3U);
+
+  const auto &entry = apps.back();
+  EXPECT_EQ(entry.name, "Input Only");
+  EXPECT_TRUE(entry.cmd.empty());
+  EXPECT_FALSE(entry.id.empty());
+  EXPECT_TRUE(entry.input_only);
+  EXPECT_EQ(proc::input_only_app_id, entry.id);
+
+  // Existing apps keep stable IDs regardless of the input-only flag
+  EXPECT_EQ(apps[0].name, "Game One");
+  EXPECT_FALSE(apps[0].input_only);
+  EXPECT_EQ(apps[1].name, "Game Two");
+  EXPECT_FALSE(apps[1].input_only);
+}
+
+/**
+ * @brief Parsing omits the placeholder entry and clears the cached id when input-only mode is disabled.
+ */
+TEST_F(ProcessInputOnlyTest, Parse_OmitsInputOnlyEntryWhenDisabled) {
+  config::input.enable_input_only_mode = false;
+  proc::input_only_app_id = "stale-id";
+
+  const auto path = test_dir / "apps_input_only_disabled.json";
+  writeAppsJson(path, {"Game One", "Game Two"});
+
+  auto parsed = proc::parse(path.string());
+  ASSERT_TRUE(parsed.has_value());
+
+  const auto &apps = parsed->get_apps();
+  ASSERT_EQ(apps.size(), 2U);
+  for (const auto &app : apps) {
+    EXPECT_NE(app.name, "Input Only");
+  }
+  EXPECT_TRUE(proc::input_only_app_id.empty());
+}
+
+/**
+ * @brief Toggling input-only mode does not renumber the ids of the apps parsed before the toggle.
+ */
+TEST_F(ProcessInputOnlyTest, Parse_KeepsExistingAppIdsStableWhenToggled) {
+  const auto path = test_dir / "apps_input_only_toggle.json";
+  writeAppsJson(path, {"Game One", "Game Two"});
+
+  config::input.enable_input_only_mode = false;
+  auto disabled = proc::parse(path.string());
+  ASSERT_TRUE(disabled.has_value());
+
+  config::input.enable_input_only_mode = true;
+  auto enabled = proc::parse(path.string());
+  ASSERT_TRUE(enabled.has_value());
+
+  const auto &disabled_apps = disabled->get_apps();
+  const auto &enabled_apps = enabled->get_apps();
+  ASSERT_EQ(enabled_apps.size(), disabled_apps.size() + 1);
+  for (size_t i = 0; i < disabled_apps.size(); ++i) {
+    EXPECT_EQ(enabled_apps[i].id, disabled_apps[i].id);
+  }
+}
+
+/**
+ * @brief The placeholder counts as running from execution until it is terminated.
+ */
+TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_FollowsPlaceholderLifetime) {
+  auto process = make_process({make_placeholder_ctx("777")});
+
+  EXPECT_FALSE(process.is_input_only_running());
+
+  ASSERT_EQ(process.execute(777, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+
+  // The placeholder launches no command, so it stays running via the placebo flag
+  EXPECT_EQ(process.running(), 777);
+  EXPECT_TRUE(process.is_input_only_running());
+
+  process.terminate();
+
+  EXPECT_EQ(process.running(), 0);
+  EXPECT_FALSE(process.is_input_only_running());
+  EXPECT_TRUE(process.get_last_run_app_name().empty());
+}
+
+/**
+ * @brief A running regular application is never reported as the input-only placeholder.
+ */
+TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_FalseForRegularApp) {
+  auto process = make_process({make_regular_ctx("778")});
+
+  ASSERT_EQ(process.execute(778, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  EXPECT_EQ(process.running(), 778);
+  EXPECT_FALSE(process.is_input_only_running());
+
+  process.terminate();
+  EXPECT_FALSE(process.is_input_only_running());
+}
+
+/**
+ * @brief A running placeholder stays recognized when input-only mode is toggled off mid-session.
+ */
+TEST_F(ProcessInputOnlyTest, IsInputOnlyRunning_IgnoredWhenModeToggledOffMidSession) {
+  auto process = make_process({make_placeholder_ctx("779")});
+  ASSERT_EQ(process.execute(779, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  ASSERT_TRUE(process.is_input_only_running());
+
+  // Disabling the mode clears the cached id, but a running placeholder must stay recognized
+  config::input.enable_input_only_mode = false;
+  proc::input_only_app_id.clear();
+
+  EXPECT_TRUE(process.is_input_only_running());
+  EXPECT_TRUE(proc::get_input_only_app_id().empty());
+
+  process.terminate();
+  EXPECT_FALSE(process.is_input_only_running());
+}
+
+/**
+ * @brief Launching a real app over the placeholder terminates it and clears the input-only state.
+ */
+TEST_F(ProcessInputOnlyTest, ExecuteRealAppOverPlaceholderClearsInputOnlyState) {
+  std::vector<proc::ctx_t> apps;
+  apps.push_back(make_placeholder_ctx("780"));
+  apps.push_back(make_regular_ctx("781"));
+
+  auto process = make_process(std::move(apps));
+  ASSERT_EQ(process.execute(780, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  ASSERT_TRUE(process.is_input_only_running());
+
+  // Launching a real app terminates the placeholder, which must not leave the
+  // input-only state behind for the newly launched app.
+  ASSERT_EQ(process.execute(781, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  EXPECT_EQ(process.running(), 781);
+  EXPECT_FALSE(process.is_input_only_running());
+
+  process.terminate();
+  EXPECT_FALSE(process.is_input_only_running());
+}
+
+/**
+ * @brief Resume resolves the app state only after stopping-session cleanup removed the placeholder.
+ */
+TEST_F(ProcessInputOnlyTest, ResolveResumeState_SnapshotsAfterPlaceholderCleanup) {
+  auto saved_global_proc = std::move(proc::proc);
+  auto restore_global_proc = util::fail_guard([&saved_global_proc]() {
+    proc::proc = std::move(saved_global_proc);
+  });
+
+  auto process = make_process({make_placeholder_ctx("901")});
+  ASSERT_EQ(process.execute(901, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  proc::proc = std::move(process);
+
+  auto state = nvhttp::resolve_resume_state();
+  EXPECT_EQ(state.app_id, 901);
+  EXPECT_TRUE(state.input_only);
+  EXPECT_TRUE(state.can_resume());
+  EXPECT_FALSE(state.should_configure_display());
+
+  // Model a stopping session whose teardown terminates the placeholder while the state is
+  // being resolved. A snapshot taken before the cleanup would still report app 901 here
+  // and let /resume fall back to desktop capture.
+  state = nvhttp::resolve_resume_state([]() {
+    EXPECT_EQ(proc::proc.running(), 901);
+    EXPECT_TRUE(proc::proc.is_input_only_running());
+    proc::proc.terminate();
+    return true;
+  });
+
+  EXPECT_EQ(state.app_id, 0);
+  EXPECT_FALSE(state.input_only);
+  EXPECT_TRUE(state.no_active_sessions);
+  EXPECT_FALSE(state.can_resume());
+  EXPECT_FALSE(state.should_configure_display());
+}
+
+/**
+ * @brief A launch that joins the last stopping input-only session executes a replacement placeholder.
+ */
+TEST_F(ProcessInputOnlyTest, ResolveLaunchState_ReexecutesPlaceholderAfterCleanup) {
+  auto saved_global_proc = std::move(proc::proc);
+  auto restore_global_proc = util::fail_guard([&saved_global_proc]() {
+    proc::proc.terminate();
+    proc::proc = std::move(saved_global_proc);
+  });
+
+  auto process = make_process({make_placeholder_ctx("902")});
+  ASSERT_EQ(process.execute(902, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  proc::proc = std::move(process);
+
+  // Without stopping sessions the running placeholder stays and must not be executed again.
+  const auto kept = nvhttp::resolve_launch_state();
+  EXPECT_EQ(kept.app_id, 902);
+  EXPECT_FALSE(kept.should_execute_placeholder());
+
+  // Model the last input-only session being STOPPING while /launch counts sessions: its
+  // teardown terminates the placeholder. A decision made from the pre-cleanup snapshot
+  // would skip proc::proc.execute() and leave the new input-only session with nothing running.
+  const auto state = nvhttp::resolve_launch_state([]() {
+    EXPECT_EQ(proc::proc.running(), 902);
+    EXPECT_TRUE(proc::proc.is_input_only_running());
+    proc::proc.terminate();
+    return 0;
+  });
+
+  EXPECT_EQ(state.app_id, 0);
+  EXPECT_EQ(state.active_sessions, 0);
+  EXPECT_TRUE(state.should_execute_placeholder());
+
+  // The replacement placeholder /launch now executes runs, and keeps the session resumable as input-only.
+  ASSERT_EQ(proc::proc.execute(902, std::make_shared<rtsp_stream::launch_session_t>()), 0);
+  EXPECT_EQ(proc::proc.running(), 902);
+  EXPECT_TRUE(proc::proc.is_input_only_running());
+
+  const auto resume = nvhttp::resolve_resume_state();
+  EXPECT_EQ(resume.app_id, 902);
+  EXPECT_TRUE(resume.input_only);
+  EXPECT_TRUE(resume.can_resume());
+  EXPECT_FALSE(resume.should_configure_display());
 }

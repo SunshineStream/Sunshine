@@ -13,7 +13,9 @@
 #endif
 
 // standard includes
+#include <mutex>
 #include <optional>
+#include <string>
 #include <unordered_map>
 
 // local includes
@@ -79,6 +81,7 @@ namespace proc {
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.
     std::chrono::seconds exit_timeout;  ///< Exit timeout.
+    bool input_only = false;  ///< Synthetic app that streams no captured video while keeping input and audio active.
   };
 
   /**
@@ -116,6 +119,16 @@ namespace proc {
      * @return `_app_id` if a process is running, otherwise returns `0`
      */
     int running();
+
+    /**
+     * @brief Check whether the running app is the synthetic "Input Only" placeholder.
+     *
+     * Unlike the configured app ID, this stays valid for the lifetime of the session even if
+     * `input.enable_input_only_mode` is turned off while the placeholder is still running.
+     *
+     * @return true if an input-only session is currently running.
+     */
+    bool is_input_only_running() const;
 
     ~proc_t();
 
@@ -243,4 +256,19 @@ namespace proc {
   void terminate_process_group(boost::process::v1::child &child_process, boost::process::v1::group &group, std::chrono::seconds exit_timeout);
 
   extern proc_t proc;
+
+  /// Guards input_only_app_id, which is written on config refresh and read from request handlers.
+  extern std::mutex input_only_app_id_mutex;
+
+  /// Application ID of the synthetic "Input Only" app entry, or empty when input-only mode is disabled.
+  /// Must be accessed while holding input_only_app_id_mutex, or via get_input_only_app_id().
+  extern std::string input_only_app_id;
+
+  /**
+   * @brief Get a consistent copy of the synthetic "Input Only" application ID.
+   *
+   * @return The ID string, or an empty string when input-only mode is disabled.
+   */
+  std::string
+    get_input_only_app_id();
 }  // namespace proc

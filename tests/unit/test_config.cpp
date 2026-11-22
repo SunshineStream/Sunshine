@@ -236,6 +236,28 @@ TEST_F(ConfigPersistenceTest, ParsesDscpTaggingOption) {
 }
 
 /**
+ * @brief Verify the input-only mode option parses enabled and disabled values.
+ */
+TEST_F(ConfigPersistenceTest, ParsesEnableInputOnlyModeOption) {
+  const auto original_enable_input_only_mode = config::input.enable_input_only_mode;
+  const auto restore_input_only_mode = util::fail_guard([original_enable_input_only_mode]() {
+    config::input.enable_input_only_mode = original_enable_input_only_mode;
+  });
+
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  EXPECT_FALSE(config::input.enable_input_only_mode);
+
+  config::apply_config_for_test("enable_input_only_mode = enabled\n");
+  EXPECT_TRUE(config::input.enable_input_only_mode);
+
+  config::apply_config_for_test("enable_input_only_mode = disabled\n");
+  EXPECT_FALSE(config::input.enable_input_only_mode);
+}
+
+/**
  * @brief Verify mixed-case boolean values update configuration correctly.
  */
 TEST_F(ConfigPersistenceTest, ParsesBooleanOptionsCaseInsensitively) {

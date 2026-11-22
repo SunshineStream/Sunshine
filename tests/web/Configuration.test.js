@@ -237,4 +237,44 @@ describe('gamepad input configuration', () => {
     ])
     expect(wrapper.get('#gamepad').element.value).toBe('auto')
   })
+
+  it('toggles input only mode between enabled and disabled', async () => {
+    const config = {
+      controller: 'enabled',
+      gamepad: 'auto',
+      gamepad_driver: '',
+      keybindings: '[]',
+      motion_as_ds4: 'enabled',
+      touchpad_as_ds4: 'enabled',
+      ds4_back_as_touchpad_click: 'enabled',
+      virtualhid_randomize_mac: 'enabled',
+      keyboard: 'enabled',
+      key_repeat_delay: 500,
+      key_repeat_frequency: 24.9,
+      always_send_scancodes: 'enabled',
+      key_rightalt_to_key_win: 'disabled',
+      mouse: 'enabled',
+      high_resolution_scrolling: 'enabled',
+      native_pen_touch: 'enabled',
+      enable_input_only_mode: 'disabled',
+    }
+
+    const wrapper = mount(Inputs, {
+      props: { platform: 'linux', config },
+      global: {
+        mocks: { $t: key => key },
+        stubs: { Checkbox: false, VirtualKeyCodeSelect: true },
+      },
+    })
+
+    const input = wrapper.get('#enable_input_only_mode')
+
+    expect(input.element.checked).toBe(false)
+
+    await input.setValue(true)
+    expect(config.enable_input_only_mode).toBe('enabled')
+
+    await input.setValue(false)
+    expect(config.enable_input_only_mode).toBe('disabled')
+  })
 })

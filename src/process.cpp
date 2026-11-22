@@ -33,6 +33,7 @@
 #include "logging.h"
 #include "platform/common.h"
 #include "process.h"
+#include "stream.h"
 #include "system_tray.h"
 #include "utility.h"
 
@@ -49,6 +50,17 @@ namespace proc {
   namespace pt = boost::property_tree;
 
   proc_t proc;  ///< Global process registry used to track and terminate child processes.
+
+  /// Application ID of the synthetic "Input Only" app entry, or empty when input-only mode is disabled.
+  std::string input_only_app_id;
+
+  std::mutex input_only_app_id_mutex;
+
+  std::string
+    get_input_only_app_id() {
+    std::lock_guard<std::mutex> lock(input_only_app_id_mutex);
+    return input_only_app_id;
+  }
 
   /**
    * @brief RAII helper that runs shutdown cleanup when destroyed.
@@ -368,8 +380,21 @@ namespace proc {
     return 0;
   }
 
+  bool proc_t::is_input_only_running() const {
+    return (_app_id > 0 || placebo) && _app.input_only;
+  }
+
   void proc_t::terminate() {
-    input::terminate_gamepads();
+    // Gamepads of an input-only client must survive the placeholder being replaced by a real
+    // app, but there is nothing left to keep once every session is gone.
+    //
+    // This must not use rtsp_stream::session_count(): it joins stopping sessions, which
+    // deadlocks when terminate() is reached from a session teardown thread.
+    const bool input_only = _app.input_only;
+    if (!input_only || stream::session::running_session_count() == 0) {
+      input::terminate_gamepads();
+    }
+
     std::error_code ec;
     placebo = false;
     terminate_process_group(_process, _process_group, _app.exit_timeout);
@@ -408,7 +433,9 @@ namespace proc {
 
     // Only show the Stopped notification if we actually have an app to stop
     // Since terminate() is always run when a new app has started
-    if (proc::proc.get_last_run_app_name().length() > 0 && has_run) {
+    // The input-only placeholder is not a real app: it never configured the display, so
+    // reverting here would clobber the configuration applied for an app launched over it.
+    if (proc::proc.get_last_run_app_name().length() > 0 && has_run && !input_only) {
 #if defined SUNSHINE_TRAY && SUNSHINE_TRAY >= 1
       system_tray::update_tray_stopped(proc::proc.get_last_run_app_name());
 #endif
@@ -417,6 +444,11 @@ namespace proc {
     }
 
     _app_id = -1;
+    _app = {};
+
+    // The cleared app owns the container these iterators pointed into
+    _app_prep_it = {};
+    _app_prep_begin = {};
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {
@@ -846,6 +878,40 @@ namespace proc {
         ctx.detached = std::move(detached);
 
         apps.emplace_back(std::move(ctx));
+      }
+
+      // Synthetic "Input Only" entry. Launching it starts a session where video capture is
+      // skipped (a single blank frame is sent to keep the stream alive) while input and
+      // audio keep working normally. Added last so enabling the mode never changes the
+      // generated app IDs of existing apps.
+      if (config::input.enable_input_only_mode) {
+        proc::ctx_t ctx;
+        ctx.name = "Input Only";
+        ctx.elevated = false;
+        ctx.auto_detach = true;
+        ctx.wait_all = true;
+        ctx.exit_timeout = std::chrono::seconds {5};
+        ctx.input_only = true;
+
+        auto possible_ids = calculate_app_id(ctx.name, ctx.image_path, i++);
+        if (ids.count(std::get<0>(possible_ids)) == 0) {
+          // Avoid using index to generate id if possible
+          ctx.id = std::get<0>(possible_ids);
+        } else {
+          // Fallback to include index on collision
+          ctx.id = std::get<1>(possible_ids);
+        }
+        ids.insert(ctx.id);
+
+        {
+          std::lock_guard<std::mutex> lock(input_only_app_id_mutex);
+          input_only_app_id = ctx.id;
+        }
+
+        apps.emplace_back(std::move(ctx));
+      } else {
+        std::lock_guard<std::mutex> lock(input_only_app_id_mutex);
+        input_only_app_id.clear();
       }
 
       return proc::proc_t {

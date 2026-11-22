@@ -753,6 +753,32 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### enable_input_only_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When enabled, Sunshine adds a special "Input Only" app to its application list.
+            <br>
+            Launching it starts a session that forwards input and audio but performs no screen capture:
+            the video pipeline serves blank frames on request and otherwise idles, minimizing CPU/GPU usage on the host.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            disabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            enable_input_only_mode = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### keybindings
 
 <table>

@@ -663,3 +663,189 @@ TEST_F(FrameTimestampQueueTest, ConsumesEntriesOnce) {
   EXPECT_EQ(ts(1), video::match_frame_timestamp(queue, 1));
   EXPECT_EQ(std::nullopt, video::match_frame_timestamp(queue, 1));
 }
+
+namespace {
+  /**
+   * @brief Point an image descriptor at a caller-owned buffer.
+   *
+   * @param img Descriptor to populate.
+   * @param data Buffer holding the image data.
+   * @param width Image width in pixels.
+   * @param height Image height in pixels.
+   * @param pixel_pitch Bytes per pixel reported by the capture backend.
+   * @param row_pitch Bytes between consecutive image rows.
+   */
+  void bind_image(platf::img_t &img, std::uint8_t *data, int width, int height, int pixel_pitch, int row_pitch) {
+    img.data = data;
+    img.width = width;
+    img.height = height;
+    img.pixel_pitch = pixel_pitch;
+    img.row_pitch = row_pitch;
+  }
+
+  /**
+   * @brief Image descriptor that exposes an opaque GPU resource through `data`.
+   */
+  struct gpu_backed_img_t: platf::img_t {
+    /**
+     * @brief Report that `data` is not a CPU-writable buffer.
+     *
+     * @return Always false.
+     */
+    bool is_cpu_buffer() const override {
+      return false;
+    }
+  };
+}  // namespace
+
+/**
+ * @brief A BGRA fill writes zero color with opaque alpha for every pixel.
+ */
+TEST(FillBlankImageTest, PacksOpaqueBlackForBgra) {
+  std::array<std::uint8_t, 2 * 2 * 4> buffer;
+  buffer.fill(0x11);
+
+  platf::img_t img;
+  bind_image(img, buffer.data(), 2, 2, 4, 2 * 4);
+
+  video::fill_blank_image(img);
+
+  for (size_t pixel = 0; pixel < 4; ++pixel) {
+    EXPECT_EQ(buffer[pixel * 4 + 0], 0x00);
+    EXPECT_EQ(buffer[pixel * 4 + 1], 0x00);
+    EXPECT_EQ(buffer[pixel * 4 + 2], 0x00);
+    EXPECT_EQ(buffer[pixel * 4 + 3], 0xFF);
+  }
+}
+
+/**
+ * @brief A BGRA fill stops at the last pixel of each row and leaves the row padding untouched.
+ */
+TEST(FillBlankImageTest, PreservesPaddingBytesAfterEachBgraRow) {
+  // Two rows of two BGRA pixels padded to 12 bytes: the trailing 4 bytes must stay untouched.
+  std::array<std::uint8_t, 2 * 12> buffer;
+  buffer.fill(0x5A);
+
+  platf::img_t img;
+  bind_image(img, buffer.data(), 2, 2, 4, 12);
+
+  video::fill_blank_image(img);
+
+  for (int row = 0; row < 2; ++row) {
+    EXPECT_EQ(buffer[row * 12 + 0], 0x00);
+    EXPECT_EQ(buffer[row * 12 + 7], 0xFF);
+    EXPECT_EQ(buffer[row * 12 + 8], 0x5A);
+    EXPECT_EQ(buffer[row * 12 + 11], 0x5A);
+  }
+}
+
+/**
+ * @brief An NV12 fill writes a black luma plane and a neutral-chroma UV plane.
+ */
+TEST(FillBlankImageTest, UsesNeutralChromaForNv12) {
+  // 2x2 NV12: a 4-byte Y plane followed by a 2-byte interleaved UV plane.
+  std::array<std::uint8_t, 2 * 2 + 2> buffer;
+  buffer.fill(0x33);
+
+  platf::img_t img;
+  bind_image(img, buffer.data(), 2, 2, 1, 2);
+
+  video::fill_blank_image(img);
+
+  EXPECT_EQ(buffer[0], 0x00);
+  EXPECT_EQ(buffer[1], 0x00);
+  EXPECT_EQ(buffer[2], 0x00);
+  EXPECT_EQ(buffer[3], 0x00);
+  EXPECT_EQ(buffer[4], 0x80);
+  EXPECT_EQ(buffer[5], 0x80);
+}
+
+/**
+ * @brief A zero pixel_pitch falls back to the row pitch so backends that omit it are still filled.
+ */
+TEST(FillBlankImageTest, InfersPixelPitchFromRowPitchWhenBackendOmitsIt) {
+  std::array<std::uint8_t, 8> buffer;
+  buffer.fill(0x77);
+
+  platf::img_t img;
+  bind_image(img, buffer.data(), 2, 1, 0, 8);
+
+  video::fill_blank_image(img);
+
+  EXPECT_EQ(buffer[0], 0x00);
+  EXPECT_EQ(buffer[3], 0xFF);
+  EXPECT_EQ(buffer[4], 0x00);
+  EXPECT_EQ(buffer[7], 0xFF);
+}
+
+/**
+ * @brief Unusable descriptors and unknown layouts are left untouched without dereferencing anything.
+ */
+TEST(FillBlankImageTest, LeavesUnusableDescriptorsAndUnknownLayoutsAlone) {
+  // An unsupported pixel pitch must not be guessed at.
+  std::array<std::uint8_t, 4> packed;
+  packed.fill(0x42);
+
+  platf::img_t img;
+  bind_image(img, packed.data(), 2, 2, 2, 4);
+
+  video::fill_blank_image(img);
+
+  EXPECT_EQ(packed[0], 0x42);
+  EXPECT_EQ(packed[3], 0x42);
+
+  // A descriptor without a buffer must be ignored rather than dereferenced.
+  platf::img_t without_data;
+  bind_image(without_data, nullptr, 2, 2, 4, 8);
+  video::fill_blank_image(without_data);
+
+  // Degenerate dimensions must not divide by zero or run off the row.
+  std::array<std::uint8_t, 4> guard;
+  guard.fill(0x42);
+
+  platf::img_t zero_width;
+  bind_image(zero_width, guard.data(), 0, 2, 0, 0);
+  video::fill_blank_image(zero_width);
+
+  platf::img_t zero_height;
+  bind_image(zero_height, guard.data(), 2, 0, 4, 8);
+  video::fill_blank_image(zero_height);
+
+  EXPECT_EQ(guard[0], 0x42);
+  EXPECT_EQ(guard[3], 0x42);
+
+  // A row pitch smaller than width * pixel_pitch would run past the buffer.
+  std::array<std::uint8_t, 8> tight;
+  tight.fill(0x42);
+
+  platf::img_t tight_bgra;
+  bind_image(tight_bgra, tight.data(), 2, 2, 4, 4);
+  video::fill_blank_image(tight_bgra);
+
+  platf::img_t tight_nv12;
+  bind_image(tight_nv12, tight.data(), 2, 2, 1, 1);
+  video::fill_blank_image(tight_nv12);
+
+  for (const auto byte : tight) {
+    EXPECT_EQ(byte, 0x42);
+  }
+}
+
+/**
+ * @brief Images whose data is an opaque GPU resource are skipped instead of written on the CPU.
+ */
+TEST(FillBlankImageTest, SkipsOpaqueGpuBackedImages) {
+  // On the Windows VRAM path `data` is an ID3D11Texture2D pointer, so writing pixels
+  // through it would corrupt the texture object instead of filling the frame.
+  std::array<std::uint8_t, 2 * 2 * 4> buffer;
+  buffer.fill(0x3C);
+
+  gpu_backed_img_t img;
+  bind_image(img, buffer.data(), 2, 2, 4, 2 * 4);
+
+  video::fill_blank_image(img);
+
+  for (const auto byte : buffer) {
+    EXPECT_EQ(byte, 0x3C);
+  }
+}

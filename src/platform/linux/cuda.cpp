@@ -405,6 +405,45 @@ namespace cuda {
     }
   };
 
+  /**
+   * @brief Upload an opaque black frame into a dummy image's CUDA texture array.
+   *
+   * NvFBC images keep their pixels in a CUDA array instead of a CPU buffer, so
+   * `video::fill_blank_image()` cannot reach them, and `alloc_img()` leaves the array
+   * uninitialized. Build a temporary CPU frame filled with opaque black and upload it
+   * through `sws_t::load_ram()` so blank placeholder frames encode as black instead of
+   * uninitialized GPU memory.
+   *
+   * @param img Image descriptor supplying width, height, pixel_pitch, and row_pitch.
+   * @param array Destination CUDA array, as allocated by `tex_t::make()`.
+   * @return 0 on success, the upload error on upload failure, or -1 on invalid input.
+   */
+  int fill_dummy_img_black(const platf::img_t *img, cudaArray_t array) {
+    if (img == nullptr || array == nullptr || img->width <= 0 || img->height <= 0 || img->pixel_pitch <= 0 || img->row_pitch <= 0) {
+      BOOST_LOG(error) << "Invalid image or texture for the blank frame upload"sv;
+      return -1;
+    }
+
+    platf::img_t black;
+    black.width = img->width;
+    black.height = img->height;
+    black.pixel_pitch = img->pixel_pitch;
+    black.row_pitch = img->row_pitch;
+
+    std::vector<std::uint8_t> image_data(static_cast<std::size_t>(img->row_pitch) * img->height);
+    black.data = image_data.data();
+
+    video::fill_blank_image(black);
+
+    auto sws = sws_t::make(img->width, img->height, img->width, img->height, img->row_pitch);
+    if (!sws) {
+      BOOST_LOG(error) << "Couldn't create the sws context for the blank frame upload"sv;
+      return -1;
+    }
+
+    return sws->load_ram(black, array);
+  }
+
   namespace {
     bool cuda_is_initialized() {
       return static_cast<bool>(cdf);
@@ -1937,10 +1976,21 @@ namespace cuda {
       /**
        * @brief Populate a fallback image when real capture data is unavailable.
        *
-       * @return Capture status reported to the streaming pipeline.
+       * NvFBC images carry their pixels in a CUDA array that `alloc_img()` leaves
+       * uninitialized, and the CPU-side `video::fill_blank_image()` cannot reach it.
+       * Upload an opaque black frame into the image texture so input-only sessions
+       * serve black video instead of uninitialized GPU memory.
+       *
+       * @param img Image allocated by `alloc_img()`.
+       * @return 0 on success, the upload error on upload failure, or -1 on invalid input.
        */
-      int dummy_img(platf::img_t *) override {
-        return 0;
+      int dummy_img(platf::img_t *img) override {
+        if (img == nullptr) {
+          BOOST_LOG(error) << "Missing dummy image for the blank frame"sv;
+          return -1;
+        }
+
+        return fill_dummy_img_black(img, static_cast<cuda::img_t *>(img)->tex.array);
       }
 
       std::chrono::nanoseconds delay;  ///< Delay before the timer task becomes eligible to run.
