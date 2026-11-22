@@ -2332,6 +2332,7 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             Allows any client implementing the Sunshine codec extension to request H.263+ video streams.
             Support is unadvertised by default and must be enabled here. Sunshine selects and probes its H.263+
             backend independently of MPEG-2 and modern codecs; H.264 support is not a prerequisite.
+            The stream width and height must both be multiples of four after applying any resolution cap.
             @warning{H.263+ uses software encoding in Sunshine and may reduce host performance.}
         </td>
     </tr>

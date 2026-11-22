@@ -1453,15 +1453,20 @@ namespace video {
       "h264_vaapi"s,
       {},  // capabilities
     },
-    [] {
-      encoder_t::codec_t codec {};
-      codec.common_options = {
+    {
+      // Common options
+      {
         {"async_depth"s, 1},
         {"idr_interval"s, std::numeric_limits<int>::max()},
-      };
-      codec.name = "mpeg2_vaapi"s;
-      return codec;
-    }(),
+      },
+      {},  // SDR-specific options
+      {},  // HDR-specific options
+      {},  // YUV444 SDR-specific options
+      {},  // YUV444 HDR-specific options
+      {},  // Fallback options
+      "mpeg2_vaapi"s,
+      {},  // capabilities
+    },
     {},  // H.263+
     // RC buffer size will be set in platform code if supported
     LIMITED_GOP_SIZE | PARALLEL_ENCODING | NO_RC_BUF_LIMIT
@@ -1791,7 +1796,7 @@ namespace video {
     });
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
-    auto display_request = capture_display_switches().poll(switch_display_event);
+    std::uint64_t applied_display_generation = 0;
 
     // Wait for the initial capture context or a request to stop the queue
     auto initial_capture_ctx = capture_ctx_queue->pop();
@@ -1806,9 +1811,7 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
-    if (display_request.index.has_value()) {
-      display_p = std::clamp(*display_request.index, 0, static_cast<int>(display_names.size()) - 1);
-    }
+    capture_display_switches().poll(switch_display_event).apply(display_p, display_names.size(), applied_display_generation);
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
     if (!disp) {
       return;
@@ -1919,7 +1922,7 @@ namespace video {
     while (capture_ctx_queue->running()) {
       bool artificial_reinit = false;
 
-      auto push_captured_image_callback = [&capture_ctxs, &capture_ctx_queue, &switch_display_event, &display_request, &artificial_reinit](std::shared_ptr<platf::img_t> &&img, bool frame_captured) {
+      auto push_captured_image_callback = [&capture_ctxs, &capture_ctx_queue, &switch_display_event, &applied_display_generation, &artificial_reinit](std::shared_ptr<platf::img_t> &&img, bool frame_captured) {
         KITTY_WHILE_LOOP(auto capture_ctx = std::begin(capture_ctxs), capture_ctx != std::end(capture_ctxs), {
           if (!capture_ctx->images->running()) {
             capture_ctx = capture_ctxs.erase(capture_ctx);
@@ -1942,7 +1945,7 @@ namespace video {
           capture_ctxs.emplace_back(std::move(*capture_ctx_queue->pop()));
         }
 
-        if (capture_display_switches().poll(switch_display_event).generation != display_request.generation) {
+        if (capture_display_switches().poll(switch_display_event).generation != applied_display_generation) {
           artificial_reinit = true;
           return false;
         }
@@ -2000,10 +2003,7 @@ namespace video {
               refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
 
               // Process any pending display switch with the new list of displays
-              display_request = capture_display_switches().poll(switch_display_event);
-              if (display_request.index.has_value()) {
-                display_p = std::clamp(*display_request.index, 0, static_cast<int>(display_names.size()) - 1);
-              }
+              capture_display_switches().poll(switch_display_event).apply(display_p, display_names.size(), applied_display_generation);
 
               // reset_display() will sleep between retries
               reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
@@ -2979,18 +2979,19 @@ namespace video {
    * @param encode_session_ctx_queue Pending synchronized session context queue.
    * @param display_names Cached display names.
    * @param display_p Active display index.
+   * @param applied_display_generation Last monitor switch applied by this worker.
    * @return Encoder loop result.
    */
   encode_e encode_run_sync(
     std::vector<std::unique_ptr<sync_session_ctx_t>> &synced_session_ctxs,
     encode_session_ctx_queue_t &encode_session_ctx_queue,
     std::vector<std::string> &display_names,
-    int &display_p
+    int &display_p,
+    std::uint64_t &applied_display_generation
   ) {
     std::shared_ptr<platf::display_t> disp;
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
-    auto display_request = capture_display_switches().poll(switch_display_event);
 
     if (synced_session_ctxs.empty()) {
       auto ctx = encode_session_ctx_queue.pop();
@@ -3008,10 +3009,7 @@ namespace video {
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
 
       // Process any pending display switch with the new list of displays
-      display_request = capture_display_switches().poll(switch_display_event);
-      if (display_request.index.has_value()) {
-        display_p = std::clamp(*display_request.index, 0, static_cast<int>(display_names.size()) - 1);
-      }
+      capture_display_switches().poll(switch_display_event).apply(display_p, display_names.size(), applied_display_generation);
 
       // reset_display() will sleep between retries
       reset_display(disp, encoder.platform_formats->dev_type, display_names[display_p], synced_session_ctxs.front()->config);
@@ -3106,7 +3104,7 @@ namespace video {
           ++pos;
         })
 
-        if (capture_display_switches().poll(switch_display_event).generation != display_request.generation) {
+        if (capture_display_switches().poll(switch_display_event).generation != applied_display_generation) {
           ec = platf::capture_e::reinit;
           return false;
         }
@@ -3163,7 +3161,8 @@ namespace video {
 
     std::vector<std::string> display_names;
     int display_p = -1;
-    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p) == encode_e::reinit) {}
+    std::uint64_t applied_display_generation = 0;
+    while (encode_run_sync(synced_session_ctxs, ctx, display_names, display_p, applied_display_generation) == encode_e::reinit) {}
   }
 
   /**
@@ -3657,6 +3656,10 @@ namespace video {
     return 2 + static_cast<int>(codec[encoder_t::DYNAMIC_RANGE]) + 2 * static_cast<int>(codec[encoder_t::DYNAMIC_RANGE_YUV444]);
   }
 
+  bool can_reuse_encoder_probe(const encoder_t *encoder, bool (*needs_reenumeration)()) {
+    return encoder && !(encoder->flags & ALWAYS_REPROBE) && !needs_reenumeration();
+  }
+
   int probe_encoders() {
     if (!allow_encoder_probing(display_device::enumerate_devices())) {
       // Error already logged
@@ -3666,8 +3669,8 @@ namespace video {
     auto encoder_list = encoders;
     auto &[codec_encoders, modes] = encoder_probe_state();
 
-    // If we already have a good encoder, check to see if another probe is required
-    if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && modes.mpeg2 < 2 && modes.h263p != 2 && config::video.mpeg2_mode != 2 && config::video.h263p_mode != 2 && !platf::needs_encoder_reenumeration()) {
+    // Legacy settings are read at startup. Cache their results alongside the modern probe.
+    if (can_reuse_encoder_probe(chosen_encoder, platf::needs_encoder_reenumeration)) {
       return 0;
     }
 

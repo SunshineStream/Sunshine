@@ -12,6 +12,7 @@
 
 // local includes
 #include "src/platform/linux/display_geometry.h"
+#include "src/platform/linux/kms_display.h"
 #include "src/video.h"
 
 namespace {
@@ -45,6 +46,44 @@ namespace {
     }
   };
 }  // namespace
+
+/**
+ * @brief One backend can refresh its outputs while another keeps its original connector and input bounds.
+ */
+TEST(KmsDisplayEnumerationTest, KeepsPlaneAndDesktopGeometryWithTheSelectedBackend) {
+  platf::kms::display_enumeration_t hardware;
+  hardware.cards.push_back({"/dev/dri/card1", {}});
+  hardware.outputs.push_back({"DP-1", 0, 31, 51});
+  hardware.desktop.add({.offset_x = 0, .offset_y = 0, .width = 1920, .height = 1080});
+
+  platf::kms::display_enumeration_t software;
+  software.cards.push_back({"/dev/dri/card0", {}});
+  software.cards.push_back({"/dev/dri/card1", {}});
+  software.outputs.push_back({"HDMI-A-1", 0, 57, 67});
+  software.outputs.push_back({"DP-1", 1, 31, 51});
+  software.desktop.add({.offset_x = -1280, .offset_y = 0, .width = 1280, .height = 720});
+  software.desktop.add({.offset_x = 0, .offset_y = 0, .width = 1920, .height = 1080});
+
+  EXPECT_EQ(hardware.display_index(""), 0U);
+  EXPECT_EQ(software.display_index("1"), 1U);
+  EXPECT_FALSE(hardware.display_index("HDMI-A-1"));
+  const auto software_index = software.display_index("DP-1");
+  const auto hardware_index = hardware.display_index("DP-1");
+  ASSERT_EQ(software_index, 1U);
+  ASSERT_EQ(hardware_index, 0U);
+  EXPECT_EQ(software.cards[software.outputs[*software_index].card_index].path, "/dev/dri/card1");
+  EXPECT_EQ(hardware.outputs[*hardware_index].plane_id, 31U);
+  EXPECT_EQ(hardware.outputs[*hardware_index].crtc_id, 51U);
+
+  geometry_display_t hardware_display;
+  geometry_display_t software_display;
+  hardware.desktop.apply(hardware_display);
+  software.desktop.apply(software_display);
+  EXPECT_EQ(hardware_display.env_width, 1920);
+  EXPECT_EQ(hardware_display.env_offset_x, 0);
+  EXPECT_EQ(software_display.env_width, 3200);
+  EXPECT_EQ(software_display.env_offset_x, -1280);
+}
 
 TEST(LinuxDisplayGeometryTest, EmptyAndInvalidMonitorsDoNotCreateAnInputDesktop) {
   platf::desktop_geometry_t desktop;

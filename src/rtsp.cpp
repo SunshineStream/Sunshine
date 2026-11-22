@@ -1270,6 +1270,12 @@ namespace rtsp_stream {
       return;
     }
 
+    if (config.monitor.videoFormat == video::format_h263p && (config.monitor.width <= 0 || config.monitor.height <= 0 || config.monitor.width % 4 != 0 || config.monitor.height % 4 != 0)) {
+      BOOST_LOG(warning) << "H.263+ requires a positive width and height divisible by four"sv;
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
     // Check that any required encryption is enabled
     auto encryption_mode = net::encryption_mode_for_address(sock.remote_endpoint().address());
     if (encryption_mode == config::ENCRYPTION_MODE_MANDATORY && (config.encryptionFlagsEnabled & (SS_ENC_VIDEO | SS_ENC_AUDIO)) != (SS_ENC_VIDEO | SS_ENC_AUDIO)) {

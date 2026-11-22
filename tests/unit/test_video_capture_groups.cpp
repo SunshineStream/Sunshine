@@ -7,6 +7,7 @@
 
 // standard includes
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -105,6 +106,45 @@ TEST(VideoCaptureMonitorTest, BroadcastsRequestsAndResetsBetweenStreamEpochs) {
   state.stop_worker();
   state.start_worker();
   EXPECT_FALSE(state.poll(request).index);
+  state.stop_worker();
+}
+
+/**
+ * @brief A capture reinit preserves the selected output when display ordering changes.
+ */
+TEST(VideoCaptureMonitorTest, EachWorkerAppliesARequestOnlyOnce) {
+  video::display_switch_state_t state;
+  auto mailbox = std::make_shared<safe::mail_raw_t>();
+  auto request = mailbox->event<int>("monitor");
+  state.start_worker();
+  state.start_worker();
+  std::uint64_t hardware_generation = 0;
+  std::uint64_t software_generation = 0;
+  int hardware_index = 0;
+  int software_index = 0;
+  state.poll(request).apply(hardware_index, 2, hardware_generation);
+  EXPECT_EQ(hardware_index, 0);
+
+  request->raise(1);
+  state.poll(request).apply(hardware_index, 2, hardware_generation);
+  ASSERT_EQ(hardware_index, 1);
+  state.poll(request).apply(software_index, 0, software_generation);
+  EXPECT_EQ(software_generation, 0);
+  state.poll(request).apply(software_index, 2, software_generation);
+  ASSERT_EQ(software_index, 1);
+  EXPECT_EQ(software_generation, hardware_generation);
+
+  // The selected output moved from position 1 to position 0 in the refreshed list.
+  hardware_index = 0;
+  state.poll(request).apply(hardware_index, 2, hardware_generation);
+  EXPECT_EQ(hardware_index, 0);
+  EXPECT_EQ(software_index, 1);
+
+  request->raise(4);
+  state.poll(request).apply(hardware_index, 2, hardware_generation);
+  EXPECT_EQ(hardware_index, 1);
+  EXPECT_GT(hardware_generation, software_generation);
+  state.stop_worker();
   state.stop_worker();
 }
 

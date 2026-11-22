@@ -78,3 +78,26 @@ TEST(LegacyCodecNegotiationTest, MatchesSunshineAdvertisementsAndStrictClientReq
   EXPECT_TRUE(rtsp_stream::describe_video_codecs(0).empty());
   EXPECT_EQ(chooseVideoFormat(VIDEO_FORMAT_MPEG2, SCM_H264, rtsp_stream::describe_video_codecs(SCM_H264).c_str()), 0);
 }
+
+/**
+ * @brief Legacy advertisement does not invalidate a successful probe on unchanged hardware.
+ */
+TEST(LegacyCodecSelectionTest, ReusesCachedHardwareProbeWithLegacySupport) {
+  const auto previous_modes = video::probed_codec_modes();
+  auto restore = util::fail_guard([&] {
+    video::probed_codec_modes() = previous_modes;
+  });
+  video::probed_codec_modes() = {true, 2, 2};
+
+  video::encoder_t hardware {};
+  const auto unchanged = [] {
+    return false;
+  };
+  const auto changed = [] {
+    return true;
+  };
+  EXPECT_TRUE(video::can_reuse_encoder_probe(&hardware, unchanged));
+  EXPECT_FALSE(video::can_reuse_encoder_probe(&hardware, changed));
+  EXPECT_FALSE(video::can_reuse_encoder_probe(&video::software, unchanged));
+  EXPECT_FALSE(video::can_reuse_encoder_probe(nullptr, unchanged));
+}

@@ -872,6 +872,15 @@ namespace video {
   bool validate_encoder(encoder_t &encoder, bool expect_failure);
 
   /**
+   * @brief Determine whether cached codec probes can be reused for another launch.
+   *
+   * @param encoder Previously validated backend, or nullptr before a successful probe.
+   * @param needs_reenumeration Platform check for changes that invalidate encoder results.
+   * @return True when the cached results can be reused.
+   */
+  bool can_reuse_encoder_probe(const encoder_t *encoder, bool (*needs_reenumeration)());
+
+  /**
    * @brief Probe encoders and select the preferred encoder.
    * This is called once at startup and each time a stream is launched to
    * ensure the best encoder is selected. Encoder availability can change

@@ -5,6 +5,8 @@
 #pragma once
 
 // standard includes
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -29,6 +31,21 @@ namespace video {
     struct request_t {
       std::uint64_t generation = 0;  ///< Changes whenever a monitor request is consumed.
       std::optional<int> index;  ///< Requested monitor index for the current stream epoch.
+
+      /**
+       * @brief Apply a switch once to this worker's refreshed display list.
+       *
+       * @param display_index Selected display, already kept by name across re-enumeration.
+       * @param display_count Number of displays in the refreshed list.
+       * @param applied_generation Last switch applied by this worker.
+       */
+      void apply(int &display_index, std::size_t display_count, std::uint64_t &applied_generation) const {
+        if (generation == applied_generation || !index || display_count == 0) {
+          return;
+        }
+        display_index = std::clamp(*index, 0, static_cast<int>(display_count) - 1);
+        applied_generation = generation;
+      }
     };
 
     /**
