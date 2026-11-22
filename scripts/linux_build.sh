@@ -818,11 +818,9 @@ function run_step_cmake() {
 
   # Detect CUDA path using the reusable function
   nvcc_path=""
-  if [[ "$skip_cuda" == 0 ]]; then
-    if ! nvcc_path=$(detect_nvcc_path); then
-      echo "CUDA compiler not found. Run the dependency installation step with the same CUDA options."
-      return 1
-    fi
+  if [[ "$skip_cuda" == 0 ]] && ! nvcc_path=$(detect_nvcc_path); then
+    echo "CUDA compiler not found. Run the dependency installation step with the same CUDA options."
+    return 1
   fi
 
   #set gcc version based on distros
