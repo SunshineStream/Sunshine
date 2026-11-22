@@ -1256,14 +1256,14 @@ namespace rtsp_stream {
       return;
     }
 
-    if (config.monitor.videoFormat == video::format_mpeg2 && video::active_mpeg2_mode < 2) {
+    if (config.monitor.videoFormat == video::format_mpeg2 && video::probed_codec_modes().mpeg2 < 2) {
       BOOST_LOG(warning) << "MPEG-2 is disabled, yet the client requested MPEG-2"sv;
 
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
 
-    if (config.monitor.videoFormat == video::format_h263p && video::active_h263p_mode != 2) {
+    if (config.monitor.videoFormat == video::format_h263p && video::probed_codec_modes().h263p != 2) {
       BOOST_LOG(warning) << "H.263+ is disabled, yet the client requested H.263+"sv;
 
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});

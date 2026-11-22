@@ -36,11 +36,11 @@ TEST_P(CaptureGroupOrderTest, SeparatesBackendsAndRetainsOtherClientsAfterOneLea
   int starts = 0;
   int stops = 0;
   video::capture_group_pool_t<capture_context_t> groups {
-    [&](auto &) {
+    [&starts](auto &) {
       ++starts;
       return 0;
     },
-    [&](auto &) {
+    [&stops](auto &) {
       ++stops;
     },
   };
@@ -96,10 +96,10 @@ TEST(VideoCaptureMonitorTest, BroadcastsRequestsAndResetsBetweenStreamEpochs) {
   EXPECT_EQ(software.index, hardware.index);
   EXPECT_EQ(software.generation, hardware.generation);
   EXPECT_FALSE(request->peek());
-  request->raise(1);
+  request->raise(0);
   EXPECT_GT(state.poll(request).generation, software.generation);
   state.start_worker();
-  EXPECT_EQ(state.poll(request).index, 1);
+  EXPECT_EQ(state.poll(request).index, 0);
   state.stop_worker();
   state.stop_worker();
   state.stop_worker();
@@ -123,11 +123,11 @@ TEST(VideoCaptureGroupTest, CleansUpFailedStartupBeforeRetry) {
   int starts = 0;
   int stops = 0;
   video::capture_group_pool_t<context_t> groups {
-    [&](auto &context) {
+    [&resource, &starts](auto &context) {
       context.lifetime = resource;
       return ++starts == 1 ? -1 : 0;
     },
-    [&](auto &) {
+    [&stops](auto &) {
       ++stops;
     },
   };

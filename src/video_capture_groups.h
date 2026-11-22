@@ -57,7 +57,7 @@ namespace video {
      */
     request_t poll(const safe::mail_raw_t::event_t<int> &event) {
       std::lock_guard lock {mutex_};
-      if (auto request = event->try_pop()) {
+      if (const auto request = event->try_pop(); request.has_value()) {
         request_.index = *request;
         ++request_.generation;
       }

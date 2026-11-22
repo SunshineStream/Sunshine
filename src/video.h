@@ -36,16 +36,11 @@ namespace stream {
 }
 
 namespace video {
-  /**
-   * @brief Video stream format identifiers used by GameStream setup.
-   */
-  enum video_format_e {
-    format_h264 = 0,  ///< H.264 High profile.
-    format_hevc = 1,  ///< HEVC Main/Main10 profile.
-    format_av1 = 2,  ///< AV1 Main/Main10 profile.
-    format_mpeg2 = 3,  ///< MPEG-2/H.262 video.
-    format_h263p = 4,  ///< H.263+ video.
-  };
+  inline constexpr int format_h264 = 0;  ///< H.264 High profile wire identifier.
+  inline constexpr int format_hevc = 1;  ///< HEVC Main/Main10 wire identifier.
+  inline constexpr int format_av1 = 2;  ///< AV1 Main/Main10 wire identifier.
+  inline constexpr int format_mpeg2 = 3;  ///< MPEG-2/H.262 wire identifier.
+  inline constexpr int format_h263p = 4;  ///< H.263+ wire identifier.
 
   constexpr int VIDEO_FORMAT_COUNT = format_h263p + 1;  ///< Number of supported wire codec identifiers.
 
@@ -61,7 +56,7 @@ namespace video {
     int slicesPerFrame;  ///< Number of slices per frame.
     int numRefFrames;  ///< Maximum number of reference frames.
     int encoderCscMode;  ///< Requested color range and SDR colorspace; HDR always uses BT.2020 and ST2084.
-    int videoFormat;  ///< Video codec format selected from video_format_e.
+    int videoFormat;  ///< GameStream wire identifier for the requested video codec.
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
@@ -809,11 +804,24 @@ namespace video {
    */
   encoder_t *select_legacy_encoder(std::span<encoder_t *const> candidates, int video_format, const codec_probe_t &probe);
 
-  extern bool last_encoder_probe_supported_h264;  ///< Whether baseline H.264 is available.
-  extern int active_hevc_mode;  ///< Active HEVC codec advertisement mode.
-  extern int active_av1_mode;  ///< Active AV1 codec advertisement mode.
-  extern int active_mpeg2_mode;  ///< Active MPEG-2 codec advertisement mode.
-  extern int active_h263p_mode;  ///< Active H.263+ codec advertisement mode.
+  /**
+   * @brief Encoder probe results for baseline H.264 and the legacy codec modes.
+   */
+  struct probed_codec_modes_t {
+    bool h264 = false;  ///< Whether baseline H.264 passed its probe.
+    int mpeg2 = 0;  ///< Active MPEG-2 advertisement mode.
+    int h263p = 0;  ///< Active H.263+ advertisement mode.
+  };
+
+  /**
+   * @brief Access the codec modes owned by the encoder probe.
+   *
+   * @return Current H.264 probe result and legacy codec advertisement modes.
+   */
+  probed_codec_modes_t &probed_codec_modes();
+
+  extern int active_hevc_mode;
+  extern int active_av1_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
   extern std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1
   extern std::array<bool, 3> last_encoder_probe_supported_dynamic_range_for_codec;  // 0 - H.264, 1 - HEVC, 2 - AV1

@@ -81,7 +81,7 @@ namespace video {
     /**
      * @brief Identify the legacy video formats supported for compatibility clients.
      *
-     * @param video_format Requested video_format_e identifier.
+     * @param video_format Requested GameStream video codec identifier.
      * @return Whether the format is MPEG-2 or H.263+.
      */
     bool is_legacy_video_format(int video_format) {
@@ -777,36 +777,45 @@ namespace video {
    */
   void end_capture_async(capture_thread_async_ctx_t &ctx);
 
-  // Keep a reference counter to ensure the capture thread only runs when other threads have a reference to the capture thread
-  display_switch_state_t display_switches;  ///< Broadcast monitor selection to all encoder capture groups.
-  capture_group_pool_t<capture_thread_async_ctx_t> capture_threads_async {
-    [](auto &context) {
-      display_switches.start_worker();
-      const auto status = start_capture_async(context);
-      if (status != 0) {
-        display_switches.stop_worker();
-      }
-      return status;
-    },
-    [](auto &context) {
-      end_capture_async(context);
-      display_switches.stop_worker();
-    },
-  };  ///< Capture workers grouped by encoder backend.
-  capture_group_pool_t<capture_thread_sync_ctx_t> capture_threads_sync {
-    [](auto &context) {
-      display_switches.start_worker();
-      const auto status = start_capture_sync(context);
-      if (status != 0) {
-        display_switches.stop_worker();
-      }
-      return status;
-    },
-    [](auto &context) {
-      end_capture_sync(context);
-      display_switches.stop_worker();
-    },
-  };  ///< Synchronous workers grouped by encoder backend.
+  namespace {
+    /**
+     * @brief Access the monitor switch requests shared by the capture workers.
+     *
+     * @return Monitor switch state for active capture groups.
+     */
+    display_switch_state_t &capture_display_switches() {
+      static display_switch_state_t switches;
+      return switches;
+    }
+
+    /**
+     * @brief Access the pool whose references keep each encoder's capture worker alive.
+     *
+     * @tparam Context Capture worker context.
+     * @tparam Start Callback starting one worker.
+     * @tparam Stop Callback stopping one worker.
+     * @return Pool of capture workers for the specified context type.
+     */
+    template<class Context, int (*Start)(Context &), void (*Stop)(Context &)>
+    capture_group_pool_t<Context> &capture_groups() {
+      auto &switches = capture_display_switches();
+      static capture_group_pool_t<Context> groups {
+        [&switches](Context &context) {
+          switches.start_worker();
+          const auto status = Start(context);
+          if (status != 0) {
+            switches.stop_worker();
+          }
+          return status;
+        },
+        [&switches](Context &context) {
+          Stop(context);
+          switches.stop_worker();
+        },
+      };
+      return groups;
+    }
+  }  // namespace
 
 #ifdef _WIN32
   /**
@@ -1444,20 +1453,15 @@ namespace video {
       "h264_vaapi"s,
       {},  // capabilities
     },
-    {
-      // Common options
-      {
+    [] {
+      encoder_t::codec_t codec {};
+      codec.common_options = {
         {"async_depth"s, 1},
         {"idr_interval"s, std::numeric_limits<int>::max()},
-      },
-      {},  // SDR-specific options
-      {},  // HDR-specific options
-      {},  // YUV444 SDR-specific options
-      {},  // YUV444 HDR-specific options
-      {},  // Fallback options
-      "mpeg2_vaapi"s,
-      {},  // capabilities
-    },
+      };
+      codec.name = "mpeg2_vaapi"s;
+      return codec;
+    }(),
     {},  // H.263+
     // RC buffer size will be set in platform code if supported
     LIMITED_GOP_SIZE | PARALLEL_ENCODING | NO_RC_BUF_LIMIT
@@ -1614,12 +1618,33 @@ namespace video {
   };
 
   static encoder_t *chosen_encoder;
-  static std::array<encoder_t *, VIDEO_FORMAT_COUNT> codec_encoders {};  ///< Independently selected backend for each codec.
-  bool last_encoder_probe_supported_h264 = false;  ///< Whether the modern encoder passed its baseline H.264 probe.
+
+  namespace {
+    /**
+     * @brief Track the selected backend and advertised modes from encoder probing.
+     */
+    struct encoder_probe_state_t {
+      std::array<encoder_t *, VIDEO_FORMAT_COUNT> encoders {};  ///< Backend selected for each wire codec.
+      probed_codec_modes_t modes;  ///< Baseline and legacy codec modes from the probe.
+    };
+
+    /**
+     * @brief Access the state refreshed by encoder probing.
+     *
+     * @return Selected encoder backends and codec modes.
+     */
+    encoder_probe_state_t &encoder_probe_state() {
+      static encoder_probe_state_t state;
+      return state;
+    }
+  }  // namespace
+
+  probed_codec_modes_t &probed_codec_modes() {
+    return encoder_probe_state().modes;
+  }
+
   int active_hevc_mode;  ///< HEVC mode selected by the most recent encoder probe.
   int active_av1_mode;  ///< AV1 mode selected by the most recent encoder probe.
-  int active_mpeg2_mode;  ///< MPEG-2 mode selected by the most recent encoder probe.
-  int active_h263p_mode;  ///< H.263+ mode selected by the most recent encoder probe.
   bool last_encoder_probe_supported_ref_frames_invalidation = false;  ///< Whether the last probe found reference-frame invalidation support.
   std::array<bool, 3> last_encoder_probe_supported_yuv444_for_codec = {};  ///< YUV444 support discovered for each probed codec.
   std::array<bool, 3> last_encoder_probe_supported_dynamic_range_for_codec = {};  ///< 10-bit 4:2:0 support discovered for each probed codec.
@@ -1629,7 +1654,7 @@ namespace video {
    * @brief Check whether an encoder passed validation for a requested video format.
    *
    * @param encoder Encoder whose codec capabilities should be checked.
-   * @param video_format Requested video_format_e identifier.
+   * @param video_format Requested GameStream video codec identifier.
    * @return Whether the encoder supports the requested video format.
    */
   bool encoder_supports_video_format(const encoder_t &encoder, int video_format) {
@@ -1659,7 +1684,7 @@ namespace video {
     if (config.videoFormat < 0 || config.videoFormat >= VIDEO_FORMAT_COUNT) {
       return nullptr;
     }
-    return codec_encoders[config.videoFormat];
+    return encoder_probe_state().encoders[config.videoFormat];
   }
 
   /**
@@ -1766,7 +1791,7 @@ namespace video {
     });
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
-    auto display_request = display_switches.poll(switch_display_event);
+    auto display_request = capture_display_switches().poll(switch_display_event);
 
     // Wait for the initial capture context or a request to stop the queue
     auto initial_capture_ctx = capture_ctx_queue->pop();
@@ -1781,7 +1806,7 @@ namespace video {
     std::vector<std::string> display_names;
     int display_p = -1;
     refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
-    if (display_request.index) {
+    if (display_request.index.has_value()) {
       display_p = std::clamp(*display_request.index, 0, static_cast<int>(display_names.size()) - 1);
     }
     auto disp = platf::display(encoder.platform_formats->dev_type, display_names[display_p], capture_ctxs.front().config);
@@ -1917,7 +1942,7 @@ namespace video {
           capture_ctxs.emplace_back(std::move(*capture_ctx_queue->pop()));
         }
 
-        if (display_switches.poll(switch_display_event).generation != display_request.generation) {
+        if (capture_display_switches().poll(switch_display_event).generation != display_request.generation) {
           artificial_reinit = true;
           return false;
         }
@@ -1975,8 +2000,8 @@ namespace video {
               refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
 
               // Process any pending display switch with the new list of displays
-              display_request = display_switches.poll(switch_display_event);
-              if (display_request.index) {
+              display_request = capture_display_switches().poll(switch_display_event);
+              if (display_request.index.has_value()) {
                 display_p = std::clamp(*display_request.index, 0, static_cast<int>(display_names.size()) - 1);
               }
 
@@ -2965,7 +2990,7 @@ namespace video {
     std::shared_ptr<platf::display_t> disp;
 
     auto switch_display_event = mail::man->event<int>(mail::switch_display);
-    auto display_request = display_switches.poll(switch_display_event);
+    auto display_request = capture_display_switches().poll(switch_display_event);
 
     if (synced_session_ctxs.empty()) {
       auto ctx = encode_session_ctx_queue.pop();
@@ -2983,8 +3008,8 @@ namespace video {
       refresh_displays(encoder.platform_formats->dev_type, display_names, display_p);
 
       // Process any pending display switch with the new list of displays
-      display_request = display_switches.poll(switch_display_event);
-      if (display_request.index) {
+      display_request = capture_display_switches().poll(switch_display_event);
+      if (display_request.index.has_value()) {
         display_p = std::clamp(*display_request.index, 0, static_cast<int>(display_names.size()) - 1);
       }
 
@@ -3081,7 +3106,7 @@ namespace video {
           ++pos;
         })
 
-        if (display_switches.poll(switch_display_event).generation != display_request.generation) {
+        if (capture_display_switches().poll(switch_display_event).generation != display_request.generation) {
           ec = platf::capture_e::reinit;
           return false;
         }
@@ -3163,7 +3188,7 @@ namespace video {
       shutdown_event->raise(true);
     });
 
-    auto ref = capture_threads_async.ref(&encoder);
+    auto ref = capture_groups<capture_thread_async_ctx_t, start_capture_async, end_capture_async>().ref(&encoder);
     if (!ref) {
       return;
     }
@@ -3258,7 +3283,7 @@ namespace video {
       capture_async(std::move(mail), config, *encoder, channel_data);
     } else {
       safe::signal_t join_event;
-      auto ref = capture_threads_sync.ref(encoder);
+      auto ref = capture_groups<capture_thread_sync_ctx_t, start_capture_sync, end_capture_sync>().ref(encoder);
       if (!ref) {
         return;
       }
@@ -3589,7 +3614,7 @@ namespace video {
   }
 
   void reset_encoder_probe_results() {
-    last_encoder_probe_supported_h264 = false;
+    probed_codec_modes().h264 = false;
     last_encoder_probe_supported_ref_frames_invalidation = false;
     last_encoder_probe_supported_yuv444_for_codec = {};
     last_encoder_probe_supported_dynamic_range_for_codec = {};
@@ -3597,7 +3622,7 @@ namespace video {
   }
 
   void record_encoder_probe_results(const encoder_t &encoder) {
-    last_encoder_probe_supported_h264 = encoder.h264[encoder_t::PASSED];
+    probed_codec_modes().h264 = encoder.h264[encoder_t::PASSED];
     last_encoder_probe_supported_ref_frames_invalidation = (encoder.flags & REF_FRAMES_INVALIDATION);
     last_encoder_probe_supported_yuv444_for_codec[0] = encoder.h264[encoder_t::PASSED] &&
                                                        encoder.h264[encoder_t::YUV444];
@@ -3619,6 +3644,19 @@ namespace video {
                                                                      encoder.av1[encoder_t::DYNAMIC_RANGE_YUV444];
   }
 
+  /**
+   * @brief Determine the advertised mode of an automatically configured modern codec.
+   *
+   * @param codec Codec capabilities from the selected encoder.
+   * @return The mode matching the supported profiles, or 1 when unavailable.
+   */
+  static int auto_codec_mode(const encoder_t::codec_t &codec) {
+    if (!codec[encoder_t::PASSED]) {
+      return 1;
+    }
+    return 2 + static_cast<int>(codec[encoder_t::DYNAMIC_RANGE]) + 2 * static_cast<int>(codec[encoder_t::DYNAMIC_RANGE_YUV444]);
+  }
+
   int probe_encoders() {
     if (!allow_encoder_probing(display_device::enumerate_devices())) {
       // Error already logged
@@ -3626,9 +3664,10 @@ namespace video {
     }
 
     auto encoder_list = encoders;
+    auto &[codec_encoders, modes] = encoder_probe_state();
 
     // If we already have a good encoder, check to see if another probe is required
-    if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && active_mpeg2_mode < 2 && active_h263p_mode != 2 && config::video.mpeg2_mode != 2 && config::video.h263p_mode != 2 && !platf::needs_encoder_reenumeration()) {
+    if (chosen_encoder && !(chosen_encoder->flags & ALWAYS_REPROBE) && modes.mpeg2 < 2 && modes.h263p != 2 && config::video.mpeg2_mode != 2 && config::video.h263p_mode != 2 && !platf::needs_encoder_reenumeration()) {
       return 0;
     }
 
@@ -3638,8 +3677,8 @@ namespace video {
     codec_encoders.fill(nullptr);
     active_hevc_mode = config::video.hevc_mode;
     active_av1_mode = config::video.av1_mode;
-    active_mpeg2_mode = config::video.mpeg2_mode;
-    active_h263p_mode = config::video.h263p_mode;
+    modes.mpeg2 = config::video.mpeg2_mode;
+    modes.h263p = config::video.h263p_mode;
     reset_encoder_probe_results();
 
     auto adjust_encoder_constraints_hevc = [&](encoder_t *encoder) {
@@ -3796,7 +3835,7 @@ namespace video {
         break;
       }
     }
-    for (const auto &[format, mode] : {std::pair {format_mpeg2, &active_mpeg2_mode}, std::pair {format_h263p, &active_h263p_mode}}) {
+    for (const auto &[format, mode] : {std::pair {format_mpeg2, &modes.mpeg2}, std::pair {format_h263p, &modes.h263p}}) {
       if (*mode == 2) {
         codec_encoders[format] = select_legacy_encoder(legacy_candidates, format, validate_legacy_codec);
         if (!codec_encoders[format]) {
@@ -3856,39 +3895,15 @@ namespace video {
         BOOST_LOG(info) << "Found AV1 encoder: "sv << encoder.av1.name << " ["sv << encoder.name << ']';
       }
 
-      // 2 - passed
-      // 3 - HDR yuv420
-      // 4 - HDR yuv444
-      // 5 - HDR yuv420 & HDR yuv444
-
       if (active_hevc_mode == 0) {
-        active_hevc_mode = 1;
-        if (encoder.hevc[encoder_t::PASSED]) {
-          active_hevc_mode = 2;
-          if (encoder.hevc[encoder_t::DYNAMIC_RANGE]) {
-            active_hevc_mode += 1;
-          }
-          if (encoder.hevc[encoder_t::DYNAMIC_RANGE_YUV444]) {
-            active_hevc_mode += 2;
-          }
-        }
+        active_hevc_mode = auto_codec_mode(encoder.hevc);
         BOOST_LOG(debug) << "ENCODER STATUS ACTIVE_HEVC_MODE: "sv << active_hevc_mode;
       }
 
       if (active_av1_mode == 0) {
-        active_av1_mode = 1;
-        if (encoder.av1[encoder_t::PASSED]) {
-          active_av1_mode = 2;
-          if (encoder.av1[encoder_t::DYNAMIC_RANGE]) {
-            active_av1_mode += 1;
-          }
-          if (encoder.av1[encoder_t::DYNAMIC_RANGE_YUV444]) {
-            active_av1_mode += 2;
-          }
-        }
+        active_av1_mode = auto_codec_mode(encoder.av1);
         BOOST_LOG(debug) << "ENCODER STATUS ACTIVE_AV1_MODE: "sv << active_av1_mode;
       }
-
     } else {
       active_hevc_mode = 1;
       active_av1_mode = 1;
@@ -3901,12 +3916,12 @@ namespace video {
       }
     }
 
-    if (active_mpeg2_mode == 0) {
-      active_mpeg2_mode = 1;
+    if (modes.mpeg2 == 0) {
+      modes.mpeg2 = 1;
     }
 
-    if (active_h263p_mode == 0) {
-      active_h263p_mode = 1;
+    if (modes.h263p == 0) {
+      modes.h263p = 1;
     }
 
     return 0;

@@ -66,8 +66,10 @@ namespace {
      * @brief Set a small frame size accepted by both legacy codecs.
      */
     test_display_t() {
-      width = env_width = 176;
-      height = env_height = 144;
+      width = 176;
+      height = 144;
+      env_width = width;
+      env_height = height;
     }
 
     /**
@@ -136,7 +138,7 @@ TEST_P(LegacyCodecRoundTripTest, DecodesProductionPacketsForTheNegotiatedCodec) 
 
   auto &codec = config.videoFormat == video::format_mpeg2 ? video::software.mpeg2 : video::software.h263p;
   const auto saved_capabilities = codec.capabilities;
-  auto restore = util::fail_guard([&] {
+  auto restore = util::fail_guard([&codec, &saved_capabilities] {
     codec.capabilities = saved_capabilities;
   });
   codec[video::encoder_t::PASSED] = true;
@@ -200,7 +202,7 @@ TEST_P(LegacyCodecRoundTripTest, DecodesProductionPacketsForTheNegotiatedCodec) 
       }
       auto *av_packet = av_packet_alloc();
       ASSERT_NE(av_packet, nullptr);
-      auto release = util::fail_guard([&] {
+      auto release = util::fail_guard([&av_packet] {
         av_packet_free(&av_packet);
       });
       ASSERT_EQ(av_new_packet(av_packet, static_cast<int>(encoded->data_size())), 0);

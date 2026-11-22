@@ -136,38 +136,6 @@ TEST(VideoCodecSelectionTest, SelectsModernAndLegacyCodecDescriptors) {
   }
 }
 
-namespace {
-  /**
-   * @brief Restore codec advertisement modes after tests temporarily override them.
-   */
-  struct ActiveVideoModeGuard {
-    /**
-     * @brief Save the active codec advertisement modes.
-     */
-    ActiveVideoModeGuard():
-        hevc_mode {video::active_hevc_mode},
-        av1_mode {video::active_av1_mode},
-        mpeg2_mode {video::active_mpeg2_mode},
-        h263p_mode {video::active_h263p_mode} {
-    }
-
-    /**
-     * @brief Restore the codec advertisement modes saved at construction.
-     */
-    ~ActiveVideoModeGuard() {
-      video::active_hevc_mode = hevc_mode;
-      video::active_av1_mode = av1_mode;
-      video::active_mpeg2_mode = mpeg2_mode;
-      video::active_h263p_mode = h263p_mode;
-    }
-
-    int hevc_mode;  ///< Saved HEVC advertisement mode.
-    int av1_mode;  ///< Saved AV1 advertisement mode.
-    int mpeg2_mode;  ///< Saved MPEG-2 advertisement mode.
-    int h263p_mode;  ///< Saved H.263+ advertisement mode.
-  };
-}  // namespace
-
 struct EncoderTest: PlatformTestSuite, testing::WithParamInterface<video::encoder_t *> {
   void SetUp() override {
     BaseTest::SetUp();
@@ -488,17 +456,11 @@ INSTANTIATE_TEST_SUITE_P(
  * @brief The software backend probes MPEG-2 even when its H.264 encoder is unavailable.
  */
 TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedMpeg2) {
-  ActiveVideoModeGuard guard;
   const auto h264_name = video::software.h264.name;
   auto restore = util::fail_guard([&] {
     video::software.h264.name = h264_name;
   });
   video::software.h264.name = "unavailable_h264_encoder";
-
-  video::active_hevc_mode = 1;
-  video::active_av1_mode = 1;
-  video::active_mpeg2_mode = 2;
-  video::active_h263p_mode = 1;
 
   ASSERT_TRUE(video::validate_legacy_codec(video::software, video::format_mpeg2));
   EXPECT_TRUE(video::software.mpeg2[video::encoder_t::PASSED]);
@@ -508,17 +470,11 @@ TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedMpeg2) {
  * @brief The software backend probes H.263+ even when its H.264 encoder is unavailable.
  */
 TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedH263Plus) {
-  ActiveVideoModeGuard guard;
   const auto h264_name = video::software.h264.name;
   auto restore = util::fail_guard([&] {
     video::software.h264.name = h264_name;
   });
   video::software.h264.name = "unavailable_h264_encoder";
-
-  video::active_hevc_mode = 1;
-  video::active_av1_mode = 1;
-  video::active_mpeg2_mode = 1;
-  video::active_h263p_mode = 2;
 
   ASSERT_TRUE(video::validate_legacy_codec(video::software, video::format_h263p));
   EXPECT_TRUE(video::software.h263p[video::encoder_t::PASSED]);

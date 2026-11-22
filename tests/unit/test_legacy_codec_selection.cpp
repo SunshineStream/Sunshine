@@ -45,7 +45,7 @@ TEST(LegacyCodecSelectionTest, RejectsInvalidFormatsAndUnavailableBackends) {
   video::encoder_t backend {};
   const std::array candidates {static_cast<video::encoder_t *>(nullptr), &backend};
   int probes = 0;
-  const auto reject = [&](auto &, int) {
+  const auto reject = [&probes](auto &, int) {
     ++probes;
     return false;
   };
