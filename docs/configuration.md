@@ -1522,6 +1522,307 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### bitrate_mode
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            How Sunshine chooses the video bitrate during a stream.
+
+            With <code>fixed</code>, the stream uses the bitrate requested by Moonlight for the whole session.
+
+            With <code>adaptive</code>, Sunshine follows the network instead (MACCA: Multi-state AIMD with Cubic
+            Convergence Adaptation). When the bandwidth to the client drops, packets queue up and the round-trip time
+            (RTT) rises; Sunshine lowers the bitrate before the queue turns into stutter or a disconnect, and raises it
+            again once the path is clear. It only uses the RTT Sunshine already measures on the control stream, so it
+            works with any Moonlight client and needs no client setting.
+            <ul>
+              <li><b>Decrease:</b> when the RTT stays above [abr_rtt_threshold_ms](#abr_rtt_threshold_ms) for
+                  [abr_hysteresis_ms](#abr_hysteresis_ms), the bitrate is multiplied by [abr_beta](#abr_beta).
+                  While congestion lasts, another decrease follows after each further hysteresis window, down to
+                  [abr_min_kbps](#abr_min_kbps). Shorter spikes are ignored.</li>
+              <li><b>Recovery:</b> when the RTT stays below the threshold minus [abr_margin_ms](#abr_margin_ms)
+                  for [abr_stable_time_ms](#abr_stable_time_ms), the bitrate starts rising along a cubic curve: fast
+                  at first, levelling off near the rate held before the last decrease after
+                  [abr_cubic_recovery_ms](#abr_cubic_recovery_ms), then probing above it.</li>
+              <li><b>Fast convergence:</b> when a decrease comes before the previous recovery finished, the next
+                  recovery aims lower, closer to the bandwidth actually available
+                  ([abr_fast_convergence](#abr_fast_convergence)).</li>
+              <li>The bitrate changes at most once per second and never goes above the bitrate requested by Moonlight,
+                  [max_bitrate](#max_bitrate) or [abr_max_kbps](#abr_max_kbps).</li>
+            </ul>
+            The default values suit most networks: start by enabling adaptive mode alone. On paths with a high base
+            latency (for example streaming over the internet with an RTT near 100 ms), raise
+            [abr_rtt_threshold_ms](#abr_rtt_threshold_ms) above the usual RTT, or the bitrate will be lowered
+            needlessly. The options are read when a stream starts, so reconnect Moonlight after changing them.
+            With <code>min_log_level = debug</code>, each change is logged as
+            <code>Adaptive bitrate: target … kbps (RTT … ms)</code>.
+            @note{Runtime bitrate changes are supported by FFmpeg-based encoders (VA-API, AMF, QuickSync, software)
+            and by VideoToolbox. FFmpeg-based encoders are reopened at each change, which sends a key frame.
+            The native NVENC encoder does not support runtime changes yet and keeps a fixed bitrate.}
+            @warning{With VideoToolbox, a bitrate that is too low for the resolution and content can make the encoder
+            drop frames, which forces a key frame on every frame and makes the stream stutter. This also happens
+            with a low fixed bitrate. When using adaptive mode on macOS, set [abr_min_kbps](#abr_min_kbps) above that
+            level; see [Troubleshooting](troubleshooting.md#stream-stutters-at-low-bitrates-with-videotoolbox).}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            fixed
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            bitrate_mode = adaptive
+            @endcode</td>
+    </tr>
+    <tr>
+        <td rowspan="2">Choices</td>
+        <td>fixed</td>
+        <td>Stream at the bitrate requested by Moonlight.</td>
+    </tr>
+    <tr>
+        <td>adaptive</td>
+        <td>Adjust the bitrate to the network conditions.</td>
+    </tr>
+</table>
+
+### abr_rtt_threshold_ms
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Round-trip time, in milliseconds, above which the network is treated as congested. Only used when [bitrate_mode](#bitrate_mode) is <code>adaptive</code>.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            100
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">1-10000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_rtt_threshold_ms = 100
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_margin_ms
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            The round-trip time must be this many milliseconds below [abr_rtt_threshold_ms](#abr_rtt_threshold_ms) to count as a clear path. Between the two values the bitrate is held.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            20
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0-10000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_margin_ms = 20
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_hysteresis_ms
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            How long, in milliseconds, the round-trip time must stay above the threshold before the bitrate is decreased. Shorter spikes are ignored.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            2000
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0-60000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_hysteresis_ms = 2000
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_stable_time_ms
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            How long, in milliseconds, the path must stay clear before each bitrate increase.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            1000
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0-60000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_stable_time_ms = 1000
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_beta
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Factor applied to the bitrate on each decrease. For example, <code>0.7</code> keeps 70% of the current bitrate.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0.7
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">0.1-0.95</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_beta = 0.7
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_cubic_recovery_ms
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Time, in milliseconds, the bitrate takes to return to the rate held before the last decrease. The recovery is fast at first, levels off near that rate, then keeps probing for more bandwidth.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            15000
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Range</td>
+        <td colspan="2">1000-120000</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_cubic_recovery_ms = 15000
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_fast_convergence
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When a decrease happens before the bitrate has fully recovered, aim the next recovery lower, closer to the bandwidth actually available.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            enabled
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_fast_convergence = disabled
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_min_kbps
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Lowest bitrate, in Kbps, the adaptive mode will use.
+            @tip{With VideoToolbox, keep this above the bitrate where the encoder starts dropping frames. On an Apple M5,
+            1080p60 with high-motion video needed about 6000 Kbps.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            1000
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_min_kbps = 2000
+            @endcode</td>
+    </tr>
+</table>
+
+### abr_max_kbps
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Highest bitrate, in Kbps, the adaptive mode will use. If set to 0, it uses the bitrate requested by Moonlight. The bitrate requested by Moonlight and [max_bitrate](#max_bitrate) are never exceeded.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}
+            0
+            @endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            abr_max_kbps = 20000
+            @endcode</td>
+    </tr>
+</table>
+
 ### max_stream_resolution
 
 <table>

@@ -302,6 +302,49 @@ TEST_F(ConfigPersistenceTest, ParsesFecPercentagesAndRejectsOutOfRangeValues) {
   }
 }
 
+/**
+ * @brief Verify the adaptive bitrate options parse, and invalid values keep the previous setting.
+ */
+TEST_F(ConfigPersistenceTest, ParsesAdaptiveBitrateOptions) {
+  const auto original_stream = config::stream;
+  const auto restore_stream = util::fail_guard([original_stream]() {
+    config::stream = original_stream;
+  });
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  EXPECT_EQ(config::stream.bitrate_mode, "fixed");
+
+  config::apply_config_for_test(
+    "bitrate_mode = adaptive\n"
+    "abr_rtt_threshold_ms = 120\n"
+    "abr_margin_ms = 30\n"
+    "abr_hysteresis_ms = 1500\n"
+    "abr_stable_time_ms = 500\n"
+    "abr_beta = 0.5\n"
+    "abr_cubic_recovery_ms = 10000\n"
+    "abr_fast_convergence = disabled\n"
+    "abr_min_kbps = 2000\n"
+    "abr_max_kbps = 30000\n"
+  );
+  EXPECT_EQ(config::stream.bitrate_mode, "adaptive");
+  EXPECT_EQ(config::stream.abr_rtt_threshold_ms, 120);
+  EXPECT_EQ(config::stream.abr_margin_ms, 30);
+  EXPECT_EQ(config::stream.abr_hysteresis_ms, 1500);
+  EXPECT_EQ(config::stream.abr_stable_time_ms, 500);
+  EXPECT_DOUBLE_EQ(config::stream.abr_beta, 0.5);
+  EXPECT_EQ(config::stream.abr_cubic_recovery_ms, 10000);
+  EXPECT_FALSE(config::stream.abr_fast_convergence);
+  EXPECT_EQ(config::stream.abr_min_kbps, 2000);
+  EXPECT_EQ(config::stream.abr_max_kbps, 30000);
+
+  config::apply_config_for_test("bitrate_mode = turbo\nabr_beta = 1.5\nabr_cubic_recovery_ms = 0\n");
+  EXPECT_EQ(config::stream.bitrate_mode, "fixed");
+  EXPECT_DOUBLE_EQ(config::stream.abr_beta, 0.5);
+  EXPECT_EQ(config::stream.abr_cubic_recovery_ms, 10000);
+}
+
 TEST_F(ConfigPersistenceTest, ParsesNvencTwoPassModesAndDefaultsUnknownValues) {
   using enum nvenc::nvenc_two_pass;
   const auto original_video = config::video;

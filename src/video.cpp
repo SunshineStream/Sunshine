@@ -430,6 +430,20 @@ namespace video {
   };
 
   /**
+   * @brief Inputs needed to configure and open an FFmpeg codec context for an encode session.
+   */
+  struct avcodec_ctx_inputs_t {
+    const encoder_t *encoder = nullptr;  ///< Encoder selected for the session.
+    const encoder_platform_formats_avcodec *platform_formats = nullptr;  ///< Platform formats of the encoder.
+    const AVCodec *codec = nullptr;  ///< FFmpeg codec to open.
+    config_t config {};  ///< Stream configuration negotiated for the session.
+    AVPixelFormat sw_fmt = AV_PIX_FMT_NONE;  ///< Software pixel format of the session.
+    bool hardware = false;  ///< Whether the encoder is hardware-backed.
+  };
+
+  avcodec_ctx_t build_avcodec_ctx(const avcodec_ctx_inputs_t &inputs, int bitrate_kbps, platf::avcodec_encode_device_t &encode_device, AVBufferRef *reuse_hw_frames_ctx);
+
+  /**
    * @brief FFmpeg AVCodec encode session and parameter-set rewriting state.
    */
   class avcodec_encode_session_t: public encode_session_t {
@@ -485,6 +499,10 @@ namespace video {
 
       inject = other.inject;
 
+      reconfigure_inputs = std::move(other.reconfigure_inputs);
+      pending_bitrate_kbps = other.pending_bitrate_kbps;
+      other.pending_bitrate_kbps.reset();
+
       return *this;
     }
 
@@ -534,6 +552,55 @@ namespace video {
       request_idr_frame();
     }
 
+    /**
+     * @brief Queue a new target bitrate, applied before the next frame is encoded.
+     *
+     * @param bitrate_kbps New target bitrate, in kbps.
+     * @return True when the change can be applied.
+     */
+    bool set_bitrate(int bitrate_kbps) override {
+      if (!reconfigure_inputs.encoder || !device) {
+        return false;
+      }
+      pending_bitrate_kbps = bitrate_kbps;
+      return true;
+    }
+
+    /**
+     * @brief Rebuild the codec context at the pending target bitrate, if any.
+     *
+     * FFmpeg encoders do not reliably honor a bitrate change on an open context, so a new
+     * context is opened that reuses the hardware frame pool, and the next frame is forced to IDR.
+     * On failure the current context is kept.
+     */
+    void apply_pending_bitrate() {
+      if (!pending_bitrate_kbps.has_value()) {
+        return;
+      }
+      const int target_kbps = config::video.max_bitrate > 0 ? std::min(*pending_bitrate_kbps, config::video.max_bitrate) : *pending_bitrate_kbps;
+      pending_bitrate_kbps.reset();
+
+      if (!reconfigure_inputs.encoder || !device || !avcodec_ctx || target_kbps <= 0) {
+        return;
+      }
+
+      auto new_ctx = build_avcodec_ctx(reconfigure_inputs, target_kbps, *device, avcodec_ctx->hw_frames_ctx);
+      if (!new_ctx) {
+        BOOST_LOG(warning) << "Could not change the bitrate to "sv << target_kbps << " kbps; keeping the current encoder"sv;
+        return;
+      }
+
+      // Drain the old context before replacing it
+      if (avcodec_send_frame(avcodec_ctx.get(), nullptr) == 0) {
+        packet_raw_avcodec pkt;
+        while (avcodec_receive_packet(avcodec_ctx.get(), pkt.av_packet) == 0);
+      }
+
+      avcodec_ctx = std::move(new_ctx);
+      request_idr_frame();
+      BOOST_LOG(info) << "Encoder bitrate changed to "sv << target_kbps << " kbps"sv;
+    }
+
     avcodec_ctx_t avcodec_ctx;  ///< FFmpeg codec context owned by the encode session.
     std::unique_ptr<platf::avcodec_encode_device_t> device;  ///< Platform device used by the FFmpeg hardware encoder.
 
@@ -546,6 +613,9 @@ namespace video {
     int inject;  ///< Number of upcoming IDR frames that should receive rewritten parameter sets.
 
     frame_timestamp_queue_t frame_timestamps;  ///< Capture timestamps of in-flight frames keyed by pts, awaiting their encoded packets.
+
+    avcodec_ctx_inputs_t reconfigure_inputs;  ///< Inputs used to rebuild the codec context on a bitrate change.
+    std::optional<int> pending_bitrate_kbps;  ///< Target bitrate waiting to be applied before the next frame.
   };
 
   /**
@@ -603,6 +673,16 @@ namespace video {
       if (!device->nvenc->invalidate_ref_frames(first_frame, last_frame)) {
         force_idr = true;
       }
+    }
+
+    /**
+     * @brief Runtime bitrate changes are not supported by the native NVENC path yet.
+     *
+     * @param bitrate_kbps New target bitrate, in kbps.
+     * @return Always false.
+     */
+    bool set_bitrate(int bitrate_kbps) override {
+      return false;
     }
 
     /**
@@ -679,6 +759,20 @@ namespace video {
     }
 
     /**
+     * @brief Change the target bitrate of the compression session in place.
+     *
+     * @param bitrate_kbps New target bitrate, in kbps.
+     * @return True when VideoToolbox accepted the change.
+     */
+    bool set_bitrate(int bitrate_kbps) override {
+      if (!device) {
+        return false;
+      }
+      const int target_kbps = config::video.max_bitrate > 0 ? std::min(bitrate_kbps, config::video.max_bitrate) : bitrate_kbps;
+      return device->set_bitrate(target_kbps);
+    }
+
+    /**
      * @brief Submit the next frame to VideoToolbox and return the encoded payload.
      *
      * @param frame_index Monotonic frame index assigned by the video pipeline.
@@ -709,11 +803,13 @@ namespace video {
     safe::mail_raw_t::event_t<bool> idr_events;  ///< Event raised when an IDR frame is requested.
     safe::mail_raw_t::event_t<hdr_info_t> hdr_events;  ///< Event carrying updated HDR metadata.
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_events;  ///< Event carrying updated touch viewport metadata.
+    safe::mail_raw_t::event_t<int> bitrate_change_events;  ///< Event carrying a new target encoder bitrate, in kbps.
 
     config_t config;  ///< Stream or encoder configuration captured for the worker.
     const encoder_t *encoder_p;  ///< Encoder selected for this stream's video format.
     int frame_nr;  ///< Next capture-frame number assigned to encoded packets.
     stream::session_t *channel_data;  ///< Stream session forwarded to packet senders.
+    std::optional<int> bitrate_kbps;  ///< Last adaptive bitrate accepted by the encoder, kept across reinitializations.
   };
 
   /**
@@ -2067,6 +2163,8 @@ namespace video {
    * @return 0 when packets are queued; nonzero when encoding or packetization fails.
    */
   int encode_avcodec(int64_t frame_nr, avcodec_encode_session_t &session, safe::mail_raw_t::queue_t<packet_t> &packets, stream::session_t *channel_data, std::optional<std::chrono::steady_clock::time_point> frame_timestamp) {
+    session.apply_pending_bitrate();
+
     auto &frame = session.device->frame;
     frame->pts = frame_nr;
 
@@ -2222,6 +2320,385 @@ namespace video {
   }
 
   /**
+   * @brief Select the codec profile for the negotiated stream.
+   *
+   * @param video_format Codec of the encoder in use.
+   * @param config Stream configuration negotiated for the session.
+   * @return FFmpeg profile, or `AV_PROFILE_UNKNOWN` to let the encoder choose.
+   */
+  int select_avcodec_profile(const encoder_t::codec_t &video_format, const config_t &config) {
+    switch (config.videoFormat) {
+      case format_h264:
+        // 10-bit h264 encoding is not supported by our streaming protocol
+        assert(!config.dynamicRange);
+        return select_h264_profile(video_format.name, config, config::video.amd.amd_coder);
+
+      case format_hevc:
+        if (config.chromaSamplingType == 1) {
+          // HEVC uses the same RExt profile for both 8 and 10 bit YUV 4:4:4 encoding
+          return AV_PROFILE_HEVC_REXT;
+        }
+        return config.dynamicRange ? AV_PROFILE_HEVC_MAIN_10 : AV_PROFILE_HEVC_MAIN;
+
+      case format_av1:
+        // AV1 supports both 8 and 10 bit encoding with the same Main profile
+        // but YUV 4:4:4 sampling requires High profile
+        return (config.chromaSamplingType == 1) ? AV_PROFILE_AV1_HIGH : AV_PROFILE_AV1_MAIN;
+
+      case format_mpeg2:
+        return AV_PROFILE_MPEG2_MAIN;
+
+      default:
+        return AV_PROFILE_UNKNOWN;
+    }
+  }
+
+  /**
+   * @brief Set the GOP structure of a codec context.
+   *
+   * @param ctx Codec context to configure.
+   * @param encoder Encoder selected for the session.
+   * @param config Stream configuration negotiated for the session.
+   */
+  void set_avcodec_gop(AVCodecContext *ctx, const encoder_t &encoder, const config_t &config) {
+    if (is_legacy_video_format(config.videoFormat)) {
+      // FFmpeg's legacy encoders reject the infinite GOP value used by modern codecs.
+      ctx->gop_size = 600;
+      ctx->keyint_min = 1;
+    } else if (encoder.flags & FIXED_GOP_SIZE) {
+      // Fixed GOP for encoders that don't support on-demand IDR (e.g. Media Foundation).
+      ctx->gop_size = 120;  // ~2 seconds at 60 FPS - larger to reduce oversized IDR frame frequency
+      ctx->keyint_min = 120;
+    } else {
+      // Use an infinite GOP length since I-frames are generated on demand.
+      ctx->gop_size = encoder.flags & LIMITED_GOP_SIZE ?
+                        std::numeric_limits<std::int16_t>::max() :
+                        std::numeric_limits<int>::max();
+      ctx->keyint_min = std::numeric_limits<int>::max();
+    }
+  }
+
+  /**
+   * @brief Create the hardware device context the encoder's frames are allocated from.
+   *
+   * @param platform_formats Platform formats of the encoder.
+   * @param encode_device Encode device of the session.
+   * @return Hardware device context, or an empty buffer on failure.
+   */
+  avcodec_buffer_t make_avcodec_hw_device(const encoder_platform_formats_avcodec &platform_formats, platf::avcodec_encode_device_t &encode_device) {
+    // Create the base hwdevice context
+    auto buf_or_error = platform_formats.init_avcodec_hardware_input_buffer(&encode_device);
+    if (buf_or_error.has_right()) {
+      return {};
+    }
+    avcodec_buffer_t encoding_stream_context = std::move(buf_or_error.left());
+
+    // If this encoder requires derivation from the base, derive the desired type
+    if (platform_formats.avcodec_derived_dev_type == AV_HWDEVICE_TYPE_NONE) {
+      return encoding_stream_context;
+    }
+
+    // Allow the hwdevice to prepare for this type of context to be derived
+    if (encode_device.prepare_to_derive_context(platform_formats.avcodec_derived_dev_type)) {
+      return {};
+    }
+
+    avcodec_buffer_t derived_context;
+    if (auto err = av_hwdevice_ctx_create_derived(&derived_context, platform_formats.avcodec_derived_dev_type, encoding_stream_context.get(), 0)) {
+      std::array<char, AV_ERROR_MAX_STRING_SIZE> err_str {0};
+      BOOST_LOG(error) << "Failed to derive device context: "sv << av_make_error_string(err_str.data(), AV_ERROR_MAX_STRING_SIZE, err);
+      return {};
+    }
+    return derived_context;
+  }
+
+  /**
+   * @brief Attach a hardware frame pool to a codec context.
+   *
+   * @param ctx Codec context to configure; its size and pixel format must already be set.
+   * @param inputs Encoder inputs of the session.
+   * @param encode_device Encode device of the session.
+   * @param reuse_hw_frames_ctx Hardware frame pool to reuse, or null to create a new one.
+   * @return True on success.
+   */
+  bool attach_avcodec_hw_frames(AVCodecContext *ctx, const avcodec_ctx_inputs_t &inputs, platf::avcodec_encode_device_t &encode_device, AVBufferRef *reuse_hw_frames_ctx) {
+    if (reuse_hw_frames_ctx) {
+      // Bitrate change: reuse the session's hardware frame pool so its frames stay valid
+      ctx->hw_frames_ctx = av_buffer_ref(reuse_hw_frames_ctx);
+      return true;
+    }
+
+    auto encoding_stream_context = make_avcodec_hw_device(*inputs.platform_formats, encode_device);
+    if (!encoding_stream_context) {
+      return false;
+    }
+
+    // Initialize avcodec hardware frames
+    avcodec_buffer_t frame_ref {av_hwframe_ctx_alloc(encoding_stream_context.get())};
+
+    auto frame_ctx = (AVHWFramesContext *) frame_ref->data;
+    frame_ctx->format = ctx->pix_fmt;
+    frame_ctx->sw_format = inputs.sw_fmt;
+    frame_ctx->height = ctx->height;
+    frame_ctx->width = ctx->width;
+    frame_ctx->initial_pool_size = 0;
+
+    // Allow the hwdevice to modify hwframe context parameters
+    encode_device.init_hwframes(frame_ctx);
+
+    if (auto err = av_hwframe_ctx_init(frame_ref.get()); err < 0) {
+      return false;
+    }
+
+    ctx->hw_frames_ctx = av_buffer_ref(frame_ref.get());
+    return true;
+  }
+
+  /**
+   * @brief Build the encoder options dictionary for a codec.
+   *
+   * @param video_format Codec of the encoder in use.
+   * @param config Stream configuration negotiated for the session.
+   * @param fallback Whether to add the codec's fallback options.
+   * @return Options dictionary, owned by the caller.
+   */
+  AVDictionary *make_avcodec_options(const encoder_t::codec_t &video_format, const config_t &config, bool fallback) {
+    AVDictionary *options {nullptr};
+    auto handle_option = [&options, &config](const encoder_t::option_t &option) {
+      std::visit(
+        util::overloaded {
+          [&options, &option](int v) {
+            av_dict_set_int(&options, option.name.c_str(), v, 0);
+          },
+          [&options, &option](int *v) {
+            av_dict_set_int(&options, option.name.c_str(), *v, 0);
+          },
+          [&options, &option](std::optional<int> *v) {
+            if (v->has_value()) {
+              av_dict_set_int(&options, option.name.c_str(), **v, 0);
+            }
+          },
+          [&options, &option](const std::function<int()> &v) {
+            av_dict_set_int(&options, option.name.c_str(), v(), 0);
+          },
+          [&options, &option](const std::string &v) {
+            av_dict_set(&options, option.name.c_str(), v.c_str(), 0);
+          },
+          [&options, &option](std::string *v) {
+            if (!v->empty()) {
+              av_dict_set(&options, option.name.c_str(), v->c_str(), 0);
+            }
+          },
+          [&options, &option, &config](const std::function<const std::string(const config_t &cfg)> &v) {
+            av_dict_set(&options, option.name.c_str(), v(config).c_str(), 0);
+          }
+        },
+        option.value
+      );
+    };
+
+    // Apply common options, then format-specific overrides
+    for (auto &option : video_format.common_options) {
+      handle_option(option);
+    }
+    for (auto &option : (config.dynamicRange ? video_format.hdr_options : video_format.sdr_options)) {
+      handle_option(option);
+    }
+    if (config.chromaSamplingType == 1) {
+      for (auto &option : (config.dynamicRange ? video_format.hdr444_options : video_format.sdr444_options)) {
+        handle_option(option);
+      }
+    }
+    if (fallback) {
+      for (auto &option : video_format.fallback_options) {
+        handle_option(option);
+      }
+    }
+    return options;
+  }
+
+  /**
+   * @brief Set the bitrate and rate-control buffer of a codec context.
+   *
+   * @param ctx Codec context to configure; its slice count must already be set.
+   * @param inputs Encoder inputs of the session.
+   * @param bitrate_kbps Target bitrate, in kbps.
+   */
+  void set_avcodec_rate_control(AVCodecContext *ctx, const avcodec_ctx_inputs_t &inputs, int bitrate_kbps) {
+    const auto &encoder = *inputs.encoder;
+    const auto &config = inputs.config;
+
+    auto bitrate = bitrate_kbps * 1000;
+    BOOST_LOG(info) << "Streaming bitrate is " << bitrate;
+    ctx->rc_max_rate = bitrate;
+    ctx->bit_rate = bitrate;
+
+    if (encoder.flags & CBR_WITH_VBR) {
+      // Ensure rc_max_bitrate != bit_rate to force VBR mode
+      ctx->bit_rate--;
+    } else {
+      ctx->rc_min_rate = bitrate;
+    }
+
+    if (encoder.flags & NO_RC_BUF_LIMIT) {
+      return;
+    }
+
+    if (is_legacy_video_format(config.videoFormat)) {
+      ctx->rc_buffer_size = bitrate;
+    } else if (!inputs.hardware && (ctx->slices > 1 || config.videoFormat == format_hevc)) {
+      // Use a larger rc_buffer_size for software encoding when slices are enabled,
+      // because libx264 can severely degrade quality if the buffer is too small.
+      // libx265 encounters this issue more frequently, so always scale the
+      // buffer by 1.5x for software HEVC encoding.
+      ctx->rc_buffer_size = bitrate / ((config.framerate * 10) / 15);
+    } else {
+      ctx->rc_buffer_size = bitrate / config.framerate;
+
+#ifndef __APPLE__
+      if (encoder.name == "nvenc" && config::video.nv_legacy.vbv_percentage_increase > 0) {
+        ctx->rc_buffer_size += ctx->rc_buffer_size * config::video.nv_legacy.vbv_percentage_increase / 100;
+      }
+#endif
+    }
+  }
+
+  /**
+   * @brief Set every codec context field except the options dictionary.
+   *
+   * @param ctx Freshly allocated codec context.
+   * @param inputs Encoder inputs of the session.
+   * @param bitrate_kbps Target bitrate, in kbps.
+   * @param encode_device Encode device of the session.
+   * @param reuse_hw_frames_ctx Hardware frame pool to reuse, or null to create a new one.
+   * @return True on success.
+   */
+  bool configure_avcodec_ctx(AVCodecContext *ctx, const avcodec_ctx_inputs_t &inputs, int bitrate_kbps, platf::avcodec_encode_device_t &encode_device, AVBufferRef *reuse_hw_frames_ctx) {
+    const auto &encoder = *inputs.encoder;
+    const auto &config = inputs.config;
+    const auto &video_format = encoder.codec_from_config(config);
+
+    ctx->width = config.width;
+    ctx->height = config.height;
+    const AVRational fps = video::framerate_to_rational(config);
+    ctx->framerate = fps;
+    ctx->time_base = AVRational {fps.den, fps.num};
+
+    if (const auto profile = select_avcodec_profile(video_format, config); profile != AV_PROFILE_UNKNOWN) {
+      ctx->profile = profile;
+    }
+
+    // B-frames delay decoder output, so never use them
+    ctx->max_b_frames = 0;
+
+    set_avcodec_gop(ctx, encoder, config);
+
+    // Some client decoders have limits on the number of reference frames
+    if (config.numRefFrames && video_format[encoder_t::REF_FRAMES_RESTRICT]) {
+      ctx->refs = config.numRefFrames;
+    } else if (config.numRefFrames) {
+      BOOST_LOG(warning) << "Client requested reference frame limit, but encoder doesn't support it!"sv;
+    }
+
+    // We forcefully reset the flags to avoid clash on reuse of AVCodecContext
+    ctx->flags = 0;
+    ctx->flags |= AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY;
+
+    ctx->flags2 |= AV_CODEC_FLAG2_FAST;
+
+    auto avcodec_colorspace = avcodec_colorspace_from_sunshine_colorspace(encode_device.colorspace);
+
+    ctx->color_range = avcodec_colorspace.range;
+    ctx->color_primaries = avcodec_colorspace.primaries;
+    ctx->color_trc = avcodec_colorspace.transfer_function;
+    ctx->colorspace = avcodec_colorspace.matrix;
+
+    // Used by cbs::make_sps_hevc
+    ctx->sw_pix_fmt = inputs.sw_fmt;
+
+    if (inputs.hardware) {
+      ctx->pix_fmt = inputs.platform_formats->avcodec_dev_pix_fmt;
+      if (!attach_avcodec_hw_frames(ctx, inputs, encode_device, reuse_hw_frames_ctx)) {
+        return false;
+      }
+      ctx->slices = config.slicesPerFrame;
+    } else /* software */ {
+      ctx->pix_fmt = inputs.sw_fmt;
+
+      // Clients will request for the fewest slices per frame to get the
+      // most efficient encode, but we may want to provide more slices than
+      // requested to ensure we have enough parallelism for good performance.
+      ctx->slices = std::max(config.slicesPerFrame, config::video.min_threads);
+    }
+
+    if (encoder.flags & SINGLE_SLICE_ONLY) {
+      ctx->slices = 1;
+    }
+
+    ctx->thread_type = FF_THREAD_SLICE;
+    ctx->thread_count = ctx->slices;
+
+    set_avcodec_rate_control(ctx, inputs, bitrate_kbps);
+
+    if ((encoder.flags & RELAXED_COMPLIANCE) || config.videoFormat == format_h263p) {
+      ctx->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Allocate, configure and open an FFmpeg codec context for an encode session.
+   *
+   * @param inputs Encoder inputs of the session.
+   * @param bitrate_kbps Target bitrate, in kbps.
+   * @param encode_device Encode device of the session.
+   * @param reuse_hw_frames_ctx Hardware frame pool to reuse, or null to create a new one.
+   * @return Opened codec context, or an empty context on failure.
+   */
+  avcodec_ctx_t build_avcodec_ctx(const avcodec_ctx_inputs_t &inputs, int bitrate_kbps, platf::avcodec_encode_device_t &encode_device, AVBufferRef *reuse_hw_frames_ctx) {
+    const auto &video_format = inputs.encoder->codec_from_config(inputs.config);
+
+    // Allow up to 1 retry to apply the set of fallback options.
+    //
+    // Note: If we later end up needing multiple sets of
+    // fallback options, we may need to allow more retries
+    // to try applying each set.
+    for (int retries = 0; retries < 2; retries++) {
+      avcodec_ctx_t ctx {avcodec_alloc_context3(inputs.codec)};
+      if (!configure_avcodec_ctx(ctx.get(), inputs, bitrate_kbps, encode_device, reuse_hw_frames_ctx)) {
+        return {};
+      }
+
+      AVDictionary *options = make_avcodec_options(video_format, inputs.config, retries > 0);
+
+      // Allow the encoding device a final opportunity to set/unset or override any options
+      encode_device.init_codec_options(ctx.get(), &options);
+
+      auto status = avcodec_open2(ctx.get(), inputs.codec, &options);
+      av_dict_free(&options);
+      if (!status) {
+        // Successfully opened the codec
+        return ctx;
+      }
+
+      std::array<char, AV_ERROR_MAX_STRING_SIZE> err_str {0};
+      if (video_format.fallback_options.empty() || retries > 0) {
+        BOOST_LOG(error)
+          << "Could not open codec ["sv
+          << video_format.name << "]: "sv
+          << av_make_error_string(err_str.data(), AV_ERROR_MAX_STRING_SIZE, status);
+        return {};
+      }
+
+      BOOST_LOG(info)
+        << "Retrying with fallback configuration options for ["sv << video_format.name << "] after error: "sv
+        << av_make_error_string(err_str.data(), AV_ERROR_MAX_STRING_SIZE, status);
+    }
+
+    return {};
+  }
+
+  /**
    * @brief Create an AVCodec encode session.
    *
    * @param disp Display being encoded.
@@ -2288,276 +2765,18 @@ namespace video {
       sw_fmt = AV_PIX_FMT_YUV420P;
     }
 
-    // Allow up to 1 retry to apply the set of fallback options.
-    //
-    // Note: If we later end up needing multiple sets of
-    // fallback options, we may need to allow more retries
-    // to try applying each set.
-    avcodec_ctx_t ctx;
-    for (int retries = 0; retries < 2; retries++) {
-      ctx.reset(avcodec_alloc_context3(codec));
-      ctx->width = config.width;
-      ctx->height = config.height;
-      const AVRational fps = video::framerate_to_rational(config);
-      ctx->framerate = fps;
-      ctx->time_base = AVRational {fps.den, fps.num};
-
-      switch (config.videoFormat) {
-        case format_h264:
-          // 10-bit h264 encoding is not supported by our streaming protocol
-          assert(!config.dynamicRange);
-          ctx->profile = select_h264_profile(video_format.name, config, config::video.amd.amd_coder);
-          break;
-
-        case format_hevc:
-          if (config.chromaSamplingType == 1) {
-            // HEVC uses the same RExt profile for both 8 and 10 bit YUV 4:4:4 encoding
-            ctx->profile = AV_PROFILE_HEVC_REXT;
-          } else {
-            ctx->profile = config.dynamicRange ? AV_PROFILE_HEVC_MAIN_10 : AV_PROFILE_HEVC_MAIN;
-          }
-          break;
-
-        case format_av1:
-          // AV1 supports both 8 and 10 bit encoding with the same Main profile
-          // but YUV 4:4:4 sampling requires High profile
-          ctx->profile = (config.chromaSamplingType == 1) ? AV_PROFILE_AV1_HIGH : AV_PROFILE_AV1_MAIN;
-          break;
-
-        case format_mpeg2:
-          ctx->profile = AV_PROFILE_MPEG2_MAIN;
-          break;
-
-        case format_h263p:
-          break;
-      }
-
-      // B-frames delay decoder output, so never use them
-      ctx->max_b_frames = 0;
-
-      if (is_legacy_video_format(config.videoFormat)) {
-        // FFmpeg's legacy encoders reject the infinite GOP value used by modern codecs.
-        ctx->gop_size = 600;
-        ctx->keyint_min = 1;
-      } else if (encoder.flags & FIXED_GOP_SIZE) {
-        // Fixed GOP for encoders that don't support on-demand IDR (e.g. Media Foundation).
-        ctx->gop_size = 120;  // ~2 seconds at 60 FPS - larger to reduce oversized IDR frame frequency
-        ctx->keyint_min = 120;
-      } else {
-        // Use an infinite GOP length since I-frames are generated on demand.
-        ctx->gop_size = encoder.flags & LIMITED_GOP_SIZE ?
-                          std::numeric_limits<std::int16_t>::max() :
-                          std::numeric_limits<int>::max();
-        ctx->keyint_min = std::numeric_limits<int>::max();
-      }
-
-      // Some client decoders have limits on the number of reference frames
-      if (config.numRefFrames) {
-        if (video_format[encoder_t::REF_FRAMES_RESTRICT]) {
-          ctx->refs = config.numRefFrames;
-        } else {
-          BOOST_LOG(warning) << "Client requested reference frame limit, but encoder doesn't support it!"sv;
-        }
-      }
-
-      // We forcefully reset the flags to avoid clash on reuse of AVCodecContext
-      ctx->flags = 0;
-      ctx->flags |= AV_CODEC_FLAG_CLOSED_GOP | AV_CODEC_FLAG_LOW_DELAY;
-
-      ctx->flags2 |= AV_CODEC_FLAG2_FAST;
-
-      auto avcodec_colorspace = avcodec_colorspace_from_sunshine_colorspace(colorspace);
-
-      ctx->color_range = avcodec_colorspace.range;
-      ctx->color_primaries = avcodec_colorspace.primaries;
-      ctx->color_trc = avcodec_colorspace.transfer_function;
-      ctx->colorspace = avcodec_colorspace.matrix;
-
-      // Used by cbs::make_sps_hevc
-      ctx->sw_pix_fmt = sw_fmt;
-
-      if (hardware) {
-        avcodec_buffer_t encoding_stream_context;
-
-        ctx->pix_fmt = platform_formats->avcodec_dev_pix_fmt;
-
-        // Create the base hwdevice context
-        auto buf_or_error = platform_formats->init_avcodec_hardware_input_buffer(encode_device.get());
-        if (buf_or_error.has_right()) {
-          return nullptr;
-        }
-        encoding_stream_context = std::move(buf_or_error.left());
-
-        // If this encoder requires derivation from the base, derive the desired type
-        if (platform_formats->avcodec_derived_dev_type != AV_HWDEVICE_TYPE_NONE) {
-          avcodec_buffer_t derived_context;
-
-          // Allow the hwdevice to prepare for this type of context to be derived
-          if (encode_device->prepare_to_derive_context(platform_formats->avcodec_derived_dev_type)) {
-            return nullptr;
-          }
-
-          auto err = av_hwdevice_ctx_create_derived(&derived_context, platform_formats->avcodec_derived_dev_type, encoding_stream_context.get(), 0);
-          if (err) {
-            std::array<char, AV_ERROR_MAX_STRING_SIZE> err_str {0};
-            BOOST_LOG(error) << "Failed to derive device context: "sv << av_make_error_string(err_str.data(), AV_ERROR_MAX_STRING_SIZE, err);
-
-            return nullptr;
-          }
-
-          encoding_stream_context = std::move(derived_context);
-        }
-
-        // Initialize avcodec hardware frames
-        {
-          avcodec_buffer_t frame_ref {av_hwframe_ctx_alloc(encoding_stream_context.get())};
-
-          auto frame_ctx = (AVHWFramesContext *) frame_ref->data;
-          frame_ctx->format = ctx->pix_fmt;
-          frame_ctx->sw_format = sw_fmt;
-          frame_ctx->height = ctx->height;
-          frame_ctx->width = ctx->width;
-          frame_ctx->initial_pool_size = 0;
-
-          // Allow the hwdevice to modify hwframe context parameters
-          encode_device->init_hwframes(frame_ctx);
-
-          if (auto err = av_hwframe_ctx_init(frame_ref.get()); err < 0) {
-            return nullptr;
-          }
-
-          ctx->hw_frames_ctx = av_buffer_ref(frame_ref.get());
-        }
-
-        ctx->slices = config.slicesPerFrame;
-      } else /* software */ {
-        ctx->pix_fmt = sw_fmt;
-
-        // Clients will request for the fewest slices per frame to get the
-        // most efficient encode, but we may want to provide more slices than
-        // requested to ensure we have enough parallelism for good performance.
-        ctx->slices = std::max(config.slicesPerFrame, config::video.min_threads);
-      }
-
-      if (encoder.flags & SINGLE_SLICE_ONLY) {
-        ctx->slices = 1;
-      }
-
-      ctx->thread_type = FF_THREAD_SLICE;
-      ctx->thread_count = ctx->slices;
-
-      AVDictionary *options {nullptr};
-      auto handle_option = [&options, &config](const encoder_t::option_t &option) {
-        std::visit(
-          util::overloaded {
-            [&options, &option](int v) {
-              av_dict_set_int(&options, option.name.c_str(), v, 0);
-            },
-            [&options, &option](int *v) {
-              av_dict_set_int(&options, option.name.c_str(), *v, 0);
-            },
-            [&options, &option](std::optional<int> *v) {
-              if (v->has_value()) {
-                av_dict_set_int(&options, option.name.c_str(), **v, 0);
-              }
-            },
-            [&options, &option](const std::function<int()> &v) {
-              av_dict_set_int(&options, option.name.c_str(), v(), 0);
-            },
-            [&options, &option](const std::string &v) {
-              av_dict_set(&options, option.name.c_str(), v.c_str(), 0);
-            },
-            [&options, &option](std::string *v) {
-              if (!v->empty()) {
-                av_dict_set(&options, option.name.c_str(), v->c_str(), 0);
-              }
-            },
-            [&options, &option, &config](const std::function<const std::string(const config_t &cfg)> &v) {
-              av_dict_set(&options, option.name.c_str(), v(config).c_str(), 0);
-            }
-          },
-          option.value
-        );
-      };
-
-      // Apply common options, then format-specific overrides
-      for (auto &option : video_format.common_options) {
-        handle_option(option);
-      }
-      for (auto &option : (config.dynamicRange ? video_format.hdr_options : video_format.sdr_options)) {
-        handle_option(option);
-      }
-      if (config.chromaSamplingType == 1) {
-        for (auto &option : (config.dynamicRange ? video_format.hdr444_options : video_format.sdr444_options)) {
-          handle_option(option);
-        }
-      }
-      if (retries > 0) {
-        for (auto &option : video_format.fallback_options) {
-          handle_option(option);
-        }
-      }
-
-      auto bitrate = ((config::video.max_bitrate > 0) ? std::min(config.bitrate, config::video.max_bitrate) : config.bitrate) * 1000;
-      BOOST_LOG(info) << "Streaming bitrate is " << bitrate;
-      ctx->rc_max_rate = bitrate;
-      ctx->bit_rate = bitrate;
-
-      if (encoder.flags & CBR_WITH_VBR) {
-        // Ensure rc_max_bitrate != bit_rate to force VBR mode
-        ctx->bit_rate--;
-      } else {
-        ctx->rc_min_rate = bitrate;
-      }
-
-      if ((encoder.flags & RELAXED_COMPLIANCE) || config.videoFormat == format_h263p) {
-        ctx->strict_std_compliance = FF_COMPLIANCE_UNOFFICIAL;
-      }
-
-      if (!(encoder.flags & NO_RC_BUF_LIMIT)) {
-        if (is_legacy_video_format(config.videoFormat)) {
-          ctx->rc_buffer_size = bitrate;
-        } else if (!hardware && (ctx->slices > 1 || config.videoFormat == format_hevc)) {
-          // Use a larger rc_buffer_size for software encoding when slices are enabled,
-          // because libx264 can severely degrade quality if the buffer is too small.
-          // libx265 encounters this issue more frequently, so always scale the
-          // buffer by 1.5x for software HEVC encoding.
-          ctx->rc_buffer_size = bitrate / ((config.framerate * 10) / 15);
-        } else {
-          ctx->rc_buffer_size = bitrate / config.framerate;
-
-#ifndef __APPLE__
-          if (encoder.name == "nvenc" && config::video.nv_legacy.vbv_percentage_increase > 0) {
-            ctx->rc_buffer_size += ctx->rc_buffer_size * config::video.nv_legacy.vbv_percentage_increase / 100;
-          }
-#endif
-        }
-      }
-
-      // Allow the encoding device a final opportunity to set/unset or override any options
-      encode_device->init_codec_options(ctx.get(), &options);
-
-      if (auto status = avcodec_open2(ctx.get(), codec, &options)) {
-        std::array<char, AV_ERROR_MAX_STRING_SIZE> err_str {0};
-
-        if (!video_format.fallback_options.empty() && retries == 0) {
-          BOOST_LOG(info)
-            << "Retrying with fallback configuration options for ["sv << video_format.name << "] after error: "sv
-            << av_make_error_string(err_str.data(), AV_ERROR_MAX_STRING_SIZE, status);
-
-          continue;
-        } else {
-          BOOST_LOG(error)
-            << "Could not open codec ["sv
-            << video_format.name << "]: "sv
-            << av_make_error_string(err_str.data(), AV_ERROR_MAX_STRING_SIZE, status);
-
-          return nullptr;
-        }
-      }
-
-      // Successfully opened the codec
-      break;
+    const avcodec_ctx_inputs_t inputs {
+      .encoder = &encoder,
+      .platform_formats = platform_formats,
+      .codec = codec,
+      .config = config,
+      .sw_fmt = sw_fmt,
+      .hardware = hardware,
+    };
+    const int bitrate_kbps = config::video.max_bitrate > 0 ? std::min(config.bitrate, config::video.max_bitrate) : config.bitrate;
+    auto ctx = build_avcodec_ctx(inputs, bitrate_kbps, *encode_device, nullptr);
+    if (!ctx) {
+      return nullptr;
     }
 
     avcodec_frame_t frame {av_frame_alloc()};
@@ -2632,6 +2851,8 @@ namespace video {
       config.videoFormat <= 1 ? (1 - static_cast<int>(video_format[encoder_t::VUI_PARAMETERS])) * (1 + config.videoFormat) : 0
     );
 
+    session->reconfigure_inputs = inputs;
+
     return session;
   }
 
@@ -2692,9 +2913,39 @@ namespace video {
   }
 
   /**
+   * @brief Apply a pending bitrate change to an encode session.
+   *
+   * @param session Encode session that receives the change.
+   * @param bitrate_change_events Event carrying new target bitrates, in kbps.
+   * @param bitrate_kbps Last target the session accepted, kept across encoder reinitializations.
+   */
+  void apply_bitrate_changes(encode_session_t &session, const safe::mail_raw_t::event_t<int> &bitrate_change_events, std::optional<int> &bitrate_kbps) {
+    // The event holds only the latest target, so one change at most is pending
+    if (auto kbps = bitrate_change_events->try_pop(); kbps.has_value() && session.set_bitrate(*kbps)) {
+      bitrate_kbps = *kbps;
+    }
+  }
+
+  /**
+   * @brief Carry an adaptive bitrate over to a newly created encode session.
+   *
+   * Encoders are created at the negotiated bitrate, so after a reinitialization the
+   * last target accepted by the previous encoder is applied again.
+   *
+   * @param session Newly created encode session.
+   * @param bitrate_kbps Last target accepted by the previous encode session, if any.
+   */
+  void restore_bitrate(encode_session_t &session, const std::optional<int> &bitrate_kbps) {
+    if (bitrate_kbps.has_value()) {
+      session.set_bitrate(*bitrate_kbps);
+    }
+  }
+
+  /**
    * @brief Run one encode loop for a display capture stream.
    *
    * @param frame_nr Frame counter updated as frames are encoded.
+   * @param bitrate_kbps Last adaptive bitrate accepted by the encoder, kept across reinitializations.
    * @param mail Session mail bus.
    * @param images Captured image event source.
    * @param config Video configuration.
@@ -2706,6 +2957,7 @@ namespace video {
    */
   void encode_run(
     int &frame_nr,  // Store progress of the frame number
+    std::optional<int> &bitrate_kbps,
     safe::mail_t mail,
     img_event_t images,
     config_t config,
@@ -2719,6 +2971,7 @@ namespace video {
     if (!session) {
       return;
     }
+    restore_bitrate(*session, bitrate_kbps);
 
     // As a workaround for NVENC hangs and to generally speed up encoder reinit,
     // we will complete the encoder teardown in a separate thread if supported.
@@ -2746,6 +2999,7 @@ namespace video {
     auto packets = mail::man->queue<packet_t>(mail::video_packets);
     auto idr_events = mail->event<bool>(mail::idr);
     auto invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+    auto bitrate_change_events = mail->event<int>(mail::bitrate_change);
 
     {
       // Load a dummy image into the AVFrame to ensure we have something to encode
@@ -2766,6 +3020,8 @@ namespace video {
           session->invalidate_ref_frames(frames->first, frames->second);
         }
       }
+
+      apply_bitrate_changes(*session, bitrate_change_events, bitrate_kbps);
 
       if (idr_events->peek()) {
         requested_idr_frame = true;
@@ -2959,6 +3215,7 @@ namespace video {
     if (!session) {
       return std::nullopt;
     }
+    restore_bitrate(*session, ctx.bitrate_kbps);
 
     // Load the initial image to prepare for encoding
     if (session->convert(img)) {
@@ -3079,6 +3336,8 @@ namespace video {
             ctx->idr_events->pop();
           }
 
+          apply_bitrate_changes(*pos->session, ctx->bitrate_change_events, ctx->bitrate_kbps);
+
           if (frame_captured && pos->session->convert(*captured_image)) {
             BOOST_LOG(error) << "Could not convert image"sv;
             ctx->shutdown_event->raise(true);
@@ -3198,6 +3457,7 @@ namespace video {
     }
 
     int frame_nr = 1;
+    std::optional<int> bitrate_kbps;
 
     auto touch_port_event = mail->event<input::touch_port_t>(mail::touch_port);
     auto hdr_event = mail->event<hdr_info_t>(mail::hdr);
@@ -3243,6 +3503,7 @@ namespace video {
 
       encode_run(
         frame_nr,
+        bitrate_kbps,
         mail,
         images,
         config,
@@ -3292,10 +3553,12 @@ namespace video {
         std::move(idr_events),
         mail->event<hdr_info_t>(mail::hdr),
         mail->event<input::touch_port_t>(mail::touch_port),
+        mail->event<int>(mail::bitrate_change),
         config,
         encoder,
         1,
         channel_data,
+        std::nullopt,
       });
 
       // Wait for join signal

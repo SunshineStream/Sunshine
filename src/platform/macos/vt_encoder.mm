@@ -71,6 +71,7 @@ namespace {
         BOOST_LOG(info) << "VideoToolbox low-latency rate control is unavailable; using standard rate control"sv;
       }
       BOOST_LOG(info) << "VideoToolbox session uses "sv << (low_latency ? "low-latency"sv : "standard"sv) << " rate control"sv;
+      low_latency_rate_control = low_latency;
 
       set_property(kVTCompressionPropertyKey_RealTime, config::video.vt.vt_realtime ? kCFBooleanTrue : kCFBooleanFalse, "RealTime"sv);
       set_property(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse, "AllowFrameReordering"sv);
@@ -191,7 +192,29 @@ namespace {
       return result;
     }
 
+    /**
+     * @brief Change the target bitrate of the running session.
+     *
+     * @param bitrate_kbps New target bitrate, in kbps.
+     * @return True when VideoToolbox accepted the new bitrate.
+     */
+    bool set_bitrate(int bitrate_kbps) {
+      if (!session) {
+        return false;
+      }
+      const bool ok = set_int_property(kVTCompressionPropertyKey_AverageBitRate, bitrate_kbps * 1000, "AverageBitRate"sv);
+      if (!low_latency_rate_control) {
+        set_data_rate_limit(static_cast<std::int64_t>(bitrate_kbps) * 1000 / 8);
+      }
+      if (ok) {
+        BOOST_LOG(info) << "Encoder bitrate changed to "sv << bitrate_kbps << " kbps"sv;
+      }
+      return ok;
+    }
+
   private:
+    bool low_latency_rate_control = false;  ///< Whether the session uses low-latency rate control.
+
     static void output_callback(void *refcon, void *, OSStatus status, VTEncodeInfoFlags flags, CMSampleBufferRef sample_buffer) {
       auto self = static_cast<vt_compression_session_t *>(refcon);
       std::lock_guard lg {self->mutex};
@@ -405,6 +428,10 @@ namespace {
         return {};
       }
       return session->encode(pixel_buffer->buf, frame_index, force_idr);
+    }
+
+    bool set_bitrate(int bitrate_kbps) override {
+      return session && session->set_bitrate(bitrate_kbps);
     }
 
   private:

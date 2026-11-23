@@ -60,6 +60,16 @@
         "refresh_rate_only": []
       },
       "max_bitrate": 0,
+      "bitrate_mode": "fixed",
+      "abr_rtt_threshold_ms": 100,
+      "abr_margin_ms": 20,
+      "abr_hysteresis_ms": 2000,
+      "abr_stable_time_ms": 1000,
+      "abr_beta": 0.7,
+      "abr_cubic_recovery_ms": 15000,
+      "abr_fast_convergence": "enabled",
+      "abr_min_kbps": 1000,
+      "abr_max_kbps": 0,
       "max_stream_resolution": "",
       "minimum_fps_target": 0
     }

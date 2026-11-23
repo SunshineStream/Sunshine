@@ -19,6 +19,7 @@
 
   // local includes
   #include <src/platform/macos/vt_encoder.h>
+  #include <src/video.h>
 
 namespace {
   /**
@@ -315,5 +316,31 @@ TEST(VTEncoder, H264ExpectedFrameRateWithinLevel52IsUnchanged) {
 TEST(VTEncoder, OtherCodecsAndInvalidSizesAreNotCapped) {
   EXPECT_EQ(platf::vt::expected_frame_rate(kCMVideoCodecType_HEVC, 3840, 2160, 120), 120);
   EXPECT_EQ(platf::vt::expected_frame_rate(kCMVideoCodecType_H264, 0, 2160, 120), 120);
+}
+
+/**
+ * @brief The bitrate of a running compression session can be changed in place.
+ */
+TEST(VTEncoder, ChangesTheBitrateOfARunningSession) {
+  auto device = platf::vt::make_encode_device(platf::pix_fmt_e::nv12, [](int, int) {
+  },
+                                              [](int) {
+                                              });
+  ASSERT_TRUE(device);
+  EXPECT_FALSE(device->set_bitrate(5000)) << "No session exists before init_encoder";
+
+  video::config_t config {};
+  config.width = 1280;
+  config.height = 720;
+  config.framerate = 60;
+  config.bitrate = 10000;
+  config.videoFormat = 0;
+  const video::sunshine_colorspace_t colorspace {video::colorspace_e::rec709, false, 8};
+  if (!device->init_encoder(config, colorspace)) {
+    GTEST_SKIP() << "No VideoToolbox hardware encoder available";
+  }
+
+  EXPECT_TRUE(device->set_bitrate(5000));
+  EXPECT_TRUE(device->set_bitrate(10000));
 }
 #endif

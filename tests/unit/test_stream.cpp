@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -20,12 +21,16 @@
 #include <rs.h>
 
 // local includes
+#include <src/bitrate_controller.h>
+#include <src/config.h>
 #include <src/network.h>
+#include <src/utility.h>
 
 namespace stream {
   std::vector<uint8_t> concat_and_insert(uint64_t insert_size, uint64_t slice_size, const std::string_view &data1, const std::string_view &data2);
   std::optional<std::pair<std::uint16_t, std::string_view>> parse_control_packet(const ENetPacket &packet);
   bool test_receive_ping_endpoints(bool session_id_pings);
+  std::unique_ptr<bitrate::bitrate_controller_t> make_bitrate_controller(int negotiated_kbps);
 
   namespace fec {
     /**
@@ -137,4 +142,79 @@ TEST(ControlPacketTests, AcceptsTypeAndPayload) {
   ASSERT_TRUE(message);
   EXPECT_EQ(message->first, 0x0206);
   EXPECT_EQ(message->second, "abc");
+}
+
+namespace {
+  /**
+   * @brief Restores the stream and video settings changed by an adaptive bitrate test.
+   */
+  class StreamBitrateControllerTest: public BaseTest {
+  protected:
+    /**
+     * @brief Restore the saved settings.
+     */
+    void TearDown() override {
+      config::stream = original_stream;
+      config::video.max_bitrate = original_max_bitrate;
+      BaseTest::TearDown();
+    }
+
+  private:
+    config::stream_t original_stream = config::stream;  ///< Stream settings before the test.
+    int original_max_bitrate = config::video.max_bitrate;  ///< Host bitrate ceiling before the test.
+  };
+}  // namespace
+
+/**
+ * @brief Fixed bitrate mode does not create a controller.
+ */
+TEST_F(StreamBitrateControllerTest, FixedModeHasNoController) {
+  config::stream.bitrate_mode = "fixed";
+  EXPECT_EQ(stream::make_bitrate_controller(20000), nullptr);
+}
+
+/**
+ * @brief Adaptive mode starts from the negotiated bitrate.
+ */
+TEST_F(StreamBitrateControllerTest, AdaptiveModeStartsAtTheNegotiatedBitrate) {
+  config::stream.bitrate_mode = "adaptive";
+  config::video.max_bitrate = 0;
+  const auto controller = stream::make_bitrate_controller(20000);
+  ASSERT_NE(controller, nullptr);
+  EXPECT_EQ(controller->current_target_kbps(), 20000);
+}
+
+/**
+ * @brief Adaptive mode starts from the host bitrate ceiling when it is lower than the negotiated bitrate.
+ */
+TEST_F(StreamBitrateControllerTest, AdaptiveModeStartsAtTheHostCeiling) {
+  config::stream.bitrate_mode = "adaptive";
+  config::video.max_bitrate = 8000;
+  const auto controller = stream::make_bitrate_controller(20000);
+  ASSERT_NE(controller, nullptr);
+  EXPECT_EQ(controller->current_target_kbps(), 8000);
+}
+
+/**
+ * @brief The controller uses the configured tuning parameters.
+ */
+TEST_F(StreamBitrateControllerTest, AdaptiveModeUsesTheConfiguredParameters) {
+  config::stream.bitrate_mode = "adaptive";
+  config::video.max_bitrate = 0;
+  config::stream.abr_rtt_threshold_ms = 50;
+  config::stream.abr_hysteresis_ms = 500;
+  config::stream.abr_beta = 0.5;
+  config::stream.abr_min_kbps = 6000;
+  const auto controller = stream::make_bitrate_controller(20000);
+  ASSERT_NE(controller, nullptr);
+
+  std::vector<int> changes;
+  std::chrono::steady_clock::time_point now {};
+  for (int i = 0; i < 200; ++i) {
+    now += std::chrono::milliseconds {16};
+    if (auto target = controller->on_sample(now, 60); target.has_value()) {
+      changes.push_back(*target);
+    }
+  }
+  EXPECT_EQ(changes, (std::vector {10000, 6000}));
 }
