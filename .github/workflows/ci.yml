@@ -44,7 +44,7 @@ jobs:
 
       - name: Release Setup
         id: release-setup
-        uses: LizardByte/actions/actions/release_setup@5cffab388578559f85fa83c6f7bfff244e06600d  # v2026.1108.210022
+        uses: LizardByte/actions/actions/release_setup@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -327,7 +327,7 @@ jobs:
         run: ls -l artifacts
 
       - name: Create/Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@5cffab388578559f85fa83c6f7bfff244e06600d  # v2026.1108.210022
+        uses: LizardByte/actions/actions/release_create@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           allowUpdates: false
           body: ${{ needs.release-setup.outputs.release_body }}

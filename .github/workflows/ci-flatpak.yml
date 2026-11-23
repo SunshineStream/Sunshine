@@ -35,7 +35,7 @@ jobs:
     steps:
       - name: More space
         if: matrix.arch == 'x86_64'
-        uses: LizardByte/actions/actions/more_space@5cffab388578559f85fa83c6f7bfff244e06600d  # v2026.1108.210022
+        uses: LizardByte/actions/actions/more_space@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           analyze-space-savings: true
           clean-all: true
