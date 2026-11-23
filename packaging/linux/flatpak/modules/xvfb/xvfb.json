@@ -47,8 +47,8 @@
             "versioning": "regex:^libxcvt-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
           },
           "url": "https://github.com/LizardByte-infrastructure/libxcvt.git",
-          "tag": "libxcvt-0.1.2",
-          "commit": "d9ca87eea9eecddaccc3a77227bcb3acf84e89df",
+          "tag": "libxcvt-0.1.3",
+          "commit": "dd8631c61465cc0de5e476c7a98e56528d62b163",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 235147,
