@@ -116,6 +116,26 @@ TEST(VideoFormatMappingTest, MapsSupportedPixelFormatsAndRejectsUnsupportedOnes)
   }
 }
 
+/**
+ * @brief Each supported video format selects its matching encoder codec descriptor.
+ */
+TEST(VideoCodecSelectionTest, SelectsModernAndLegacyCodecDescriptors) {
+  video::encoder_t encoder {};
+  const std::array cases {
+    std::pair {video::format_h264, &video::encoder_t::h264},
+    std::pair {video::format_hevc, &video::encoder_t::hevc},
+    std::pair {video::format_av1, &video::encoder_t::av1},
+    std::pair {video::format_mpeg2, &video::encoder_t::mpeg2},
+    std::pair {video::format_h263p, &video::encoder_t::h263p},
+  };
+
+  for (const auto &[format, codec] : cases) {
+    video::config_t config {};
+    config.videoFormat = format;
+    EXPECT_EQ(&encoder.codec_from_config(config), &(encoder.*codec)) << format;
+  }
+}
+
 struct EncoderTest: PlatformTestSuite, testing::WithParamInterface<video::encoder_t *> {
   void SetUp() override {
     BaseTest::SetUp();
@@ -231,6 +251,8 @@ TEST_P(DynamicRangeTest, Resolve) {
     {},
     {},
     {},
+    {},
+    {},
     0,
   };
   encoder.h264.name = "h264_test";
@@ -292,7 +314,7 @@ struct EncoderProbeResultsTest: testing::Test {
 };
 
 TEST_F(EncoderProbeResultsTest, FailedCodecProbeDoesNotPublishCapabilities) {
-  video::encoder_t encoder {"test"sv, {}, {}, {}, {}, 0};
+  video::encoder_t encoder {"test"sv, {}, {}, {}, {}, {}, {}, 0};
   for (auto *codec : {&encoder.h264, &encoder.hevc, &encoder.av1}) {
     (*codec)[video::encoder_t::PASSED] = false;
     (*codec)[video::encoder_t::YUV444] = true;
@@ -311,7 +333,7 @@ TEST_F(EncoderProbeResultsTest, FailedCodecProbeDoesNotPublishCapabilities) {
 
 TEST_F(EncoderProbeResultsTest, SubsequentProbeReplacesPriorResults) {
   constexpr uint32_t ref_frames_invalidation = 1 << 8;  // Mirrors REF_FRAMES_INVALIDATION in video.cpp.
-  video::encoder_t first {"first"sv, {}, {}, {}, {}, ref_frames_invalidation};
+  video::encoder_t first {"first"sv, {}, {}, {}, {}, {}, {}, ref_frames_invalidation};
   for (auto *codec : {&first.h264, &first.hevc, &first.av1}) {
     (*codec)[video::encoder_t::PASSED] = true;
     (*codec)[video::encoder_t::YUV444] = true;
@@ -320,7 +342,7 @@ TEST_F(EncoderProbeResultsTest, SubsequentProbeReplacesPriorResults) {
   }
 
   // The second encoder only supports plain 8-bit 4:2:0 H.264.
-  video::encoder_t second {"second"sv, {}, {}, {}, {}, 0};
+  video::encoder_t second {"second"sv, {}, {}, {}, {}, {}, {}, 0};
   second.h264[video::encoder_t::PASSED] = true;
 
   video::record_encoder_probe_results(first);
@@ -429,6 +451,34 @@ INSTANTIATE_TEST_SUITE_P(
     AmfMaxAuSizeConfigParam {"amd_max_au_size = 2147483647\n"sv, std::numeric_limits<int>::max()}
   )
 );
+
+/**
+ * @brief The software backend probes MPEG-2 even when its H.264 encoder is unavailable.
+ */
+TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedMpeg2) {
+  const auto h264_name = video::software.h264.name;
+  auto restore = util::fail_guard([&] {
+    video::software.h264.name = h264_name;
+  });
+  video::software.h264.name = "unavailable_h264_encoder";
+
+  ASSERT_TRUE(video::validate_legacy_codec(video::software, video::format_mpeg2));
+  EXPECT_TRUE(video::software.mpeg2[video::encoder_t::PASSED]);
+}
+
+/**
+ * @brief The software backend probes H.263+ even when its H.264 encoder is unavailable.
+ */
+TEST_F(PlatformTestSuite, SoftwareEncoderSupportsForcedH263Plus) {
+  const auto h264_name = video::software.h264.name;
+  auto restore = util::fail_guard([&] {
+    video::software.h264.name = h264_name;
+  });
+  video::software.h264.name = "unavailable_h264_encoder";
+
+  ASSERT_TRUE(video::validate_legacy_codec(video::software, video::format_h263p));
+  EXPECT_TRUE(video::software.h263p[video::encoder_t::PASSED]);
+}
 
 struct FramerateX100Test: BaseTest, testing::WithParamInterface<std::tuple<std::int32_t, AVRational>> {};
 

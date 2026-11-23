@@ -28,6 +28,7 @@ extern "C" {
 #include "input.h"
 #include "logging.h"
 #include "network.h"
+#include "nvhttp.h"
 #include "rtsp.h"
 #include "stream.h"
 #include "sync.h"
@@ -41,6 +42,23 @@ using asio::ip::udp;
 using namespace std::literals;
 
 namespace rtsp_stream {
+  std::string describe_video_codecs(uint32_t codec_modes) {
+    std::string result;
+    if (codec_modes & SCM_MASK_HEVC) {
+      result += "sprop-parameter-sets=AAAAAU\r\n";
+    }
+    if (codec_modes & SCM_MASK_AV1) {
+      result += "a=rtpmap:98 AV1/90000\r\n";
+    }
+    if (codec_modes & SCM_MPEG2) {
+      result += "a=rtpmap:98 MPV/90000\r\n";
+    }
+    if (codec_modes & SCM_H263P) {
+      result += "a=rtpmap:98 H263-1998/90000\r\n";
+    }
+    return result;
+  }
+
   /**
    * @brief Release msg resources.
    *
@@ -902,13 +920,7 @@ namespace rtsp_stream {
       ss << "a=x-nv-video[0].refPicInvalidation:1"sv << std::endl;
     }
 
-    if (video::active_hevc_mode != 1) {
-      ss << "sprop-parameter-sets=AAAAAU"sv << std::endl;
-    }
-
-    if (video::active_av1_mode != 1) {
-      ss << "a=rtpmap:98 AV1/90000"sv << std::endl;
-    }
+    ss << describe_video_codecs(nvhttp::get_codec_mode_flags());
 
     if (!session.surround_params.empty()) {
       // If we have our own surround parameters, advertise them twice first
@@ -1230,16 +1242,36 @@ namespace rtsp_stream {
       config.monitor.bitrate = (int) configuredBitrateKbps;
     }
 
-    if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
+    if (config.monitor.videoFormat == video::format_hevc && video::active_hevc_mode == 1) {
       BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
 
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }
 
-    if (config.monitor.videoFormat == 2 && video::active_av1_mode == 1) {
+    if (config.monitor.videoFormat == video::format_av1 && video::active_av1_mode == 1) {
       BOOST_LOG(warning) << "AV1 is disabled, yet the client requested AV1"sv;
 
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    if (config.monitor.videoFormat == video::format_mpeg2 && video::probed_codec_modes().mpeg2 < 2) {
+      BOOST_LOG(warning) << "MPEG-2 is disabled, yet the client requested MPEG-2"sv;
+
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    if (config.monitor.videoFormat == video::format_h263p && video::probed_codec_modes().h263p != 2) {
+      BOOST_LOG(warning) << "H.263+ is disabled, yet the client requested H.263+"sv;
+
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    if (config.monitor.videoFormat == video::format_h263p && (config.monitor.width <= 0 || config.monitor.height <= 0 || config.monitor.width % 4 != 0 || config.monitor.height % 4 != 0)) {
+      BOOST_LOG(warning) << "H.263+ requires a positive width and height divisible by four"sv;
       respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
       return;
     }

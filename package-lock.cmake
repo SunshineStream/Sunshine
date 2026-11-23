@@ -85,7 +85,7 @@ CPMDeclarePackage(libvirtualhid
 # moonlight-common-c
 # renovate: datasource=git-refs depName=moonlight-stream/moonlight-common-c
 # ref=master
-set(MOONLIGHT_COMMON_C_COMMIT 94c65fd364d17b223f00a8763c9a5d94a66cb8dd)
+set(MOONLIGHT_COMMON_C_COMMIT b4ee1cea3d19e13c0b37c26585e6b1ee174effcb)
 CPMDeclarePackage(moonlight-common-c
         NAME moonlight-common-c
         GIT_REPOSITORY https://github.com/moonlight-stream/moonlight-common-c.git

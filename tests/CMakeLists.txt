@@ -300,3 +300,7 @@ if (WIN32)
         )
     endif()
 endif ()
+
+# Exercise the same negotiation implementation used by the client transport.
+target_sources(${PROJECT_NAME} PRIVATE
+        "${moonlight-common-c_SOURCE_DIR}/src/VideoFormats.c")

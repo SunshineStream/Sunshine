@@ -59,6 +59,28 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.av1_mode_desc') }}</div>
     </div>
 
+    <!-- MPEG-2 Support -->
+    <div class="mb-3">
+      <label for="mpeg2_mode" class="form-label">{{ $t('config.mpeg2_mode') }}</label>
+      <select id="mpeg2_mode" class="form-select" v-model="config.mpeg2_mode">
+        <option value="0">{{ $t('config.mpeg2_mode_0') }}</option>
+        <option value="1">{{ $t('config.mpeg2_mode_1') }}</option>
+        <option value="2">{{ $t('config.mpeg2_mode_2') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.mpeg2_mode_desc') }}</div>
+    </div>
+
+    <!-- H.263+ Support -->
+    <div class="mb-3">
+      <label for="h263p_mode" class="form-label">{{ $t('config.h263p_mode') }}</label>
+      <select id="h263p_mode" class="form-select" v-model="config.h263p_mode">
+        <option value="0">{{ $t('config.h263p_mode_0') }}</option>
+        <option value="1">{{ $t('config.h263p_mode_1') }}</option>
+        <option value="2">{{ $t('config.h263p_mode_2') }}</option>
+      </select>
+      <div class="form-text">{{ $t('config.h263p_mode_desc') }}</div>
+    </div>
+
     <!-- Capture -->
     <div class="mb-3" v-if="platform !== 'macos'">
       <label for="capture" class="form-label">{{ $t('config.capture') }}</label>
