@@ -19,8 +19,8 @@
         "versioning": "regex:^xorg-server-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
       },
       "url": "https://github.com/LizardByte-infrastructure/xserver.git",
-      "tag": "xorg-server-21.1.13",
-      "commit": "be2767845d6ed3c6dbd25a151051294d0908a995",
+      "tag": "xorg-server-21.1.26",
+      "commit": "7dbd8d0dd1929c2011009fd1770c8aa470df97fb",
       "x-checker-data": {
         "type": "anitya",
         "project-id": 5250,
