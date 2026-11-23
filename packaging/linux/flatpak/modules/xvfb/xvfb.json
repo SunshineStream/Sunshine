@@ -116,8 +116,8 @@
             "versioning": "regex:^libfontenc-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
           },
           "url": "https://github.com/LizardByte-infrastructure/libfontenc.git",
-          "tag": "libfontenc-1.1.8",
-          "commit": "92a85fda2acb4e14ec0b2f6d8fe3eaf2b687218c",
+          "tag": "libfontenc-1.1.10",
+          "commit": "eb42c925cab00d235b05e649eb4fb4a1858b67b9",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 1613,
