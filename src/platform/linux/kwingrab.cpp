@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
 
 // lib includes
 #include <lizardbyte/common/env.h>
@@ -370,7 +371,7 @@ namespace kwin {
         sorted_outputs.emplace_back(output_parameter);
       }
       std::ranges::sort(sorted_outputs, [](const auto &a, const auto &b) {
-        return a->order < b->order || a->pos_x < b->pos_x || a->pos_y < b->pos_y;
+        return std::tie(a->order, a->pos_x, a->pos_y) < std::tie(b->order, b->pos_x, b->pos_y);
       });
       std::vector<std::string> output_names;
       for (const auto &output_parameter : sorted_outputs) {
