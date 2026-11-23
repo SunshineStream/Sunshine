@@ -195,8 +195,8 @@
             "versioning": "regex:^xauth-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
           },
           "url": "https://github.com/LizardByte-infrastructure/xauth.git",
-          "tag": "xauth-1.1.3",
-          "commit": "c29eef23683f0e3575a3c60d9314de8156fbe2c2",
+          "tag": "xauth-1.1.5",
+          "commit": "6fe9365f11181a043f151f2e67f36015c278791d",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 5253,
