@@ -172,8 +172,8 @@
             "versioning": "regex:^libXfont2-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
           },
           "url": "https://github.com/LizardByte-infrastructure/libxfont.git",
-          "tag": "libXfont2-2.0.6",
-          "commit": "d54aaf2483df6a1f98fadc09004157e657b7f73e",
+          "tag": "libXfont2-2.0.10",
+          "commit": "112d4254f13f2372bdfd1da9ad1eff950cef22b9",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 17165,
