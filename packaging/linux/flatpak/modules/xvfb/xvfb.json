@@ -93,8 +93,8 @@
             "versioning": "regex:^font-util-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
           },
           "url": "https://github.com/LizardByte-infrastructure/font-util.git",
-          "tag": "font-util-1.4.1",
-          "commit": "b5ca142f81a6f14eddb23be050291d1c25514777",
+          "tag": "font-util-1.4.2",
+          "commit": "5c92c11482e017fa7210a71b6f44e40042816209",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 15055,
