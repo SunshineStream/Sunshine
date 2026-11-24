@@ -76,7 +76,7 @@ namespace rtsp_stream {
    * @param session Active streaming or pairing session for the request.
    * @param req Parsed RTSP request being handled.
    */
-  void cmd_not_found(tcp::socket &sock, launch_session_t &, msg_t &&req);
+  void cmd_not_found(tcp::socket &sock, launch_session_t &, const msg_t &req);
   /**
    * @brief Send the protocol response for the current request.
    *
@@ -479,7 +479,7 @@ namespace rtsp_stream {
      */
     void handle_msg(tcp::socket &sock, launch_session_t &session, msg_t &&req) {
       if (auto func = _map_cmd_cb.find(req->message.request.command); func != std::end(_map_cmd_cb)) {
-        func->second(this, sock, session, std::move(req));
+        func->second(this, sock, session, req);
       } else {
         cmd_not_found(sock, session, req);
       }
