@@ -16,7 +16,7 @@
   </supports>
 
   <url type="homepage">@PROJECT_HOMEPAGE_URL@</url>
-  <url type="bugtracker">https://github.com/LizardByte/Sunshine/issues</url>
+  <url type="bugtracker">https://github.com/SunshineStream/Sunshine/issues</url>
   <url type="faq">https://docs.lizardbyte.dev/projects/sunshine/latest/md_docs_2troubleshooting.html</url>
   <url type="help">https://docs.lizardbyte.dev/projects/sunshine</url>
   <url type="donation">https://app.lizardbyte.dev/#Donate</url>
@@ -35,7 +35,7 @@
 
   <releases>
     <release version="@PROJECT_VERSION@" date="@PROJECT_YEAR@-@PROJECT_MONTH@-@PROJECT_DAY@">
-      <url>https://github.com/LizardByte/Sunshine/releases/tag/v@PROJECT_VERSION@</url>
+      <url>https://github.com/SunshineStream/Sunshine/releases/tag/v@PROJECT_VERSION@</url>
       <description>
         <p>See the changelog on GitHub</p>
       </description>
@@ -47,7 +47,7 @@
   </developer>
   <screenshots>
     <screenshot type="default">
-      <image>https://app.lizardbyte.dev/Sunshine/assets/img/screenshots/01-sunshine-welcome-page.png</image>
+      <image>https://sunshine.lizardbyte.dev/assets/sunshine-web-ui-light.jpg</image>
       <caption>Sunshine welcome page</caption>
     </screenshot>
   </screenshots>

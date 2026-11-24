@@ -1,3 +1,4 @@
+
 ---
 name: CI
 permissions: {}
@@ -28,7 +29,8 @@ jobs:
     name: Release Setup
     outputs:
       publish_release: >-
-        ${{ github.event_name == 'workflow_dispatch' &&
+        ${{
+        github.event_name == 'workflow_dispatch' &&
         steps.manual-release-setup.outputs.publish_release ||
         needs.organization.outputs.allowed == 'true' &&
         steps.release-setup.outputs.publish_release == 'true' }}

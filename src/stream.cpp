@@ -17,11 +17,8 @@
 #include <openssl/err.h>
 #include <rs.h>
 
-extern "C" {
-  // clang-format off
-#include <moonlight-common-c/src/Limelight-internal.h>
-  // clang-format on
-}
+// Keep this separate so clang-format preserves the include order.
+#include "compat/moonlight.h"
 
 // local includes
 #include "config.h"
@@ -2239,7 +2236,7 @@ namespace stream {
 
     // Enable local prioritization and QoS tagging on video traffic if requested by the client
     auto address = session->video.peer.address();
-    session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, session->config.videoQosType != 0);
+    session->video.qos = platf::enable_socket_qos(ref->video_sock.native_handle(), address, session->video.peer.port(), platf::qos_data_type_e::video, config::stream.dscp_tagging && session->config.videoQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Video"sv;
     video::capture(session->mail, session->config.monitor, session);
@@ -2266,7 +2263,7 @@ namespace stream {
 
     // Enable local prioritization and QoS tagging on audio traffic if requested by the client
     auto address = session->audio.peer.address();
-    session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, session->config.audioQosType != 0);
+    session->audio.qos = platf::enable_socket_qos(ref->audio_sock.native_handle(), address, session->audio.peer.port(), platf::qos_data_type_e::audio, config::stream.dscp_tagging && session->config.audioQosType != 0);
 
     BOOST_LOG(debug) << "Start capturing Audio"sv;
     audio::capture(session->mail, session->config.audio, session);

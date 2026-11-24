@@ -17,13 +17,18 @@ on:
         required: false
 
 jobs:
+  organization:
+    uses: LizardByte/.github/.github/workflows/__call-organization.yml@master
+
   call-copr-ci:
+    needs: organization
+    if: needs.organization.outputs.allowed == 'true'
     permissions:
       contents: read
     uses: LizardByte/copr-ci/.github/workflows/copr-ci.yml@master
     with:
       copr_pr_webhook_token: "05fc9b07-a19b-4f83-89b2-ae1e7e0b5282"
-      github_org_owner: LizardByte
+      github_org_owner: ${{ github.repository_owner }}
       copr_ownername: lizardbyte
       auto_update_package: true
       job_timeout: 90
@@ -36,9 +41,10 @@ jobs:
     name: Release
     if:
       github.event_name == 'release' &&
-      startsWith(github.repository, 'LizardByte/') &&
+      needs.organization.outputs.allowed == 'true' &&
       github.event.release.prerelease == true
     needs:
+      - organization
       - call-copr-ci
     permissions:
       contents: write
@@ -55,7 +61,7 @@ jobs:
         run: ls -l artifacts
 
       - name: Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@0528b495e6af82b4d698ec6c907a9b1842622068  # v2026.1029.234422
+        uses: LizardByte/actions/actions/release_create@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           allowUpdates: true
           body: ${{ github.event.release.body }}

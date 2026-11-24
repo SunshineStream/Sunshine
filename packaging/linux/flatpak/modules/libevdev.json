@@ -8,9 +8,15 @@
   "sources": [
     {
       "type": "git",
+      "x-renovate": {
+        "datasource": "github-tags",
+        "depName": "libevdev/libevdev",
+        "packageName": "LizardByte-infrastructure/libevdev",
+        "versioning": "regex:^libevdev-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]{1,2}|[1-8][0-9]{2}|[0-9]{4,})$"
+      },
       "url": "https://github.com/LizardByte-infrastructure/libevdev.git",
-      "commit": "ac0056961c3332a260db063ab4fccc7747638a1d",
-      "tag": "libevdev-1.13.4",
+      "tag": "libevdev-1.14.0",
+      "commit": "d9af2e4580297e9c14715fef06621dd39d9d8a3a",
       "x-checker-data": {
         "type": "anitya",
         "project-id": 20540,

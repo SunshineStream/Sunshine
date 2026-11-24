@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fcntl.h>
 #include <filesystem>
+#include <mutex>
 #include <ranges>
 #include <thread>
 #include <unistd.h>
@@ -100,7 +101,9 @@ namespace cuda {
   static cdf_t cdf;
 
   /**
-   * @brief Log a failed call through a CUDA function table.
+   * @brief Log a failed CUDA call with its numeric result and safe fallback error text.
+   *
+   * Error lookups may fail or return null, so only use text from successful, non-null lookups.
    *
    * @param functions CUDA function table.
    * @param result Result of the call.
@@ -109,13 +112,17 @@ namespace cuda {
    */
   inline static int check(const CudaFunctions &functions, CUresult result, const std::string_view &sv) {
     if (result != CUDA_SUCCESS) {
-      const char *name;
-      const char *description;
+      const char *name = nullptr;
+      const char *description = nullptr;
 
-      functions.cuGetErrorName(result, &name);
-      functions.cuGetErrorString(result, &description);
+      if (functions.cuGetErrorName(result, &name) != CUDA_SUCCESS || !name) {
+        name = "Unknown CUDA error";
+      }
+      if (functions.cuGetErrorString(result, &description) != CUDA_SUCCESS || !description) {
+        description = "No error description available";
+      }
 
-      BOOST_LOG(error) << sv << name << ':' << description;
+      BOOST_LOG(error) << sv << name << " (" << static_cast<int>(result) << "): " << description;
       return -1;
     }
 
@@ -165,21 +172,42 @@ namespace cuda {
   };
 
   /**
-   * @brief Map CUDA graphics resources for use as an image.
+   * @brief Load a CUDA function table unless it is already loaded, and initialize CUDA through it.
+   *
+   * @param table Table to load.
+   * @param load Function that fills the table, returning 0 on success.
+   * @return 0 on success, -1 on failure.
+   */
+  int init(CudaFunctions **table, const function_table_loader_t &load) {
+    // Load the table only once: running streams call through it on every frame, and reloading empties
+    // it first. The mutex stops streams that start at the same time from loading it concurrently.
+    static std::mutex load_mutex;
+    std::scoped_lock lock {load_mutex};
+
+    if (*table == nullptr) {
+      if (auto status = load(table)) {
+        BOOST_LOG(error) << "Couldn't load cuda: "sv << status;
+
+        return -1;
+      }
+    }
+
+    if (check(**table, (*table)->cuInit(0), "Couldn't initialize cuda: "sv)) {
+      return -1;
+    }
+
+    return 0;
+  }
+
+  /**
+   * @brief Load the CUDA driver library the first time, and initialize CUDA.
    *
    * @return 0 on success; nonzero or negative platform status on failure.
    */
   int init() {
-    auto status = cuda_load_functions(&cdf, nullptr);
-    if (status) {
-      BOOST_LOG(error) << "Couldn't load cuda: "sv << status;
-
-      return -1;
-    }
-
-    CU_CHECK(cdf->cuInit(0), "Couldn't initialize cuda");
-
-    return 0;
+    return init(&cdf, [](CudaFunctions **table) {
+      return cuda_load_functions(table, nullptr);
+    });
   }
 
   /**

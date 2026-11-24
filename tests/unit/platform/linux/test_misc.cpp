@@ -7,6 +7,7 @@
 
   // test includes
   #include "../../../tests_common.h"
+  #include "../../../tests_log_checker.h"
 
   // standard includes
   #include <array>
@@ -15,8 +16,10 @@
   #include <string>
 
   // local includes
+  #include "src/config.h"
   #include "src/logging.h"
   #include "src/platform/linux/misc.h"
+  #include "src/utility.h"
 
 namespace {
   /**
@@ -107,6 +110,33 @@ TEST_F(ProcessEnvironmentSecurity, PreservesTraySessionVariables) {
   ASSERT_TRUE(platf::sanitize_process_environment());
   EXPECT_STREQ(std::getenv("QT_QPA_PLATFORMTHEME"), "gtk3");
   EXPECT_STREQ(std::getenv("WAYLAND_DISPLAY"), "wayland-test");
+}
+
+TEST(LinuxCaptureSessionHint, LogsOnlyWithoutSessionVariablesAndWithoutKms) {
+  logging::log_flush();
+  environment_guard_t wayland_guard {"WAYLAND_DISPLAY"};
+  environment_guard_t display_guard {"DISPLAY"};
+  const auto original_capture = config::video.capture;
+  auto restore_capture = util::fail_guard([&]() {
+    config::video.capture = original_capture;
+  });
+
+  ASSERT_EQ(unsetenv("WAYLAND_DISPLAY"), 0);
+  ASSERT_EQ(unsetenv("DISPLAY"), 0);
+
+  for (const char *capture : {"", "kwin", "kms"}) {
+    config::video.capture = capture;
+    EXPECT_EQ(platf::log_missing_graphical_session_hint(), config::video.capture != "kms") << capture;
+  }
+  EXPECT_TRUE(log_checker::line_contains("test_sunshine.log", "Error: Neither WAYLAND_DISPLAY nor DISPLAY is set"));
+
+  config::video.capture = "kwin";
+  ASSERT_EQ(setenv("WAYLAND_DISPLAY", "wayland-test", 1), 0);
+  EXPECT_FALSE(platf::log_missing_graphical_session_hint());
+
+  ASSERT_EQ(unsetenv("WAYLAND_DISPLAY"), 0);
+  ASSERT_EQ(setenv("DISPLAY", ":1", 1), 0);
+  EXPECT_FALSE(platf::log_missing_graphical_session_hint());
 }
 
 #endif  // __linux__

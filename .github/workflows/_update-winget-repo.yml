@@ -23,7 +23,6 @@ jobs:
   update-winget-repo:
     name: Update Winget repo
     uses: LizardByte/.github/.github/workflows/__call-update-winget-repo.yml@master
-    if: github.repository_owner == 'LizardByte'
     permissions:
       contents: read
     secrets:

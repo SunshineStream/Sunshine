@@ -37,6 +37,7 @@ list(APPEND SUNSHINE_EXTERNAL_LIBRARIES
         ${FOUNDATION_LIBRARY}
         ${IOKIT_LIBRARY}
         ${USER_NOTIFICATIONS_LIBRARY}
+        ${SCREEN_CAPTURE_KIT_LIBRARY}
         ${VIDEO_TOOLBOX_LIBRARY})
 
 set(APPLE_PLIST_TEMPLATE "${SUNSHINE_SOURCE_ASSETS_DIR}/macos/build/Info.plist.in")
@@ -51,14 +52,20 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_video.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/av_video.m"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/display.mm"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/display_helpers.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/display_helpers.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/input.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/microphone.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/misc.mm"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/misc.h"
-        "${CMAKE_SOURCE_DIR}/src/platform/macos/nv12_zero_device.cpp"
-        "${CMAKE_SOURCE_DIR}/src/platform/macos/nv12_zero_device.h"
         "${CMAKE_SOURCE_DIR}/src/platform/macos/publish.cpp"
-        "${CMAKE_SOURCE_DIR}/third-party/TPCircularBuffer/TPCircularBuffer.c"
-        "${CMAKE_SOURCE_DIR}/third-party/TPCircularBuffer/TPCircularBuffer.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture.mm"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture_loop.cpp"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/sc_capture_loop.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.h"
+        "${CMAKE_SOURCE_DIR}/src/platform/macos/vt_encoder.mm"
+        "${tpcircularbuffer_SOURCE_DIR}/TPCircularBuffer.c"
+        "${tpcircularbuffer_SOURCE_DIR}/TPCircularBuffer.h"
         ${APPLE_ENTITLEMENTS_FILE}
         ${APPLE_PLIST_FILE})

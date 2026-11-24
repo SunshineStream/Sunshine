@@ -189,6 +189,23 @@ namespace wl {
   bool use_damage_capture(std::uint32_t screencopy_version, double stream_fps, std::int32_t refresh_mhz);
 
   /**
+   * @brief Decide whether a received frame means capture has to be reinitialized.
+   *
+   * The display's size and transform feed the touch port, so a change in either has to rebuild it.
+   * Turning an output between 90 and 270 degrees changes neither its native nor its logical size,
+   * so the transform is compared on its own.
+   *
+   * @param frame_width Width of the received frame.
+   * @param frame_height Height of the received frame.
+   * @param width Width the capture was initialized with.
+   * @param height Height the capture was initialized with.
+   * @param output_transform Current transform of the captured output.
+   * @param transform Transform the capture was initialized with.
+   * @return `true` when capture has to be reinitialized.
+   */
+  bool capture_needs_reinit(int frame_width, int frame_height, int width, int height, int output_transform, int transform);
+
+  /**
    * @brief Move the earliest time of the next damage-driven request on by one captured frame.
    *
    * Every captured frame costs one frame interval of budget, which holds an output that changes
@@ -675,11 +692,13 @@ namespace wl {
     }
 
     /**
-     * @brief Ignore physical wl-output geometry; monitor placement comes from xdg-output metadata.
-     * @details Retain the wl-output listener signature while ignoring all event arguments.
+     * @brief Record the wl-output transform; monitor placement comes from xdg-output metadata.
+     * @details Physical geometry is ignored. A rotated output is captured in its native orientation, so absolute
+     * input needs the transform to map points onto it.
+     * @param transform Wayland output transform value.
      */
-    void wl_geometry(wl_output *, std::int32_t, std::int32_t, std::int32_t, std::int32_t, std::int32_t, const char *, const char *, std::int32_t) {
-      // Logical placement comes from xdg-output, so physical geometry has nothing to update.
+    void wl_geometry(wl_output *, std::int32_t, std::int32_t, std::int32_t, std::int32_t, std::int32_t, const char *, const char *, std::int32_t transform) {  // NOSONAR(cpp:S107): libwayland's wl_output geometry callback signature.
+      viewport.transform = transform;
     }
 
     /**
@@ -717,6 +736,17 @@ namespace wl {
     wl_output_listener wl_listener;  ///< Callback table for wl-output events.
     zxdg_output_v1_listener xdg_listener;  ///< Callback table for xdg-output events.
   };
+
+  /**
+   * @brief Copy a monitor's geometry onto the display that captures it.
+   *
+   * Capture initialization uses this, so a reinitialization picks up the monitor's current transform for absolute
+   * input.
+   *
+   * @param display Capture display to update.
+   * @param monitor Monitor selected for capture.
+   */
+  void apply_monitor_geometry(platf::display_t &display, const monitor_t &monitor);
 
   /**
    * @brief Wayland registry state for screencopy, DMA-BUF, and output globals.

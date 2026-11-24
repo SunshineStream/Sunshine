@@ -25,6 +25,7 @@
 // local includes
 #include "cuda.h"
 #include "graphics.h"
+#include "kms_display.h"
 #include "kms_plane.h"
 #include "src/config.h"
 #include "src/logging.h"
@@ -343,12 +344,6 @@ namespace platf {
      */
     using conn_type_count_t = std::map<std::uint32_t, std::uint32_t>;
 
-    static int env_width;
-    static int env_height;
-
-    static int env_logical_width;
-    static int env_logical_height;
-
     /**
      * @brief Convert a DRM plane type value to a diagnostic string.
      *
@@ -386,31 +381,6 @@ namespace platf {
 
       bool connected;  ///< Whether the DRM connector is connected.
     };
-
-    /**
-     * @brief KMS monitor capture state and DRM resources.
-     */
-    struct monitor_t {
-      // Connector attributes
-      std::uint32_t type;  ///< Type.
-      std::uint32_t index;  ///< Index.
-
-      // Monitor index in the global list
-      std::uint32_t monitor_index;  ///< Monitor index.
-
-      platf::touch_port_t viewport;  ///< Viewport.
-    };
-
-    /**
-     * @brief DRM card, device path, and render-node metadata.
-     */
-    struct card_descriptor_t {
-      std::string path;  ///< Path.
-
-      std::map<std::uint32_t, monitor_t> crtc_to_monitor;  ///< Crtc to monitor.
-    };
-
-    static std::vector<card_descriptor_t> card_descriptors;
 
     static std::uint32_t from_view(const std::string_view &string) {
 #ifndef DOXYGEN
@@ -752,17 +722,15 @@ namespace platf {
       /**
        * @brief Return framebuffer metadata for the current CRTC.
        *
-       * @param plane DRM or EGL plane index being described.
+       * @param plane DRM plane whose framebuffer metadata should be read.
        * @return Framebuffer metadata wrapper, or nullptr when the framebuffer cannot be read.
        */
-      fb_t fb(plane_t::pointer plane) {
-        auto fb2 = platf::kms::privileged_drm_worker::drmModeGetFB2_privileged(fd.el, plane->fb_id);
-        if (fb2) {
+      fb_t fb(const drmModePlane *plane) {
+        if (auto fb2 = platf::kms::privileged_drm_worker::drmModeGetFB2_privileged(fd.el, plane->fb_id); fb2) {
           return std::make_unique<wrapper_fb>(fd.el, fb2);
         }
 
-        auto fb = platf::kms::privileged_drm_worker::drmModeGetFB_privileged(fd.el, plane->fb_id);
-        if (fb) {
+        if (auto fb = platf::kms::privileged_drm_worker::drmModeGetFB_privileged(fd.el, plane->fb_id); fb) {
           return std::make_unique<wrapper_fb>(fd.el, fb);
         }
 
@@ -937,8 +905,7 @@ namespace platf {
       file_t handleFD(std::uint32_t handle) {
         file_t fb_fd;
 
-        auto status = drmPrimeHandleToFD(fd.el, handle, 0 /* flags */, &fb_fd.el);
-        if (status) {
+        if (const auto status = drmPrimeHandleToFD(fd.el, handle, 0 /* flags */, &fb_fd.el); status) {
           return {};
         }
 
@@ -1072,7 +1039,7 @@ namespace platf {
     /**
      * @brief Write a debug log representation of the input packet.
      *
-     * @param plane DRM or EGL plane index being described.
+     * @param plane DRM plane whose framebuffer metadata should be read.
      * @param fb Framebuffer object to bind or update.
      * @param crtc DRM CRTC identifier to map.
      */
@@ -1109,30 +1076,6 @@ namespace platf {
     }
 
     /**
-     * @brief Map display name to monitor index
-     *
-     * @param display_name Name of the display to determine monitor index for (or monitor index string value)
-     * @return monitor's display index
-     */
-    static int64_t map_display_name_to_monitor_index(const std::string_view &display_name) {
-      // Handle (legacy) monitor index strings by converting them to integer
-      if (display_name.empty() || std::ranges::all_of(display_name, ::isdigit)) {
-        return util::from_view(display_name);
-      }
-      // display_name is a connector name (not empty and containing non-digits)
-      for (auto &card_descriptor : kms::card_descriptors) {
-        for (const auto &monitor_descriptor : card_descriptor.crtc_to_monitor | std::views::values) {
-          if (display_name == std::format("{}-{}", drmModeGetConnectorTypeName(monitor_descriptor.type), monitor_descriptor.index)) {
-            BOOST_LOG(info) << "Mapped '"sv << display_name << "' to kmsgrab monitor index " << monitor_descriptor.monitor_index;
-            return monitor_descriptor.monitor_index;
-          }
-        }
-      }
-      BOOST_LOG(warning) << "Couldn't map '"sv << display_name << "' to a monitor index. Falling back to first monitor in list (index=0).";
-      return 0;  // Fallback to first index if nothing can be matched
-    }
-
-    /**
      * @brief Base KMS display capture backend shared by RAM and VRAM paths.
      */
     class display_t: public platf::display_t {
@@ -1152,206 +1095,129 @@ namespace platf {
        *
        * @param display_name Display name.
        * @param config Configuration values to apply.
+       * @param enumeration Displays and geometry for this capture backend.
        * @return 0 on success; nonzero or negative platform status on failure.
        */
-      int init(const std::string &display_name, const ::video::config_t &config) {
+      int init(const std::string &display_name, const ::video::config_t &config, const display_enumeration_t &enumeration) {
         delay = ::video::capture_frame_interval(config);
 
-        int monitor_index = map_display_name_to_monitor_index(display_name);
-        int monitor = 0;
+        const auto index = enumeration.display_index(display_name);
+        if (!index.has_value()) {
+          BOOST_LOG(warning) << "Couldn't map '"sv << display_name << "' to a kmsgrab monitor. Falling back to the first output."sv;
+        }
+        const auto monitor_index = index.value_or(0);
+        if (monitor_index >= enumeration.outputs.size()) {
+          BOOST_LOG(error) << "Couldn't find monitor ["sv << monitor_index << ']';
+          return -1;
+        }
 
-        fs::path card_dir {"/dev/dri"sv};
-        for (auto &entry : fs::directory_iterator {card_dir}) {
-          auto file = entry.path().filename();
+        const auto &output = enumeration.outputs[monitor_index];
+        const auto &descriptor = enumeration.cards[output.card_index];
+        if (card.init(descriptor.path.c_str())) {
+          return -1;
+        }
 
-          auto filestring = file.generic_string();
-          if (filestring.size() < 4 || std::string_view {filestring}.substr(0, 4) != "card"sv) {
-            continue;
-          }
+        plane_t plane {drmModeGetPlane(card.fd.el, output.plane_id)};
+        if (!plane || !plane->fb_id || plane->crtc_id != output.crtc_id) {
+          BOOST_LOG(warning) << "KMS output changed during capture initialization: "sv << output.name;
+          return -1;
+        }
 
-          kms::card_t card;
-          if (card.init(entry.path().c_str())) {
-            continue;
-          }
+        auto fb = card.fb(plane.get());
+        if (!fb) {
+          BOOST_LOG(error) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno);
+          return -1;
+        }
 
-          // Skip non-Nvidia cards if we're looking for CUDA devices
-          // unless NVENC is selected manually by the user
-          if (mem_type == mem_type_e::cuda && !card.is_nvidia()) {
-            BOOST_LOG(debug) << file << " is not a CUDA device"sv;
-            if (config::video.encoder != "nvenc") {
-              continue;
-            }
-          }
+        if (!fb->handles[0]) {
+          BOOST_LOG(error) << "Couldn't get handle for DRM Framebuffer ["sv << plane->fb_id << "]: Probably not permitted"sv;
+          return -1;
+        }
 
-          // Skip Nvidia cards if we're looking for VAAPI devices
-          // This is important for hybrid GPU laptops where the display
-          // may be connected through NVIDIA but rendering happens on Intel
-          if (mem_type == mem_type_e::vaapi && card.is_nvidia()) {
-            BOOST_LOG(debug) << file << " is an NVIDIA card, skipping for VAAPI"sv;
-            continue;
-          }
-
-          auto end = std::end(card);
-          for (auto plane = std::begin(card); plane != end; ++plane) {
-            // Skip unused planes
-            if (!plane->fb_id) {
-              continue;
-            }
-
-            if (card.is_cursor(plane->plane_id)) {
-              continue;
-            }
-
-            if (monitor != monitor_index) {
-              ++monitor;
-              continue;
-            }
-
-            auto fb = card.fb(plane.get());
-            if (!fb) {
-              BOOST_LOG(error) << "Couldn't get drm fb for plane ["sv << plane->fb_id << "]: "sv << strerror(errno);
-              return -1;
-            }
-
-            if (!fb->handles[0]) {
-              BOOST_LOG(error) << "Couldn't get handle for DRM Framebuffer ["sv << plane->fb_id << "]: Probably not permitted"sv;
-              return -1;
-            }
-
-            for (int i = 0; i < 4; ++i) {
-              if (!fb->handles[i]) {
-                break;
-              }
-
-              auto fb_fd = card.handleFD(fb->handles[i]);
-              if (fb_fd.el < 0) {
-                BOOST_LOG(error) << "Couldn't get primary file descriptor for Framebuffer ["sv << fb->fb_id << "]: "sv << strerror(errno);
-                continue;
-              }
-            }
-
-            auto crtc = card.crtc(plane->crtc_id);
-            if (!crtc) {
-              BOOST_LOG(error) << "Couldn't get CRTC info: "sv << strerror(errno);
-              continue;
-            }
-
-            BOOST_LOG(info) << "Found monitor for DRM screencasting"sv;
-
-            // We need to find the correct /dev/dri/card{nr} to correlate the crtc_id with the monitor descriptor
-            auto pos = std::find_if(std::begin(card_descriptors), std::end(card_descriptors), [&](card_descriptor_t &cd) {
-              return cd.path == filestring;
-            });
-
-            if (pos == std::end(card_descriptors)) {
-              // This code path shouldn't happen, but it's there just in case.
-              // card_descriptors is part of the guesswork after all.
-              BOOST_LOG(error) << "Couldn't find ["sv << entry.path() << "]: This shouldn't have happened :/"sv;
-              return -1;
-            }
-
-            // TODO: surf_sd = fb->to_sd();
-
-            kms::print(plane.get(), fb.get(), crtc.get());
-
-            img_width = fb->width;
-            img_height = fb->height;
-            img_offset_x = crtc->x;
-            img_offset_y = crtc->y;
-
-            this->env_width = ::platf::kms::env_width;
-            this->env_height = ::platf::kms::env_height;
-
-            this->env_logical_width = ::platf::kms::env_logical_width;
-            this->env_logical_height = ::platf::kms::env_logical_height;
-
-            auto monitor_pos = pos->crtc_to_monitor.find(plane->crtc_id);
-            if (monitor_pos != std::end(pos->crtc_to_monitor)) {
-              auto &viewport = monitor_pos->second.viewport;
-
-              width = viewport.width;
-              height = viewport.height;
-
-              logical_width = viewport.logical_width;
-              logical_height = viewport.logical_height;
-
-              switch (card.get_panel_orientation(plane->plane_id)) {
-                case DRM_MODE_ROTATE_270:
-                  BOOST_LOG(debug) << "Detected panel orientation at 90, swapping width and height.";
-                  width = viewport.height;
-                  height = viewport.width;
-                  break;
-                case DRM_MODE_ROTATE_90:
-                case DRM_MODE_ROTATE_180:
-                  BOOST_LOG(warning) << "Panel orientation is unsupported, screen capture may not work correctly.";
-                  break;
-              }
-
-              offset_x = viewport.offset_x;
-              offset_y = viewport.offset_y;
-            }
-
-            // This code path shouldn't happen, but it's there just in case.
-            // crtc_to_monitor is part of the guesswork after all.
-            else {
-              BOOST_LOG(warning) << "Couldn't find crtc_id, this shouldn't have happened :\\"sv;
-              width = crtc->width;
-              height = crtc->height;
-              offset_x = crtc->x;
-              offset_y = crtc->y;
-            }
-
-            plane_id = plane->plane_id;
-            crtc_id = plane->crtc_id;
-            crtc_index = card.get_crtc_index_by_id(plane->crtc_id);
-
-            // Find the connector for this CRTC
-            kms::conn_type_count_t conn_type_count;
-            for (auto &connector : card.monitors(conn_type_count)) {
-              if (connector.crtc_id == crtc_id) {
-                BOOST_LOG(info) << "Found connector ID ["sv << connector.connector_id << ']';
-
-                connector_id = connector.connector_id;
-
-                auto connector_props = card.connector_props(*connector_id);
-                hdr_metadata_blob_id = card.prop_value_by_name(connector_props, "HDR_OUTPUT_METADATA"sv);
-              }
-            }
-
-            this->card = std::move(card);
-            goto break_loop;
+        for (int i = 0; i < 4 && fb->handles[i]; ++i) {
+          auto fb_fd = card.handleFD(fb->handles[i]);
+          if (fb_fd.el < 0) {
+            BOOST_LOG(error) << "Couldn't get primary file descriptor for Framebuffer ["sv << fb->fb_id << "]: "sv << strerror(errno);
           }
         }
 
-        BOOST_LOG(error) << "Couldn't find monitor ["sv << monitor_index << ']';
-        return -1;
+        auto crtc = card.crtc(plane->crtc_id);
+        if (!crtc) {
+          BOOST_LOG(error) << "Couldn't get CRTC info: "sv << strerror(errno);
+          return -1;
+        }
 
-      // Neatly break from nested for loop
-      break_loop:
+        BOOST_LOG(info) << "Found monitor for DRM screencasting: "sv << output.name;
+        kms::print(plane.get(), fb.get(), crtc.get());
+
+        img_width = fb->width;
+        img_height = fb->height;
+        img_offset_x = crtc->x;
+        img_offset_y = crtc->y;
+        enumeration.desktop.apply(*this);
+
+        const auto &viewport = descriptor.crtc_to_monitor.at(plane->crtc_id).viewport;
+        width = viewport.width;
+        height = viewport.height;
+        logical_width = viewport.logical_width;
+        logical_height = viewport.logical_height;
+
+        switch (card.get_panel_orientation(plane->plane_id)) {
+          case DRM_MODE_ROTATE_270:
+            BOOST_LOG(debug) << "Detected panel orientation at 90, swapping width and height.";
+            width = viewport.height;
+            height = viewport.width;
+            break;
+          case DRM_MODE_ROTATE_90:
+          case DRM_MODE_ROTATE_180:
+            BOOST_LOG(warning) << "Panel orientation is unsupported, screen capture may not work correctly.";
+            break;
+        }
+
+        offset_x = viewport.offset_x;
+        offset_y = viewport.offset_y;
+        output_name = viewport.output_name;
+
+        plane_id = plane->plane_id;
+        crtc_id = plane->crtc_id;
+        crtc_index = card.get_crtc_index_by_id(plane->crtc_id);
+
+        // Find the connector for this CRTC
+        kms::conn_type_count_t conn_type_count;
+        for (auto &connector : card.monitors(conn_type_count)) {
+          if (connector.crtc_id == crtc_id) {
+            BOOST_LOG(info) << "Found connector ID ["sv << connector.connector_id << ']';
+
+            connector_id = connector.connector_id;
+
+            auto connector_props = card.connector_props(*connector_id);
+            hdr_metadata_blob_id = card.prop_value_by_name(connector_props, "HDR_OUTPUT_METADATA"sv);
+          }
+        }
 
         // Look for the cursor plane for this CRTC
         cursor_plane_id = -1;
         auto end = std::end(card);
-        for (auto plane = std::begin(card); plane != end; ++plane) {
-          if (!card.is_cursor(plane->plane_id)) {
+        for (auto cursor_plane = std::begin(card); cursor_plane != end; ++cursor_plane) {
+          if (!card.is_cursor(cursor_plane->plane_id)) {
             continue;
           }
 
           // NB: We do not skip unused planes here because cursor planes
           // will look unused if the cursor is currently hidden.
 
-          if (!(plane->possible_crtcs & (1 << crtc_index))) {
+          if (!(cursor_plane->possible_crtcs & (1 << crtc_index))) {
             // Skip cursor planes for other CRTCs
             continue;
-          } else if (plane->possible_crtcs != (1 << crtc_index)) {
+          } else if (cursor_plane->possible_crtcs != (1 << crtc_index)) {
             // We assume a 1:1 mapping between cursor planes and CRTCs, which seems to
             // match the behavior of drivers in the real world. If it's violated, we'll
             // proceed anyway but print a warning in the log.
             BOOST_LOG(warning) << "Cursor plane spans multiple CRTCs!"sv;
           }
 
-          BOOST_LOG(info) << "Found cursor plane ["sv << plane->plane_id << ']';
-          cursor_plane_id = plane->plane_id;
+          BOOST_LOG(info) << "Found cursor plane ["sv << cursor_plane->plane_id << ']';
+          cursor_plane_id = cursor_plane->plane_id;
           break;
         }
 
@@ -1763,15 +1629,16 @@ namespace platf {
        *
        * @param display_name Display name.
        * @param config Configuration values to apply.
+       * @param enumeration Displays and geometry for this capture backend.
        * @return 0 on success; nonzero or negative platform status on failure.
        */
-      int init(const std::string &display_name, const ::video::config_t &config) {
+      int init(const std::string &display_name, const ::video::config_t &config, const display_enumeration_t &enumeration) {
         if (!gbm::create_device) {
           BOOST_LOG(warning) << "libgbm not initialized"sv;
           return -1;
         }
 
-        if (display_t::init(display_name, config)) {
+        if (display_t::init(display_name, config, enumeration)) {
           return -1;
         }
 
@@ -2119,12 +1986,14 @@ namespace platf {
       /**
        * @brief Capture a display frame into the provided image object.
        *
-       * @param pull_free_image_cb Pull free image cb.
+       * @tparam PullFreeImage Callback type used to retrieve a free capture image.
+       * @param pull_free_image_cb Callback retrieving a free capture image.
        * @param img_out Captured KMS image descriptor returned to the streaming pipeline.
        * @param cursor Cursor image or visibility state to composite.
        * @return Capture status reported to the streaming pipeline.
        */
-      capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds /* timeout */, bool cursor) {
+      template<typename PullFreeImage>
+      capture_e snapshot(const PullFreeImage &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds /* timeout */, bool cursor) {
         std::array<file_t, 4> fb_fd;
 
         if (!pull_free_image_cb(img_out)) {
@@ -2133,8 +2002,7 @@ namespace platf {
         auto img = (egl::img_descriptor_t *) img_out.get();
         img->reset();
 
-        auto status = refresh(fb_fd.data(), &img->sd, img->frame_timestamp);
-        if (status != capture_e::ok) {
+        if (const auto status = refresh(fb_fd.data(), &img->sd, img->frame_timestamp); status != capture_e::ok) {
           return status;
         }
 
@@ -2171,10 +2039,11 @@ namespace platf {
        *
        * @param display_name Display name.
        * @param config Configuration values to apply.
+       * @param enumeration Displays and geometry for this capture backend.
        * @return 0 on success; nonzero or negative platform status on failure.
        */
-      int init(const std::string &display_name, const ::video::config_t &config) {
-        if (display_t::init(display_name, config)) {
+      int init(const std::string &display_name, const ::video::config_t &config, const display_enumeration_t &enumeration) {
+        if (display_t::init(display_name, config, enumeration)) {
           return -1;
         }
 
@@ -2199,34 +2068,6 @@ namespace platf {
     };
 
   }  // namespace kms
-
-  /**
-   * @brief Create a KMS display capture backend.
-   *
-   * @param hwdevice_type Hardware device type requested for capture or encode.
-   * @param display_name Display name.
-   * @param config Configuration values to apply.
-   * @return KMS display backend, or nullptr when initialization fails.
-   */
-  std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
-    if (hwdevice_type == mem_type_e::vaapi || hwdevice_type == mem_type_e::cuda || hwdevice_type == mem_type_e::vulkan) {
-      auto disp = std::make_shared<kms::display_vram_t>(hwdevice_type);
-
-      if (!disp->init(display_name, config)) {
-        return disp;
-      }
-
-      // In the case of failure, attempt the old method for VAAPI
-    }
-
-    auto disp = std::make_shared<kms::display_ram_t>(hwdevice_type);
-
-    if (disp->init(display_name, config)) {
-      return nullptr;
-    }
-
-    return disp;
-  }
 
   /**
    * On Wayland, it's not possible to determine the position of the monitor on the desktop with KMS.
@@ -2264,6 +2105,7 @@ namespace platf {
       for (auto &card_descriptor : cds) {
         for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
           if (monitor_descriptor.index == index && monitor_descriptor.type == type) {
+            monitor_descriptor.viewport.output_name = monitor->name;
             monitor_descriptor.viewport.offset_x = monitor->viewport.offset_x;
             monitor_descriptor.viewport.offset_y = monitor->viewport.offset_y;
             monitor_descriptor.viewport.logical_width = monitor->viewport.logical_width;
@@ -2294,16 +2136,13 @@ namespace platf {
     BOOST_LOG(info) << "--------- End of KMS monitor list ---------"sv;
   }
 
-  // A list of names of displays accepted as display_name
   /**
-   * @brief Enumerate display names accepted by the KMS backend.
+   * @brief Enumerate the displays, planes, and geometry available to one KMS backend.
    *
    * @param hwdevice_type Hardware device type requested for capture or encode.
-   * @return KMS display names, or an empty list when KMS capture is unavailable.
+   * @return An independent snapshot of the available KMS displays.
    */
-  std::vector<std::string> kms_display_names(mem_type_e hwdevice_type) {
-    int count = 0;
-
+  static kms::display_enumeration_t enumerate_kms_displays(mem_type_e hwdevice_type) {
     if (!fs::exists("/dev/dri")) {
       BOOST_LOG(warning) << "Couldn't find /dev/dri, kmsgrab won't be enabled"sv;
       return {};
@@ -2316,8 +2155,7 @@ namespace platf {
 
     kms::conn_type_count_t conn_type_count;
 
-    std::vector<kms::card_descriptor_t> cds;
-    std::vector<std::string> display_names;
+    kms::display_enumeration_t enumeration;
 
     fs::path card_dir {"/dev/dri"sv};
     for (auto &entry : fs::directory_iterator {card_dir}) {
@@ -2388,61 +2226,76 @@ namespace platf {
         }
 
         auto it = crtc_to_monitor.find(plane->crtc_id);
-        if (it != std::end(crtc_to_monitor)) {
-          it->second.viewport = platf::touch_port_t {
-            .offset_x = (int) crtc->x,
-            .offset_y = (int) crtc->y,
-            .width = (int) crtc->width,
-            .height = (int) crtc->height,
-          };
-          it->second.monitor_index = count;
+        if (it == crtc_to_monitor.end()) {
+          continue;
         }
-
-        kms::env_width = std::max(kms::env_width, (int) (crtc->x + crtc->width));
-        kms::env_height = std::max(kms::env_height, (int) (crtc->y + crtc->height));
+        const auto output_name = std::format("{}-{}", drmModeGetConnectorTypeName(it->second.type), it->second.index);
+        it->second.viewport = platf::touch_port_t {
+          .offset_x = (int) crtc->x,
+          .offset_y = (int) crtc->y,
+          .width = (int) crtc->width,
+          .height = (int) crtc->height,
+          .output_name = output_name,
+        };
+        it->second.monitor_index = enumeration.outputs.size();
 
         kms::print(plane.get(), fb.get(), crtc.get());
-        display_names.emplace_back(std::format("{}-{}", drmModeGetConnectorTypeName(it->second.type), it->second.index));
-        count++;
+        enumeration.outputs.emplace_back(output_name, enumeration.cards.size(), plane->plane_id, plane->crtc_id);
       }
 
-      cds.emplace_back(kms::card_descriptor_t {
-        std::move(file),
-        std::move(crtc_to_monitor),
-      });
+      enumeration.cards.emplace_back(entry.path().string(), std::move(crtc_to_monitor));
     }
 
     if (!wl::init()) {
-      correlate_to_wayland(cds);
+      correlate_to_wayland(enumeration.cards);
     }
 
-    // Deduce the full virtual desktop size
-    kms::env_width = 0;
-    kms::env_height = 0;
+    for (const auto &card_descriptor : enumeration.cards) {
+      for (const auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
+        enumeration.desktop.add(monitor_descriptor.viewport);
+      }
+    }
+    const auto &bounds = enumeration.desktop.bounds();
+    BOOST_LOG(debug) << "Desktop resolution: "sv << bounds.width << 'x' << bounds.height;
 
-    kms::env_logical_width = 0;
-    kms::env_logical_height = 0;
+    return enumeration;
+  }
 
-    for (auto &card_descriptor : cds) {
-      for (auto &[_, monitor_descriptor] : card_descriptor.crtc_to_monitor) {
-        BOOST_LOG(debug) << "Monitor description"sv;
-        BOOST_LOG(debug) << "Resolution: "sv << monitor_descriptor.viewport.width << 'x' << monitor_descriptor.viewport.height;
-        BOOST_LOG(debug) << "Offset: "sv << monitor_descriptor.viewport.offset_x << 'x' << monitor_descriptor.viewport.offset_y;
+  /**
+   * @brief Enumerate display names accepted by the KMS backend.
+   *
+   * @param hwdevice_type Hardware device type requested for capture or encode.
+   * @return KMS display names, or an empty list when KMS capture is unavailable.
+   */
+  std::vector<std::string> kms_display_names(mem_type_e hwdevice_type) {
+    auto enumeration = enumerate_kms_displays(hwdevice_type);
+    auto display_names = enumeration.outputs | std::views::transform(&kms::output_t::name) | std::ranges::to<std::vector>();
+    BOOST_LOG(debug) << "Final KMS display_names return list: " << (display_names | std::views::join_with(' ') | std::ranges::to<std::string>());
+    return display_names;
+  }
 
-        kms::env_width = std::max(kms::env_width, monitor_descriptor.viewport.offset_x + monitor_descriptor.viewport.width);
-        kms::env_height = std::max(kms::env_height, monitor_descriptor.viewport.offset_y + monitor_descriptor.viewport.height);
-
-        kms::env_logical_height = std::max(kms::env_logical_height, monitor_descriptor.viewport.offset_y + monitor_descriptor.viewport.logical_height);
-        kms::env_logical_width = std::max(kms::env_logical_width, monitor_descriptor.viewport.offset_x + monitor_descriptor.viewport.logical_width);
+  /**
+   * @brief Create a KMS capture display from its own enumeration of the available outputs.
+   *
+   * @param hwdevice_type Hardware device type requested for capture or encode.
+   * @param display_name Display name.
+   * @param config Configuration values to apply.
+   * @return KMS display backend, or nullptr when initialization fails.
+   */
+  std::shared_ptr<display_t> kms_display(mem_type_e hwdevice_type, const std::string &display_name, const ::video::config_t &config) {
+    const auto enumeration = enumerate_kms_displays(hwdevice_type);
+    if (hwdevice_type == mem_type_e::vaapi || hwdevice_type == mem_type_e::cuda || hwdevice_type == mem_type_e::vulkan) {
+      auto disp = std::make_shared<kms::display_vram_t>(hwdevice_type);
+      if (!disp->init(display_name, config, enumeration)) {
+        return disp;
       }
     }
 
-    BOOST_LOG(debug) << "Desktop resolution: "sv << kms::env_width << 'x' << kms::env_height;
-
-    kms::card_descriptors = std::move(cds);
-
-    BOOST_LOG(debug) << "Final KMS display_names return list: " << (display_names | std::views::join_with(' ') | std::ranges::to<std::string>());
-    return display_names;
+    auto disp = std::make_shared<kms::display_ram_t>(hwdevice_type);
+    if (disp->init(display_name, config, enumeration)) {
+      return nullptr;
+    }
+    return disp;
   }
 
 }  // namespace platf

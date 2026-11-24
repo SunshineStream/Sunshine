@@ -75,8 +75,13 @@ namespace config {
 
     int hevc_mode;  ///< HEVC support mode advertised to clients.
     int av1_mode;  ///< AV1 support mode advertised to clients.
+    int mpeg2_mode;  ///< MPEG-2 codec advertisement mode.
+    int h263p_mode;  ///< H.263+ codec advertisement mode.
 
     int min_threads;  ///< Minimum number of threads or slices for CPU encoding.
+
+    int max_stream_width;  ///< Maximum streamed video width; larger client requests are downscaled. 0 disables the cap.
+    int max_stream_height;  ///< Maximum streamed video height; larger client requests are downscaled. 0 disables the cap.
 
     struct {
       std::string sw_preset;  ///< FFmpeg software-encoder preset.
@@ -121,8 +126,6 @@ namespace config {
     } amd;  ///< AMD AMF encoder options.
 
     struct {
-      int vt_allow_sw;  ///< Whether VideoToolbox may use software encoding.
-      int vt_require_sw;  ///< Whether VideoToolbox must use software encoding.
       int vt_realtime;  ///< Whether VideoToolbox uses realtime encoding mode.
       int vt_coder;  ///< VideoToolbox entropy-coding mode.
     } vt;  ///< VideoToolbox encoder options.
@@ -273,6 +276,8 @@ namespace config {
 
     // Limit the packetsize to avoid fragmentation on a low MTU link
     int packetsize;  ///< Maximum payload size for network packets.
+
+    bool dscp_tagging;  ///< Allow DSCP tagging of audio and video traffic when requested by the client.
   };
 
   /**
@@ -459,4 +464,15 @@ namespace config {
    * @return True when the `all` preference was persisted and applied; otherwise, false.
    */
   bool select_all_gamepad_drivers_if_licensed(bool virtualhid_licensed);
+
+  /**
+   * @brief Apply the configured stream resolution cap to a client-requested resolution.
+   *
+   * The result preserves the aspect ratio of the request and is rounded down to even
+   * dimensions as required by encoders and decoders.
+   * @param width Client-requested width, updated in place when the cap applies.
+   * @param height Client-requested height, updated in place when the cap applies.
+   * @return `true` when the resolution was capped.
+   */
+  bool cap_stream_resolution(int &width, int &height);
 }  // namespace config

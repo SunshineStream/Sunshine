@@ -23,7 +23,6 @@ jobs:
   update-flathub-repo:
     name: Update Flathub Repo
     uses: LizardByte/.github/.github/workflows/__call-update-flathub-repo.yml@master
-    if: github.repository_owner == 'LizardByte'
     permissions:
       contents: read
     with:

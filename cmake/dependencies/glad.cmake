@@ -1,6 +1,6 @@
 #
 # Generates the glad OpenGL/EGL loader library using the glad2 generator.
-# Sources are generated at build time via the glad submodule's CMake integration.
+# Sources are generated at build time via the CPM-fetched glad CMake integration.
 #
 include_guard(GLOBAL)
 
@@ -100,7 +100,11 @@ set(PYTHON_EXECUTABLE "${Python_EXECUTABLE}" CACHE FILEPATH "Python interpreter 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.27")
     set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 endif()
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/glad/cmake" glad2-cmake)
+CPMAddPackage(NAME glad DOWNLOAD_ONLY YES)
+# Refresh the upstream cache entries when the checkout path changes.
+set(GLAD_CMAKE_DIR "${glad_SOURCE_DIR}/cmake" CACHE STRING "Directory containing glad's CMake files" FORCE)
+set(GLAD_SOURCES_DIR "${glad_SOURCE_DIR}" CACHE STRING "Directory containing glad's Python sources" FORCE)
+add_subdirectory("${GLAD_CMAKE_DIR}" glad2-cmake)
 unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 if(NOT GLAD_SKIP_PIP_INSTALL)
@@ -143,7 +147,7 @@ if(NOT GLAD_SKIP_PIP_INSTALL)
         execute_process(
                 COMMAND "${UV_EXECUTABLE}" pip install
                     --python "${_glad_python_executable}"
-                    --requirement "${CMAKE_SOURCE_DIR}/third-party/glad/requirements.txt"
+                    --requirement "${glad_SOURCE_DIR}/requirements.txt"
                     --quiet
                 COMMAND_ERROR_IS_FATAL ANY
         )

@@ -3,7 +3,7 @@
 The recommended method for running Sunshine is to use the [binaries](#binaries) included in the
 [latest release][latest-release], unless otherwise specified.
 
-[Pre-releases](https://github.com/LizardByte/Sunshine/releases) are also available. These should be considered beta,
+[Pre-releases](https://github.com/SunshineStream/Sunshine/releases) are also available. These should be considered beta,
 and release artifacts may be missing when merging changes on a faster cadence.
 
 ## Binaries
@@ -35,8 +35,8 @@ See [Docker](../DOCKER_README.md) for more information.
 
    | Architecture  | Package                                                                                                                                |
    |---------------|----------------------------------------------------------------------------------------------------------------------------------------|
-   | amd64/x86_64  | [Sunshine-FreeBSD-14.4-amd64.pkg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-amd64.pkg)     |
-   | arm64/aarch64 | [Sunshine-FreeBSD-14.4-aarch64.pkg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-aarch64.pkg) |
+   | amd64/x86_64  | [Sunshine-FreeBSD-14.4-amd64.pkg](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-amd64.pkg)     |
+   | arm64/aarch64 | [Sunshine-FreeBSD-14.4-aarch64.pkg](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-FreeBSD-14.3-aarch64.pkg) |
 
 2. Open terminal and run the following command.
    ```sh
@@ -68,37 +68,14 @@ CUDA is used for NVFBC capture and direct GPU-memory NVENC encoding.
 > Arch Linux package from LizardByte's [pacman-repo](https://github.com/LizardByte/pacman-repo) is already built with
 > CUDA support, so its users do not need to install the CUDA Toolkit.
 
-> [!NOTE]
-> See [CUDA GPUS](https://developer.nvidia.com/cuda-gpus) to cross-reference Compute Capability to your GPU.
-> The table below applies to packages provided by LizardByte.
+For official Linux packages built with CUDA 13, the CUDA paths require a GPU with compute capability 7.5 (Turing)
+or newer. [CUDA Toolkit 13 removed offline compilation support for Maxwell, Pascal, and Volta](https://docs.nvidia.com/cuda/cuda-features-archive/index.html).
+These GPUs can still have an NVENC hardware encoder, but that does not make the CUDA kernels in these packages
+compatible with them. Installing a different CUDA Toolkit alongside a prebuilt package does not change those kernels.
 
-<table>
-    <caption>CUDA Compatibility</caption>
-    <tr>
-        <th>CUDA Version</th>
-        <th>Min Driver</th>
-        <th>CUDA Compute Capabilities</th>
-        <th>Package</th>
-    </tr>
-    <tr>
-        <td rowspan="5">13.1.1</td>
-        <td rowspan="5">590.48.01</td>
-        <td rowspan="5">50;52;60;61;62;70;72;75;80;86;87;89;90;100;101;103;120;121</td>
-        <td>Sunshine_{version}_{arch}.AppImage</td>
-    </tr>
-    <tr>
-        <td>sunshine_{version}-1+{distro}{distro-version}_{arch}.deb</td>
-    </tr>
-    <tr>
-        <td>sunshine_{arch}.flatpak</td>
-    </tr>
-    <tr>
-        <td>Sunshine-{version}-1.{distro+version}.{arch}.rpm</td>
-    </tr>
-    <tr>
-        <td>sunshine.pkg.tar.zst</td>
-    </tr>
-</table>
+Use [NVIDIA's GPU list](https://developer.nvidia.com/cuda-gpus) to check your GPU's compute capability.
+Toolkit versions can vary by package. Use an NVIDIA driver compatible with the package's toolkit and your GPU;
+see [NVIDIA's CUDA compatibility guide](https://docs.nvidia.com/deploy/cuda-compatibility/).
 
 #### Alpine Linux
 
@@ -137,7 +114,7 @@ apk del sunshine
    into your home directory.
    ```bash
    cd ~
-   wget https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine_{version}_{arch}.AppImage
+   wget https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine_{version}_{arch}.AppImage
    ```
 2. Open terminal and run the following command.
    ```bash
@@ -174,7 +151,7 @@ pacman -S sunshine
 ##### Install PKGBUILD Archive
 Open terminal and run the following command.
 ```bash
-wget https://github.com/LizardByte/Sunshine/releases/latest/download/sunshine.pkg.tar.gz
+wget https://github.com/SunshineStream/Sunshine/releases/latest/download/sunshine.pkg.tar.gz
 tar -xvf sunshine.pkg.tar.gz
 cd sunshine
 
@@ -429,8 +406,8 @@ Prebuilt DMG packages require macOS 15.0 (Sequoia) or newer.
 
    | Architecture          | Package                                                                                                                |
    |-----------------------|------------------------------------------------------------------------------------------------------------------------|
-   | arm64 (Apple Silicon) | [Sunshine-macOS-arm64.dmg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg)   |
-   | x86_64 (Intel)        | [Sunshine-macOS-x86_64.dmg](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-macOS-x86_64.dmg) |
+   | arm64 (Apple Silicon) | [Sunshine-macOS-arm64.dmg](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-macOS-arm64.dmg)   |
+   | x86_64 (Intel)        | [Sunshine-macOS-x86_64.dmg](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-macOS-x86_64.dmg) |
 
 2. Open the downloaded `.dmg` file.
 3. Drag `Sunshine.app` into the `Applications` folder.
@@ -475,8 +452,8 @@ brew uninstall sunshine
 
    | Architecture          | Installer                                                                                                                                    |
    |-----------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
-   | AMD64/x64 (Intel/AMD) | [Sunshine-Windows-AMD64-installer.msi](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.msi) |
-   | ARM64                 | [Sunshine-Windows-ARM64-installer.msi](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-ARM64-installer.msi) |
+   | AMD64/x64 (Intel/AMD) | [Sunshine-Windows-AMD64-installer.msi](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-installer.msi) |
+   | ARM64                 | [Sunshine-Windows-ARM64-installer.msi](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-Windows-ARM64-installer.msi) |
 
 > [!TIP]
 > Installer logs can be found in the following directory:
@@ -499,8 +476,8 @@ overflow menu. Different versions of Windows may provide slightly different step
 
    | Architecture          | Installer                                                                                                                          |
    |-----------------------|------------------------------------------------------------------------------------------------------------------------------------|
-   | AMD64/x64 (Intel/AMD) | [Sunshine-Windows-AMD64-lite.zip](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-lite.zip) |
-   | ARM64                 | [Sunshine-Windows-ARM64-lite.zip](https://github.com/LizardByte/Sunshine/releases/latest/download/Sunshine-Windows-ARM64lite.zip)  |
+   | AMD64/x64 (Intel/AMD) | [Sunshine-Windows-AMD64-lite.zip](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-Windows-AMD64-lite.zip) |
+   | ARM64                 | [Sunshine-Windows-ARM64-lite.zip](https://github.com/SunshineStream/Sunshine/releases/latest/download/Sunshine-Windows-ARM64lite.zip)  |
 
 2. Open command prompt as administrator
 3. Firewall rules
@@ -821,4 +798,4 @@ Guides are available [here](guides.md).
 Tutorials and Guides are community generated. Want to contribute? Reach out to us on our discord server.}
 
 
-[latest-release]: https://github.com/LizardByte/Sunshine/releases/latest
+[latest-release]: https://github.com/SunshineStream/Sunshine/releases/latest

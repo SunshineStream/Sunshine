@@ -20,7 +20,7 @@ Version: %{build_version}
 Release: 1%{?dist}
 Summary: Self-hosted game stream host for Moonlight.
 License: GPLv3-only
-URL: https://github.com/LizardByte/Sunshine
+URL: https://github.com/SunshineStream/Sunshine
 Source0: tarball.tar.gz
 
 # Common BuildRequires
@@ -58,8 +58,8 @@ BuildRequires: boost-devel >= 1.89.0
 BuildRequires: boost-static >= 1.89.0
 # needed for npm from nvm
 BuildRequires: libatomic
-BuildRequires: xz
 %endif
+BuildRequires: xz
 BuildRequires: libgudev
 BuildRequires: mesa-libGL-devel
 BuildRequires: mesa-libgbm-devel
@@ -112,21 +112,19 @@ BuildRequires: gcc13
 BuildRequires: gcc13-c++
 %global gcc_version 13
 %global cuda_version 12.9.1
-%global cuda_build 575.57.08
 %elif 0%{?fedora} >= 42 && 0%{?fedora} <= 43
 BuildRequires: gcc14
 BuildRequires: gcc14-c++
 %global gcc_version 14
 %global cuda_version 12.9.1
-%global cuda_build 575.57.08
 %elif 0%{?fedora} >= 44
 BuildRequires: gcc15
 BuildRequires: gcc15-c++
 %global gcc_version 15
-%global cuda_version 13.1.1
-%global cuda_build 590.48.01
-%global cuda_redist_compiler_version 13.1.115
-%global cuda_redist_runtime_version 13.1.80
+%global cuda_version 13.5.0
+%global cuda_redist_compiler_version 13.5.37
+%global cuda_redist_cccl_version 13.3.5.0.6
+%global cuda_redist_culibos_version 13.5.25
 %global cuda_use_redistributables 1
 %endif
 %endif
@@ -135,10 +133,10 @@ BuildRequires: gcc15-c++
 BuildRequires: gcc15
 BuildRequires: gcc15-c++
 %global gcc_version 15
-%global cuda_version 13.1.1
-%global cuda_build 590.48.01
-%global cuda_redist_compiler_version 13.1.115
-%global cuda_redist_runtime_version 13.1.80
+%global cuda_version 13.5.0
+%global cuda_redist_compiler_version 13.5.37
+%global cuda_redist_cccl_version 13.3.5.0.6
+%global cuda_redist_culibos_version 13.5.25
 %global cuda_use_redistributables 1
 %endif
 
@@ -258,10 +256,10 @@ function install_cuda_from_redistributables() {
   local cuda_components=(
     "cuda_nvcc:%{cuda_redist_compiler_version}:root"
     "libnvvm:%{cuda_redist_compiler_version}:root"
-    "cuda_cccl:%{cuda_redist_compiler_version}:target"
+    "cccl:%{cuda_redist_cccl_version}:target"
     "cuda_crt:%{cuda_redist_compiler_version}:target"
-    "cuda_cudart:%{cuda_redist_runtime_version}:target"
-    "cuda_culibos:%{cuda_redist_compiler_version}:target"
+    "cuda_cudart:%{cuda_redist_compiler_version}:target"
+    "cuda_culibos:%{cuda_redist_culibos_version}:target"
     "libnvptxcompiler:%{cuda_redist_compiler_version}:target"
   )
 
@@ -297,6 +295,68 @@ function install_cuda_from_redistributables() {
 }
 %endif
 
+# CUDA 12.9.1 bundled NVVM and CRT with NVCC, and culibos with cudart.
+# Names, versions, and checksums: NVIDIA's redistrib_12.9.1.json manifest.
+function install_cuda_12_from_redistributables() (
+  set -e
+  local cuda_redist_arch cuda_target_arch nvcc_sha cudart_sha cccl_sha
+  case "$architecture" in
+    x86_64)
+      cuda_redist_arch="linux-x86_64"
+      cuda_target_arch="x86_64-linux"
+      nvcc_sha="7a1a5b652e5ef85c82b721d10672fc9a2dbaab44e9bd3c65a69517bf53998c35"
+      cudart_sha="1f6ad42d4f530b24bfa35894ccf6b7209d2354f59101fd62ec4a6192a184ce99"
+      cccl_sha="8b1a5095669e94f2f9afd7715533314d418179e9452be61e2fde4c82a3e542aa"
+      ;;
+    aarch64)
+      cuda_redist_arch="linux-sbsa"
+      cuda_target_arch="sbsa-linux"
+      nvcc_sha="0aa1fce92dbae76c059c27eefb9d0ffb58e1291151e44ff7c7f1fc2dd9376c0d"
+      cudart_sha="8b422a3b2cb8452cb678181b0bf9d7aa7342df168b5319c5488ae3b8514101fc"
+      cccl_sha="8c3da24801b500f1d9217d191bb4b63e5d2096c8e7d0b7695e876853180ba82f"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  local staging
+  staging="$(mktemp -d "%{_builddir}/cuda.XXXXXX")"
+  trap 'rm -rf "$staging"' EXIT
+  local root_dir="${staging}/toolkit"
+  local target_dir="${root_dir}/targets/${cuda_target_arch}"
+  mkdir -p "${target_dir}" "${root_dir}/licenses"
+
+  local components=(
+    "cuda_nvcc:12.9.86:${nvcc_sha}:root"
+    "cuda_cudart:12.9.79:${cudart_sha}:target"
+    "cuda_cccl:12.9.27:${cccl_sha}:target"
+  )
+  local component
+  for component in "${components[@]}"; do
+    local name version checksum destination
+    IFS=: read -r name version checksum destination <<< "${component}"
+    local archive="${name}-${cuda_redist_arch}-${version}-archive.tar.xz"
+    local url="https://developer.download.nvidia.com/compute/cuda/redist/${name}/${cuda_redist_arch}/${archive}"
+    local extract_dir="${target_dir}"
+    if [[ "${destination}" == root ]]; then
+      extract_dir="${root_dir}"
+    fi
+
+    echo "cuda component url: ${url}"
+    wget "${url}" --progress=bar:force:noscroll --retry-connrefused --tries=3 \
+      -q -O "${staging}/${archive}"
+    sha256sum --check --strict <<< "${checksum}  ${staging}/${archive}"
+    tar -xJf "${staging}/${archive}" --directory="${extract_dir}" --strip-components=1
+    mv "${extract_dir}/LICENSE" "${root_dir}/licenses/${name}.txt"
+    rm "${staging}/${archive}"
+  done
+
+  # NVCC 12 ships its CRT headers at the archive root but looks under the target.
+  cp -a "${root_dir}/include/." "${target_dir}/include/"
+  mv -T "${root_dir}" "%{cuda_dir}"
+)
+
 function install_cuda() {
   # check if we need to install cuda
   if [ -f "%{cuda_dir}/bin/nvcc" ]; then
@@ -307,55 +367,16 @@ function install_cuda() {
 %if 0%{?cuda_use_redistributables}
   install_cuda_from_redistributables
 %else
-  local cuda_prefix="https://developer.download.nvidia.com/compute/cuda/"
-  local cuda_suffix=""
-  if [ "$architecture" == "aarch64" ]; then
-    local cuda_suffix="_sbsa"
-  fi
-
-  local url="${cuda_prefix}%{cuda_version}/local_installers/cuda_%{cuda_version}_%{cuda_build}_linux${cuda_suffix}.run"
-  echo "cuda url: ${url}"
-  wget \
-    "$url" \
-    --progress=bar:force:noscroll \
-    --retry-connrefused \
-    --tries=3 \
-    -q -O "%{_builddir}/cuda.run"
-  chmod a+x "%{_builddir}/cuda.run"
-  "%{_builddir}/cuda.run" \
-    --no-drm \
-    --no-man-page \
-    --no-opengl-libs \
-    --override \
-    --silent \
-    --toolkit \
-    --toolkitpath="%{cuda_dir}"
-  rm "%{_builddir}/cuda.run"
+  install_cuda_12_from_redistributables
 %endif
 
-  # we need to patch math_functions.h depending on the CUDA major version
-  # see https://forums.developer.nvidia.com/t/error-exception-specification-is-incompatible-for-cospi-sinpi-cospif-sinpif-with-glibc-2-41/323591/3
-  local cuda_major
-  cuda_major=$(echo "%{cuda_version}" | cut -d. -f1)
-  local patch_file=""
-  if [ "${cuda_major}" -eq 12 ]; then
-    # CUDA 12.x: the extern declarations lack noexcept(true); add it to match glibc 2.41.
-    patch_file="cuda-12-math_functions.patch"
-  elif [ "${cuda_major}" -eq 13 ]; then
-    # CUDA 13.x: the extern declarations already have noexcept(true), but the __func__()
-    # macro invocations at the bottom still lack it, causing a redeclaration conflict.
-    patch_file="cuda-13-math_functions.patch"
-  else
-    echo "Warning: no math_functions.h patch available for CUDA ${cuda_major}.x, skipping."
-  fi
-
-  if [ -n "${patch_file}" ]; then
-    echo "Applying CUDA patch: ${patch_file}"
+  # CUDA 12 needs the glibc 2.41 exception-specifier workaround. CUDA 13.5 already supplies it.
+  if [[ "%{cuda_version}" == 12.* ]]; then
     patch -p2 \
       --backup \
       --directory="%{cuda_dir}" \
       --verbose \
-      < "%{_builddir}/Sunshine/packaging/linux/patches/${architecture}/${patch_file}"
+      < "%{_builddir}/Sunshine/packaging/linux/patches/${architecture}/cuda-12-math_functions.patch"
   fi
 }
 

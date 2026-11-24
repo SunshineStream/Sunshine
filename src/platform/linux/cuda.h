@@ -523,6 +523,22 @@ namespace cuda {
   int create_gl_cuda_target(const gl_cuda_target_ops_t &ops);
 
   int init();
+
+  /**
+   * @brief Fill a CUDA function table the way `cuda_load_functions` does.
+   */
+  using function_table_loader_t = std::function<int(CudaFunctions **table)>;
+
+  /**
+   * @brief Load a CUDA function table unless it is already loaded, and initialize CUDA through it.
+   *
+   * `init()` passes the table every encode device shares and the real loader.
+   *
+   * @param table Table to load.
+   * @param load Function that fills the table, returning 0 on success.
+   * @return 0 on success, -1 on failure.
+   */
+  int init(CudaFunctions **table, const function_table_loader_t &load);
 }  // namespace cuda
 
 /**

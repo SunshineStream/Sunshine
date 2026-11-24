@@ -1,3 +1,4 @@
+
 /**
  * @file tests/unit/test_rtsp.cpp
  * @brief Verify RTSP response handlers through their common dispatcher signature.
@@ -109,6 +110,7 @@ namespace rtsp_stream {
    * @param req Request to handle.
    */
   void cmd_play(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+
   /**
    * @brief Send the successful ANNOUNCE response through the production response path.
    * @param sock Connected client socket.

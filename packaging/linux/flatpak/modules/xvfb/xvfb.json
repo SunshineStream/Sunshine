@@ -12,9 +12,15 @@
   "sources": [
     {
       "type": "git",
+      "x-renovate": {
+        "datasource": "github-tags",
+        "depName": "xorg/xserver",
+        "packageName": "LizardByte-infrastructure/xserver",
+        "versioning": "regex:^xorg-server-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+      },
       "url": "https://github.com/LizardByte-infrastructure/xserver.git",
-      "tag": "xorg-server-21.1.13",
-      "commit": "be2767845d6ed3c6dbd25a151051294d0908a995",
+      "tag": "xorg-server-21.1.26",
+      "commit": "7dbd8d0dd1929c2011009fd1770c8aa470df97fb",
       "x-checker-data": {
         "type": "anitya",
         "project-id": 5250,
@@ -34,9 +40,15 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libxcvt",
+            "packageName": "LizardByte-infrastructure/libxcvt",
+            "versioning": "regex:^libxcvt-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libxcvt.git",
-          "tag": "libxcvt-0.1.2",
-          "commit": "d9ca87eea9eecddaccc3a77227bcb3acf84e89df",
+          "tag": "libxcvt-0.1.3",
+          "commit": "dd8631c61465cc0de5e476c7a98e56528d62b163",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 235147,
@@ -51,9 +63,15 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libxmu",
+            "packageName": "LizardByte-infrastructure/libxmu",
+            "versioning": "regex:^libXmu-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libxmu.git",
-          "tag": "libXmu-1.2.1",
-          "commit": "792f80402ee06ce69bca3a8f2a84295999c3a170",
+          "tag": "libXmu-1.3.1",
+          "commit": "cdf280f6611932f79ab872832974e8043b1cad6d",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 1785,
@@ -68,9 +86,15 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/font/util",
+            "packageName": "LizardByte-infrastructure/font-util",
+            "versioning": "regex:^font-util-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/font-util.git",
-          "tag": "font-util-1.4.1",
-          "commit": "b5ca142f81a6f14eddb23be050291d1c25514777",
+          "tag": "font-util-1.4.2",
+          "commit": "5c92c11482e017fa7210a71b6f44e40042816209",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 15055,
@@ -85,9 +109,15 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libfontenc",
+            "packageName": "LizardByte-infrastructure/libfontenc",
+            "versioning": "regex:^libfontenc-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libfontenc.git",
-          "tag": "libfontenc-1.1.8",
-          "commit": "92a85fda2acb4e14ec0b2f6d8fe3eaf2b687218c",
+          "tag": "libfontenc-1.1.10",
+          "commit": "eb42c925cab00d235b05e649eb4fb4a1858b67b9",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 1613,
@@ -107,15 +137,26 @@
       ],
       "sources": [
         {
-          "type": "archive",
-          "url": "https://downloads.sourceforge.net/sourceforge/libtirpc/libtirpc-1.3.4.tar.bz2",
-          "sha256": "1e0b0c7231c5fa122e06c0609a76723664d068b0dba3b8219b63e6340b347860",
+          "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "libtirpc",
+            "packageName": "linux-nfs/libtirpc",
+            "versioning": "regex:^libtirpc-(?<major>[0-9]+)-(?<minor>[0-9]+)-(?<patch>[0-9]+)$"
+          },
+          "url": "https://github.com/linux-nfs/libtirpc.git",
+          "tag": "libtirpc-1-3-8",
+          "commit": "b2a58e4ac15dd5f45952210ef466e9fd88dda553",
           "x-checker-data": {
-            "type": "anitya",
-            "project-id": 1740,
-            "stable-only": true,
-            "url-template": "https://downloads.sourceforge.net/sourceforge/libtirpc/libtirpc-$version.tar.bz2"
+            "type": "git",
+            "tag-pattern": "^libtirpc-([0-9]+-[0-9]+-[0-9]+)$"
           }
+        },
+        {
+          "type": "shell",
+          "commands": [
+            "chmod u+x autogen.sh"
+          ]
         }
       ]
     },
@@ -124,9 +165,15 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/lib/libxfont",
+            "packageName": "LizardByte-infrastructure/libxfont",
+            "versioning": "regex:^libXfont2-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/libxfont.git",
-          "tag": "libXfont2-2.0.6",
-          "commit": "d54aaf2483df6a1f98fadc09004157e657b7f73e",
+          "tag": "libXfont2-2.0.10",
+          "commit": "112d4254f13f2372bdfd1da9ad1eff950cef22b9",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 17165,
@@ -141,9 +188,15 @@
       "sources": [
         {
           "type": "git",
+          "x-renovate": {
+            "datasource": "github-tags",
+            "depName": "xorg/app/xauth",
+            "packageName": "LizardByte-infrastructure/xauth",
+            "versioning": "regex:^xauth-(?<major>[0-9]+)[.](?<minor>[0-9]+)[.](?<patch>[0-9]+)$"
+          },
           "url": "https://github.com/LizardByte-infrastructure/xauth.git",
-          "tag": "xauth-1.1.3",
-          "commit": "c29eef23683f0e3575a3c60d9314de8156fbe2c2",
+          "tag": "xauth-1.1.5",
+          "commit": "6fe9365f11181a043f151f2e67f36015c278791d",
           "x-checker-data": {
             "type": "anitya",
             "project-id": 5253,

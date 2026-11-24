@@ -1,0 +1,11 @@
+diff --git a/libs/locale/CMakeLists.txt b/libs/locale/CMakeLists.txt
+--- a/libs/locale/CMakeLists.txt
++++ b/libs/locale/CMakeLists.txt
+@@ -232,6 +232,7 @@ set(sources_src ${sources})
+ list(FILTER sources_src INCLUDE REGEX "^src/")
+ set(sources_inc ${sources})
+ list(FILTER sources_inc EXCLUDE REGEX "^src/")
++list(REMOVE_ITEM sources_inc "${CMAKE_CURRENT_SOURCE_DIR}/include/boost/locale.hpp")
+ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" PREFIX "sources" FILES ${sources_src})
+ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/include/boost/locale" PREFIX "headers" FILES ${sources_inc})
+ source_group("headers" FILES "include/boost/locale.hpp")

@@ -1,4 +1,4 @@
-# Edit on GitHub: https://github.com/LizardByte/Sunshine/blob/master/packaging/linux/Alpine/APKBUILD
+# Edit on GitHub: https://github.com/SunshineStream/Sunshine/blob/master/packaging/linux/Alpine/APKBUILD
 # Reference: https://wiki.alpinelinux.org/wiki/APKBUILD_Reference
 
 : "${_run_unit_tests:=false}"  # Run the test suite and generate coverage; useful in CI.

@@ -991,6 +991,66 @@ TEST_F(KeyboardPassthroughTest, ReleasesTheRemappedHostKeyWhenTheClientDisconnec
   EXPECT_EQ(taken(), (std::vector<std::string> {released(VKEY_LWIN)}));
 }
 
+TEST_F(KeyboardPassthroughTest, ReleasesHeldEditingKeysWhenClientDisconnects) {
+  constexpr unsigned non_normalized = 0x01;  // SS_KBE_FLAG_NON_NORMALIZED
+
+  struct editing_key_case_t {
+    std::uint16_t client_key;  ///< Keycode sent by the client.
+    std::uint16_t host_key;  ///< Canonical keycode emitted toward the platform.
+  };
+
+  constexpr std::array<editing_key_case_t, 8> cases {{
+    {0x7A, 0x0100},  // SDL scancode Undo
+    {0x7B, 0x0101},  // SDL scancode Cut
+    {0x7C, 0x0102},  // SDL scancode Copy
+    {0x7D, 0x0103},  // SDL scancode Paste
+    {0x0100, 0x0100},  // Dedicated Undo
+    {0x0101, 0x0101},  // Dedicated Cut
+    {0x0102, 0x0102},  // Dedicated Copy
+    {0x0103, 0x0103},  // Dedicated Paste
+  }};
+
+  for (const auto &editing_key : cases) {
+    SCOPED_TRACE(hex(editing_key.client_key));
+
+    press(editing_key.client_key, 0, non_normalized);
+    EXPECT_EQ(taken(), (std::vector<std::string> {pressed(editing_key.host_key)}));
+
+    input::testing::release_held_keys();
+
+    // The disconnect cleanup must release the full 16-bit code. Masking it to the low byte
+    // would release 0x03 instead of 0x0103, leaving the host holding the key down.
+    const auto events = taken_events();
+    ASSERT_EQ(events.size(), 1U);
+    EXPECT_EQ(events[0].key_code, editing_key.host_key);
+    EXPECT_TRUE(events[0].release);
+    EXPECT_EQ(events[0].flags, non_normalized);
+  }
+}
+
+TEST_F(KeyboardPassthroughTest, ReleasesTheRemappedHostKeyForHeldEditingKeysWhenClientDisconnects) {
+  constexpr unsigned non_normalized = 0x01;  // SS_KBE_FLAG_NON_NORMALIZED
+  config::input.keybindings = {{0x0103, VKEY_F1}, {0x0100, VKEY_F1 + 1}};
+
+  // A dedicated keycode and a scancode alias both resolve to a canonical code before remapping.
+  press(0x0103, 0, non_normalized);
+  press(0x7A, 0, non_normalized);
+  auto pressed_keys = taken();
+  std::ranges::sort(pressed_keys);
+  std::vector expected_pressed {pressed(VKEY_F1), pressed(VKEY_F1 + 1)};
+  std::ranges::sort(expected_pressed);
+  EXPECT_EQ(pressed_keys, expected_pressed);
+
+  input::testing::release_held_keys();
+
+  // key_press is an unordered_map, so the release order is unspecified.
+  auto released_keys = taken();
+  std::ranges::sort(released_keys);
+  std::vector expected_released {released(VKEY_F1), released(VKEY_F1 + 1)};
+  std::ranges::sort(expected_released);
+  EXPECT_EQ(released_keys, expected_released);
+}
+
 TEST_F(KeyboardPassthroughTest, ReleasesTheRemappedRightAltForKeyRightaltToKeyWin) {
   // Mirrors what config parsing installs for the shipped key_rightalt_to_key_win option.
   config::input.key_rightalt_to_key_win = true;

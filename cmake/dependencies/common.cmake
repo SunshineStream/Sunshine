@@ -8,13 +8,30 @@ find_package(OpenSSL REQUIRED)
 # boost, this should be before Simple-Web-Server as it also depends on boost
 include(dependencies/Boost_Sunshine)
 
-# submodules
 # moonlight common library
+# Sunshine builds only the ENet target and compiles selected Moonlight sources directly.
+CPMAddPackage(NAME moonlight-common-c DOWNLOAD_ONLY YES)
 set(ENET_NO_INSTALL ON CACHE BOOL "Don't install any libraries built for enet")
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/moonlight-common-c/enet")
+add_subdirectory("${moonlight-common-c_SOURCE_DIR}/enet" "${moonlight-common-c_BINARY_DIR}/enet")
 
 # web server
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/Simple-Web-Server")
+CPMGetPackage(simple_web_server)
+
+set(SUNSHINE_DEPENDENCY_INCLUDE_DIR "${CMAKE_CURRENT_BINARY_DIR}/dependency-include")
+
+# Forward each header in ARGN from source_dir into include_prefix to preserve qualified includes.
+function(sunshine_forward_dependency_headers source_dir include_prefix)
+    foreach(header IN LISTS ARGN)
+        file(GENERATE
+                OUTPUT "${SUNSHINE_DEPENDENCY_INCLUDE_DIR}/${include_prefix}/${header}"
+                CONTENT "#include \"${source_dir}/${header}\"\n")
+    endforeach()
+endfunction()
+
+sunshine_forward_dependency_headers("${moonlight-common-c_SOURCE_DIR}/src" "moonlight-common-c/src"
+        Input.h Limelight.h Limelight-internal.h Rtsp.h VideoFormats.h)
+sunshine_forward_dependency_headers("${simple_web_server_SOURCE_DIR}" "Simple-Web-Server"
+        client_http.hpp client_https.hpp crypto.hpp server_http.hpp server_https.hpp)
 
 # lizardbyte common helpers
 set(LIZARDBYTE_COMMON_BUILD_TEST_SUPPORT ${BUILD_TESTS}
@@ -22,7 +39,7 @@ set(LIZARDBYTE_COMMON_BUILD_TEST_SUPPORT ${BUILD_TESTS}
 add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/lizardbyte-common")
 
 # libdisplaydevice
-add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/libdisplaydevice")
+CPMGetPackage(libdisplaydevice)
 
 if(SUNSHINE_ENABLE_TRAY)
     if(SUNSHINE_USE_STATIC_QT)
@@ -54,7 +71,7 @@ if(SUNSHINE_ENABLE_TRAY)
         set(CMAKE_MODULE_PATH "${_sunshine_module_path}")
     endif()
 
-    add_subdirectory("${CMAKE_SOURCE_DIR}/third-party/tray")
+    CPMGetPackage(tray)
 
     # TRAY_QT_VERSION is scoped to the tray subdirectory, so inspect the target's actual dependencies.
     get_target_property(_sunshine_tray_link_libraries tray LINK_LIBRARIES)
@@ -86,7 +103,6 @@ if(SUNSHINE_ENABLE_TRAY)
 endif()
 
 # common dependencies
-include("${CMAKE_MODULE_PATH}/dependencies/nv_codec_headers.cmake")
 include("${CMAKE_MODULE_PATH}/dependencies/nlohmann_json.cmake")
 find_package(PkgConfig REQUIRED)
 find_package(Threads REQUIRED)
@@ -98,6 +114,7 @@ include_directories(SYSTEM ${MINIUPNP_INCLUDE_DIRS})
 
 # ffmpeg pre-compiled binaries
 include("${CMAKE_MODULE_PATH}/dependencies/ffmpeg.cmake")
+include("${CMAKE_MODULE_PATH}/dependencies/nv_codec_headers.cmake")
 
 # Opus
 if(TARGET PkgConfig::SUNSHINE_BUNDLED_OPUS)

@@ -38,14 +38,16 @@ add_definitions(-DMINIUPNP_STATICLIB)
 add_subdirectory(tools)  # todo - this is temporary, only tools for Windows are needed, for now
 
 # nvidia
-include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/nvapi")
+CPMAddPackage(NAME nvapi DOWNLOAD_ONLY YES)
+include_directories(SYSTEM "${nvapi_SOURCE_DIR}")
 file(GLOB NVPREFS_FILES CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/third-party/nvapi/*.h"
+        "${nvapi_SOURCE_DIR}/*.h"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/nvprefs/*.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/nvprefs/*.h")
 
 # vigem
-include_directories(SYSTEM "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include")
+CPMAddPackage(NAME vigemclient DOWNLOAD_ONLY YES)
+include_directories(SYSTEM "${vigemclient_SOURCE_DIR}/include")
 
 # sunshine icon
 if(NOT DEFINED SUNSHINE_ICON_PATH)
@@ -75,11 +77,11 @@ set(PLATFORM_TARGET_FILES
         "${CMAKE_SOURCE_DIR}/src/platform/windows/audio.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.cpp"
         "${CMAKE_SOURCE_DIR}/src/platform/windows/utf_utils.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/src/ViGEmClient.cpp"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Client.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Common.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/Util.h"
-        "${CMAKE_SOURCE_DIR}/third-party/ViGEmClient/include/ViGEm/km/BusShared.h"
+        "${vigemclient_SOURCE_DIR}/src/ViGEmClient.cpp"
+        "${vigemclient_SOURCE_DIR}/include/ViGEm/Client.h"
+        "${vigemclient_SOURCE_DIR}/include/ViGEm/Common.h"
+        "${vigemclient_SOURCE_DIR}/include/ViGEm/Util.h"
+        "${vigemclient_SOURCE_DIR}/include/ViGEm/km/BusShared.h"
         ${NVPREFS_FILES})
 
 set(OPENSSL_LIBRARIES

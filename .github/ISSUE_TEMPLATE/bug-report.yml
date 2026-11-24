@@ -25,7 +25,7 @@ body:
   - type: dropdown
     attributes:
       label: Is your issue present in the latest beta/pre-release?
-      description: Please test the latest [pre-release](https://github.com/LizardByte/Sunshine/releases).
+      description: Please test the latest [pre-release](https://github.com/SunshineStream/Sunshine/releases).
       options:
         - "I didn't read the issue template"
         - "I'm too lazy to test"

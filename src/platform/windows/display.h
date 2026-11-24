@@ -225,6 +225,18 @@ namespace platf::dxgi {
   };
 
   /**
+   * @brief Copy a mapped desktop texture into a RAM image in desktop orientation.
+   *
+   * Source and destination row padding are independent. Quarter turns exchange the source dimensions;
+   * the destination dimensions must already describe the rotated desktop.
+   *
+   * @param source Mapped texture containing the unrotated pixels.
+   * @param destination Allocated image in desktop coordinates.
+   * @param rotation Clockwise rotation from the source surface to the desktop image.
+   */
+  void copy_mapped_image(const D3D11_MAPPED_SUBRESOURCE &source, ::platf::img_t &destination, DXGI_MODE_ROTATION rotation);
+
+  /**
    * @brief GPU resources used to render a captured cursor shape.
    */
   class gpu_cursor_t {
@@ -537,11 +549,11 @@ namespace platf::dxgi {
      */
     int dummy_img(img_t *img) override;
     /**
-     * @brief Finish cursor composition into a GPU-backed image.
+     * @brief Allocate a tightly packed RAM image in desktop orientation.
      *
      * @param img Image or frame object to read from or populate.
-     * @param dummy Unused placeholder required by the interface signature.
-     * @return Capture status after finalizing the captured image.
+     * @param dummy Whether to allow an unknown capture format for a fallback image.
+     * @return 0 on success, or -1 if a real frame's capture format is unknown.
      */
     int complete_img(img_t *img, bool dummy) override;
     /**

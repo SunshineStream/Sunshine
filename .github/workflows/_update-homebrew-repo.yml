@@ -23,7 +23,6 @@ jobs:
   update-homebrew-repo:
     name: Update Homebrew repo
     uses: LizardByte/.github/.github/workflows/__call-update-homebrew-repo.yml@master
-    if: github.repository_owner == 'LizardByte'
     permissions:
       contents: read
     with:

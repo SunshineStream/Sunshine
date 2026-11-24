@@ -31,7 +31,7 @@
 #include <boost/range/algorithm/find_if.hpp>
 
 // local includes required before platform includes
-#include "src/boost_process_compat.h"
+#include "src/compat/boost_process.h"
 
 // platform includes
 // prevent clang format from "optimizing" the header include order

@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 
+import configTabs from '../../src_assets/common/assets/web/configs/config_tabs.json'
 import DisplayDeviceOptions from '../../src_assets/common/assets/web/configs/tabs/audiovideo/DisplayDeviceOptions.vue'
 import Advanced from '../../src_assets/common/assets/web/configs/tabs/Advanced.vue'
 import General from '../../src_assets/common/assets/web/configs/tabs/General.vue'
@@ -103,7 +104,7 @@ describe('network configuration', () => {
     const wrapper = mount(Network, {
       props: {
         platform: 'linux',
-        config: { upnp: false },
+        config: { upnp: false, dscp_tagging: 'enabled' },
       },
       global: globalOptions,
     })
@@ -113,6 +114,43 @@ describe('network configuration', () => {
     expect(tableText).toContain('47989')
     expect(tableText).toContain('48010')
     expect(tableText).not.toContain('NaN')
+  })
+
+  it('toggles DSCP tagging between enabled and disabled', async () => {
+    const config = { upnp: false, dscp_tagging: 'enabled' }
+    const wrapper = mount(Network, {
+      props: { platform: 'linux', config },
+      global: { ...globalOptions, stubs: { ...globalOptions.stubs, Checkbox: false } },
+    })
+    const input = wrapper.get('#dscp_tagging')
+
+    expect(input.element.checked).toBe(true)
+
+    await input.setValue(false)
+    expect(config.dscp_tagging).toBe('disabled')
+
+    await input.setValue(true)
+    expect(config.dscp_tagging).toBe('enabled')
+  })
+})
+
+describe('legacy codec configuration', () => {
+  it.each(['mpeg2_mode', 'h263p_mode'])('loads the default and updates %s for each advertised mode', async key => {
+    const config = structuredClone(configTabs.find(tab => tab.id === 'advanced').options)
+    const wrapper = mount(Advanced, {
+      props: { platform: 'linux', config },
+      global: globalOptions,
+    })
+    const select = wrapper.get(`#${key}`)
+
+    expect(config[key]).toBe(0)
+    expect(select.element.value).toBe('0')
+    expect(select.findAll('option').map(option => option.attributes('value'))).toEqual(['0', '1', '2'])
+
+    for (const value of ['2', '1', '0']) {
+      await select.setValue(value)
+      expect(config[key]).toBe(value)
+    }
   })
 })
 

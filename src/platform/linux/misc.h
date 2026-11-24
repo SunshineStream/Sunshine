@@ -96,6 +96,18 @@ namespace portal {
    * @return Path of the selected test token.
    */
   std::filesystem::path get_saved_token_path_for_testing(const std::filesystem::path &directory, const std::string &desktop);
+
+  /**
+   * @brief Override the token path used by portal persistence in unit tests.
+   *
+   * @param path Token path used by load, save, clear and existence checks.
+   */
+  void set_saved_token_path_for_testing(const std::filesystem::path &path);
+
+  /**
+   * @brief Restore the production token path after a unit test.
+   */
+  void reset_saved_token_path_for_testing();
   #endif
 
   /**
@@ -120,6 +132,17 @@ namespace platf {
    * @return `true` when the environment is safe to use; `false` if a variable could not be removed.
    */
   bool sanitize_process_environment();
+
+  /**
+   * @brief Log a hint when no graphical session is visible to Sunshine.
+   *
+   * Called after every capture method failed to initialize. When neither `WAYLAND_DISPLAY` nor `DISPLAY` is set
+   * and the configured capture method is not KMS, an error explains that Sunshine is not running inside a
+   * graphical session and how to export the session environment to systemd.
+   *
+   * @return `true` when the hint was logged; `false` when a session variable is set or KMS capture is configured.
+   */
+  bool log_missing_graphical_session_hint();
 
   /**
    * @brief Open a DRM card node and drop implicit DRM master, if any.

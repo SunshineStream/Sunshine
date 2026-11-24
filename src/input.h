@@ -94,6 +94,14 @@ namespace input {
     void set_platform_input(platf::input_t input);
 
     /**
+     * @brief Access a retained stream's platform client devices in a unit test.
+     *
+     * @param input Retained input state.
+     * @return Borrowed platform client input context.
+     */
+    platf::client_input_t *client_context(const std::shared_ptr<input_t> &input);
+
+    /**
      * @brief Allocate a gamepad directly in retained input state for a unit test.
      *
      * @param input Retained input state.
@@ -172,6 +180,17 @@ namespace input {
      * @param delta_y Vertical client mouse delta.
      */
     void send_relative_mouse_packet(std::shared_ptr<input_t> &input, std::int16_t delta_x, std::int16_t delta_y);
+
+    /**
+     * @brief Process one client absolute-mouse packet on the calling thread.
+     *
+     * @param input Retained input state.
+     * @param x Horizontal position on the client surface.
+     * @param y Vertical position on the client surface.
+     * @param width Width of the client surface.
+     * @param height Height of the client surface.
+     */
+    void send_absolute_mouse_packet(std::shared_ptr<input_t> &input, std::int16_t x, std::int16_t y, std::int16_t width, std::int16_t height);
 
     /**
      * @brief Forget every key Sunshine tracks as pressed and cancel any pending key repeat.

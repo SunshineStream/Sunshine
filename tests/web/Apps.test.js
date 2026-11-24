@@ -154,12 +154,23 @@ describe('save – cover image validation', () => {
     )
   })
 
-  it('submits when the image path is empty', () => {
+  it('submits when the image path is empty and leaves the letter cover as the default', () => {
     const ctx = saveContext('')
 
     Apps.methods.save.call(ctx)
 
     expect(ctx.editFormError).toBe('')
+    expect(ctx.editForm['image-path']).toBeUndefined()
+    expect(apiFetch).toHaveBeenCalledOnce()
+  })
+
+  it('submits when the image path is missing', () => {
+    const ctx = saveContext(null)
+
+    expect(() => Apps.methods.save.call(ctx)).not.toThrow()
+
+    expect(ctx.editFormError).toBe('')
+    expect(ctx.editForm['image-path']).toBeUndefined()
     expect(apiFetch).toHaveBeenCalledOnce()
   })
 

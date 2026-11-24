@@ -39,7 +39,7 @@ jobs:
             runner: ubuntu-22.04
     steps:
       - name: More space
-        uses: LizardByte/actions/actions/more_space@0528b495e6af82b4d698ec6c907a9b1842622068  # v2026.1029.234422
+        uses: LizardByte/actions/actions/more_space@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           analyze-space-savings: true
           clean-all: true
@@ -77,7 +77,7 @@ jobs:
           chmod +x ./scripts/linux_build.sh
           echo "::add-matcher::.github/matchers/gcc.json"
           ./scripts/linux_build.sh \
-            --publisher-name="${GITHUB_REPOSITORY_OWNER}" \
+            --publisher-name="LizardByte" \
             --publisher-website="https://app.lizardbyte.dev" \
             --publisher-issue-url="https://app.lizardbyte.dev/support" \
             --skip-cleanup \
@@ -178,10 +178,10 @@ jobs:
           sudo rm -rf /var/lib/apt/lists/*
 
       - name: Setup virtual desktop
-        uses: LizardByte/actions/actions/virtual_desktop@0528b495e6af82b4d698ec6c907a9b1842622068  # v2026.1029.234422
+        uses: LizardByte/actions/actions/virtual_desktop@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
         with:
           enable-cache: true
 

@@ -102,7 +102,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2  # v10.3.3
+        uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d  # v10.4.0
         with:
           enable-cache: true
 
@@ -138,7 +138,7 @@ jobs:
             -DOpus_ROOT_DIR="$(brew --prefix opus 2>/dev/null)" \
             -DQt6_DIR="$(brew --prefix qtbase 2>/dev/null)/lib/cmake/Qt6" \
             -DQt6Svg_DIR="$(brew --prefix qtsvg 2>/dev/null)/lib/cmake/Qt6Svg" \
-            -DSUNSHINE_PUBLISHER_NAME="${GITHUB_REPOSITORY_OWNER}" \
+            -DSUNSHINE_PUBLISHER_NAME="LizardByte" \
             -DSUNSHINE_PUBLISHER_WEBSITE="https://app.lizardbyte.dev" \
             -DSUNSHINE_PUBLISHER_ISSUE_URL="https://app.lizardbyte.dev/support" \
             -DAPPLE_CODESIGN_IDENTITY="${APPLE_CODESIGN_IDENTITY}"

@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <functional>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -699,14 +700,15 @@ namespace safe {
     /**
      * @brief Return a shared reference to the protected object.
      *
-     * @return Reference handle that keeps the protected object alive.
+     * @return Reference handle that keeps the protected object alive, or an empty handle after failed initialization.
      */
     [[nodiscard]] ptr_t ref() {
       std::lock_guard lg {_lock};
 
       if (!_count) {
-        new (_object_buf.data()) element_type;
-        if (_construct(*reinterpret_cast<element_type *>(_object_buf.data())) != 0) {
+        auto *object = new (_object_buf.data()) element_type;
+        if (_construct(*object) != 0) {
+          std::destroy_at(object);
           return ptr_t {nullptr};
         }
       }
@@ -722,7 +724,7 @@ namespace safe {
 
     std::array<std::uint8_t, sizeof(element_type)> _object_buf;
 
-    std::uint32_t _count;
+    std::uint32_t _count = 0;  ///< Number of active references, including dynamically allocated storage.
     std::mutex _lock;
   };
 

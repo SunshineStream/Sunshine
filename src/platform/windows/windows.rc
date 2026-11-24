@@ -24,7 +24,7 @@ BEGIN
             VALUE "InternalName",     TOSTRING(PROJECT_NAME)
             VALUE "ProductName",      TOSTRING(PROJECT_NAME)
             VALUE "ProductVersion",   TOSTRING(PROJECT_VERSION)
-            VALUE "LegalCopyright",   "https://raw.githubusercontent.com/LizardByte/Sunshine/master/LICENSE"
+            VALUE "LegalCopyright",   "https://raw.githubusercontent.com/SunshineStream/Sunshine/master/LICENSE"
         END
     END
 

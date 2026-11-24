@@ -23,7 +23,6 @@ jobs:
     name: Update Changelog
     uses: LizardByte/.github/.github/workflows/__call-update-changelog.yml@master
     if: >-
-      github.repository_owner == 'LizardByte' &&
       (github.event_name == 'workflow_dispatch' ||
       (!github.event.release.prerelease && !github.event.release.draft))
     permissions:

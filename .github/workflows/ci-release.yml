@@ -13,16 +13,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  organization:
+    uses: LizardByte/.github/.github/workflows/__call-organization.yml@master
+
   npm:
+    needs: organization
     name: NPM
     if: >-
       github.event.action == 'released' &&
-      github.repository_owner == 'LizardByte'
+      needs.organization.outputs.allowed == 'true'
     permissions:
       contents: read
       id-token: write  # required for provenance and OIDC
       packages: write
     uses: LizardByte/.github/.github/workflows/__call-update-npm.yml@master
+    secrets:
+      GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
     with:
       release_version: ${{ github.event.release.tag_name }}
 
@@ -39,8 +45,10 @@ jobs:
 
   cloudsmith:
     name: Cloudsmith
-    if: startsWith(github.repository, 'LizardByte/')
-    needs: copr
+    if: needs.organization.outputs.allowed == 'true'
+    needs:
+      - organization
+      - copr
     permissions:
       contents: read
     uses: ./.github/workflows/ci-cloudsmith.yml

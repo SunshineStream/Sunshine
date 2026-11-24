@@ -1,5 +1,5 @@
 /**
- * @file src/boost_process_compat.h
+ * @file src/compat/boost_process.h
  * @brief Includes Boost.Process while isolating third-party deprecation diagnostics.
  */
 #pragma once

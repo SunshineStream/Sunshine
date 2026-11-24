@@ -21,7 +21,6 @@ jobs:
   top-issues:
     name: Top issues
     uses: LizardByte/.github/.github/workflows/__call-top-issues.yml@master
-    if: github.repository_owner == 'LizardByte'
     permissions:
       contents: read
       issues: write

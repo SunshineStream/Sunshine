@@ -785,7 +785,7 @@
           this.version = new SunshineVersion(null, r.version);
         });
 
-      fetch("https://api.github.com/repos/LizardByte/Sunshine/releases/latest")
+      fetch("https://api.github.com/repos/SunshineStream/Sunshine/releases/latest")
         .then((r) => r.json())
         .then((r) => this.githubVersion = new SunshineVersion(r, null))
         .catch((e) => console.error(e));
@@ -804,31 +804,34 @@
           "exit-timeout": 5,
           "prep-cmd": [],
           detached: [],
+          "working-dir": "",
           "image-path": ""
         };
         this.editFormError = "";
         this.openEditModal();
       },
+      /**
+       * @brief Open an application for editing with nullish optional fields defaulted.
+       * @param {number} id Index of the application to edit.
+       */
       editApp(id) {
         this.editForm = structuredClone(toRaw(this.apps[id]));
         this.editForm.index = id;
-        if (this.editForm["prep-cmd"] === undefined)
-          this.editForm["prep-cmd"] = [];
-        if (this.editForm["detached"] === undefined)
-          this.editForm["detached"] = [];
-        if (this.editForm["exclude-global-prep-cmd"] === undefined)
-          this.editForm["exclude-global-prep-cmd"] = false;
-        if (this.editForm["elevated"] === undefined && this.platform === 'windows') {
-          this.editForm["elevated"] = false;
-        }
-        if (this.editForm["auto-detach"] === undefined) {
-          this.editForm["auto-detach"] = true;
-        }
-        if (this.editForm["wait-all"] === undefined) {
-          this.editForm["wait-all"] = true;
-        }
-        if (this.editForm["exit-timeout"] === undefined) {
-          this.editForm["exit-timeout"] = 5;
+        const defaults = {
+          "prep-cmd": [],
+          detached: [],
+          "exclude-global-prep-cmd": false,
+          elevated: false,
+          "auto-detach": true,
+          "wait-all": true,
+          "exit-timeout": 5,
+          cmd: "",
+          output: "",
+          "working-dir": "",
+          "image-path": ""
+        };
+        for (const [key, value] of Object.entries(defaults)) {
+          this.editForm[key] ??= value;
         }
         this.editFormError = "";
         this.openEditModal();
@@ -1024,10 +1027,13 @@
       },
       save() {
         this.editFormError = "";
-        this.editForm["image-path"] = this.editForm["image-path"].toString().replaceAll('"', '');
+        const currentImagePath = this.editForm["image-path"] == null ? "" : String(this.editForm["image-path"]).trim();
+        this.editForm["image-path"] = currentImagePath.replaceAll('"', '');
 
         const imagePath = this.editForm["image-path"];
-        if (imagePath && !imagePath.toLowerCase().endsWith('.png')) {
+        if (!imagePath) {
+          delete this.editForm["image-path"];
+        } else if (!imagePath.toLowerCase().endsWith('.png')) {
           this.editFormError = this.$t('file_browser.error_invalid_extension', { extensions: '.png' });
           const modalBody = this.$refs.editModal.querySelector('.modal-body');
           if (modalBody) modalBody.scrollTop = 0;

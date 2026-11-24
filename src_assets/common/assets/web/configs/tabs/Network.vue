@@ -174,5 +174,13 @@ const effectivePort = computed(() => Number(config.value?.port ?? defaultMoonlig
       <div class="form-text">{{ $t('config.packetsize_desc') }}</div>
     </div>
 
+    <!-- DSCP Tagging -->
+    <Checkbox class="mb-3"
+              id="dscp_tagging"
+              locale-prefix="config"
+              v-model="config.dscp_tagging"
+              default="true"
+    ></Checkbox>
+
   </div>
 </template>

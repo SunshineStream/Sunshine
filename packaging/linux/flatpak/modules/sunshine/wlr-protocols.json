@@ -1,0 +1,16 @@
+[
+  {
+    "type": "git",
+    "x-renovate": {
+      "datasource": "git-refs",
+      "depName": "wlroots/wlr-protocols",
+      "packageName": "https://github.com/LizardByte-infrastructure/wlr-protocols.git",
+      "versioning": "exact",
+      "ref": "master"
+    },
+    "url": "https://github.com/LizardByte-infrastructure/wlr-protocols.git",
+    "commit": "1106a4a1c57562ddd438c547da4c0d6dc150d624",
+    "dest": "flatpak-cpm/wlr_protocols",
+    "disable-submodules": true
+  }
+]

@@ -13,7 +13,7 @@
 #include <vector>
 
 // local includes
-#include "src/boost_process_compat.h"
+#include "src/compat/boost_process.h"
 #include "src/platform/common.h"
 
 // Test data structure for parameterized testing

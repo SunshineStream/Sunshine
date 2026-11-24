@@ -11,14 +11,20 @@
   // standard includes
   #include <algorithm>
   #include <array>
+  #include <atomic>
   #include <bit>
+  #include <chrono>
   #include <cstdint>
+  #include <cstdlib>
   #include <deque>
+  #include <fstream>
+  #include <latch>
   #include <map>
   #include <memory>
   #include <ranges>
   #include <set>
   #include <string>
+  #include <thread>
   #include <utility>
   #include <vector>
 
@@ -35,6 +41,7 @@ extern "C" {
 
   // local includes
   #include "src/platform/linux/cuda.h"
+  #include "src/utility.h"
   #ifdef SUNSHINE_BUILD_CUDA
     #include "src/platform/linux/cuda_gl_textures.h"
     #include "src/platform/linux/graphics.h"
@@ -2179,6 +2186,91 @@ TEST_F(CudaGlDriverTest, PlaneTextureRegistration) {
   EXPECT_EQ(cuda::register_plane_texture(api().cuda, &resource, 8), -1);
 }
 
+namespace {
+  /**
+   * @brief CUDA error lookup behavior and the text that is safe to log.
+   */
+  struct cuda_error_lookup_case_t {
+    tcuGetErrorName *lookup;  ///< Error name or description lookup with the shared CUDA signature.
+    const char *expected;  ///< Text to log, or nullptr when the appropriate fallback is required.
+  };
+}  // namespace
+
+TEST(CudaErrorLoggingTest, HandlesLookupFailuresAndNullTextIndependently) {
+  const std::array cases {
+    cuda_error_lookup_case_t {[](CUresult, const char **text) {
+                                *text = "resolved";
+                                return CUDA_SUCCESS;
+                              },
+                              "resolved"},
+    cuda_error_lookup_case_t {[](CUresult, const char **) {
+                                return cu_failed;
+                              },
+                              nullptr},
+    cuda_error_lookup_case_t {[](CUresult, const char **text) {
+                                *text = reinterpret_cast<const char *>(std::uintptr_t {1});
+                                return cu_failed;
+                              },
+                              nullptr},
+    cuda_error_lookup_case_t {[](CUresult, const char **text) {
+                                *text = nullptr;
+                                return CUDA_SUCCESS;
+                              },
+                              nullptr},
+  };
+
+  for (std::size_t name_case = 0; name_case < cases.size(); ++name_case) {
+    for (std::size_t description_case = 0; description_case < cases.size(); ++description_case) {
+      SCOPED_TRACE(testing::Message() << "name=" << name_case << ", description=" << description_case);
+      api() = fake_api_t {};
+      auto functions = fake_cuda_functions();
+      functions.cuGetErrorName = cases[name_case].lookup;
+      functions.cuGetErrorString = cases[description_case].lookup;
+      functions.cuGraphicsGLRegisterImage = [](CUgraphicsResource *, GLuint, GLenum, unsigned int) {
+        return static_cast<CUresult>(100);  // CUDA_ERROR_NO_DEVICE is not named in nv-codec-headers.
+      };
+      CUgraphicsResource resource = nullptr;
+      logging::log_flush();
+      std::ifstream log_file {"test_sunshine.log", std::ios::ate};
+      ASSERT_TRUE(log_file);
+      const auto log_position = log_file.tellg();
+
+      EXPECT_EQ(cuda::register_plane_texture(functions, &resource, 7), -1);
+
+      logging::log_flush();
+      log_file.seekg(log_position);
+      std::string line;
+      ASSERT_TRUE(static_cast<bool>(std::getline(log_file, line)));
+      const std::string expected = std::string {"Couldn't register plane texture: "} +
+                                   (cases[name_case].expected ? cases[name_case].expected : "Unknown CUDA error") +
+                                   " (100): " +
+                                   (cases[description_case].expected ? cases[description_case].expected : "No error description available");
+      EXPECT_NE(line.find(expected), std::string::npos) << line;
+    }
+  }
+}
+
+TEST(CudaErrorLoggingTest, SuccessfulCallsDoNotLookUpOrLogErrors) {
+  api() = fake_api_t {};
+  auto functions = fake_cuda_functions();
+  functions.cuGetErrorName = functions.cuGetErrorString = [](CUresult, const char **) {
+    ADD_FAILURE() << "Successful CUDA calls must not look up errors";
+    return cu_failed;
+  };
+  CUgraphicsResource resource = nullptr;
+  logging::log_flush();
+  std::ifstream log_file {"test_sunshine.log", std::ios::ate};
+  ASSERT_TRUE(log_file);
+  const auto log_position = log_file.tellg();
+
+  EXPECT_EQ(cuda::register_plane_texture(functions, &resource, 7), 0);
+
+  logging::log_flush();
+  log_file.seekg(log_position);
+  EXPECT_EQ(log_file.peek(), std::ifstream::traits_type::eof());
+  EXPECT_EQ(resource, &api().resources[0]);
+}
+
 TEST_F(CudaGlDriverTest, GlCommandsWaitDeletesItsFence) {
   EXPECT_EQ(cuda::wait_for_gl_commands(), 0);
 
@@ -2196,6 +2288,201 @@ TEST_F(CudaGlDriverTest, GlCommandsWaitReportsFailures) {
   EXPECT_TRUE(api().live.empty());
 }
     #endif  // SUNSHINE_BUILD_VULKAN
+
+namespace {
+  /**
+   * @brief What the fake CUDA driver used by the `cuda::init()` tests has been asked to do.
+   *
+   * The entries of a CUDA function table are plain function pointers, so the fakes share this state.
+   */
+  struct fake_init_driver_t {
+    std::atomic<int> table_loads;  ///< Times a table was loaded.
+    std::atomic<int> cu_inits;  ///< Times `cuInit` was called.
+    std::atomic<int> failing_cu_inits;  ///< How many of the next `cuInit` calls fail.
+    std::atomic<int> error_name_lookups;  ///< Times `cuGetErrorName` was called.
+    std::atomic<int> error_description_lookups;  ///< Times `cuGetErrorString` was called.
+    std::atomic<CUresult> looked_up_error;  ///< Result the last lookup was asked about.
+  };
+
+  constexpr auto init_failure = CUDA_ERROR_UNKNOWN;  ///< What a failing fake `cuInit` returns.
+
+  /**
+   * @brief The fake driver's state, reset for every test.
+   *
+   * @return The state.
+   */
+  fake_init_driver_t &init_driver() {
+    static fake_init_driver_t driver;
+    return driver;
+  }
+
+  /**
+   * @brief Forget everything the fake driver recorded.
+   */
+  void reset_init_driver() {
+    auto &driver = init_driver();
+    driver.table_loads = 0;
+    driver.cu_inits = 0;
+    driver.failing_cu_inits = 0;
+    driver.error_name_lookups = 0;
+    driver.error_description_lookups = 0;
+    driver.looked_up_error = CUDA_SUCCESS;
+  }
+
+  /**
+   * @brief Fill a table with the fake driver's functions.
+   *
+   * @param table Table to fill.
+   */
+  void fill_fake_table(CudaFunctions &table) {
+    table.cuInit = [](unsigned int) {
+      auto &driver = init_driver();
+      ++driver.cu_inits;
+      if (driver.failing_cu_inits > 0) {
+        --driver.failing_cu_inits;
+        return init_failure;
+      }
+      return CUDA_SUCCESS;
+    };
+    table.cuGetErrorName = [](CUresult result, const char **text) {
+      ++init_driver().error_name_lookups;
+      init_driver().looked_up_error = result;
+      *text = "fake";
+      return CUDA_SUCCESS;
+    };
+    table.cuGetErrorString = [](CUresult result, const char **text) {
+      ++init_driver().error_description_lookups;
+      init_driver().looked_up_error = result;
+      *text = "failure";
+      return CUDA_SUCCESS;
+    };
+  }
+
+  /**
+   * @brief Load a table the way `cuda_load_functions` does, without needing the CUDA driver.
+   *
+   * Like the real loader, it frees the table it is given and starts a new one.
+   *
+   * @param table Table to load.
+   * @return 0.
+   */
+  int load_fake_table(CudaFunctions **table) {
+    ++init_driver().table_loads;
+    cuda_free_functions(table);
+    *table = static_cast<CudaFunctions *>(std::calloc(1, sizeof(CudaFunctions)));
+    fill_fake_table(**table);
+    return 0;
+  }
+
+  /**
+   * @brief Stand-in for a loader on a machine where the CUDA driver cannot be loaded.
+   *
+   * @return -1.
+   */
+  int failing_load_table(CudaFunctions **) {
+    ++init_driver().table_loads;
+    return -1;
+  }
+
+  /**
+   * @brief Load a table slowly enough for any caller not waiting its turn to reach the loader too.
+   *
+   * The first load waits until a second load starts, or 200 ms at most. Every load hands out the same
+   * table and frees nothing, so callers loading at the same time are counted rather than crashing.
+   *
+   * @param table Table to load.
+   * @return 0.
+   */
+  int load_fake_table_slowly(CudaFunctions **table) {
+    using namespace std::chrono_literals;
+    static CudaFunctions shared_table = [] {
+      CudaFunctions functions {};
+      fill_fake_table(functions);
+      return functions;
+    }();
+
+    if (++init_driver().table_loads == 1) {
+      const auto deadline = std::chrono::steady_clock::now() + 200ms;
+      while (init_driver().table_loads < 2 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+      }
+    }
+
+    *table = &shared_table;
+    return 0;
+  }
+}  // namespace
+
+TEST(CudaInitTest, LoadsTheFunctionTableOnlyOnce) {
+  CudaFunctions *table = nullptr;
+  auto free_table = util::fail_guard([&table] {
+    cuda_free_functions(&table);
+  });
+  reset_init_driver();
+
+  ASSERT_EQ(cuda::init(&table, load_fake_table), 0);
+  // Every new stream calls cuda::init() again, while the streams already running keep calling
+  // through the table. Loading it again would empty it under them.
+  ASSERT_EQ(cuda::init(&table, load_fake_table), 0);
+
+  EXPECT_EQ(init_driver().table_loads.load(), 1);
+}
+
+TEST(CudaInitTest, RetriesLoadingAfterAFailure) {
+  CudaFunctions *table = nullptr;
+  auto free_table = util::fail_guard([&table] {
+    cuda_free_functions(&table);
+  });
+  reset_init_driver();
+
+  EXPECT_NE(cuda::init(&table, failing_load_table), 0);
+  EXPECT_EQ(cuda::init(&table, load_fake_table), 0);
+
+  EXPECT_EQ(init_driver().table_loads.load(), 2);
+}
+
+TEST(CudaInitTest, ReportsACuInitFailureThroughTheTableAndRetriesItWithTheSameTable) {
+  CudaFunctions *table = nullptr;
+  auto free_table = util::fail_guard([&table] {
+    cuda_free_functions(&table);
+  });
+  reset_init_driver();
+  init_driver().failing_cu_inits = 1;
+
+  EXPECT_NE(cuda::init(&table, load_fake_table), 0);
+  EXPECT_EQ(init_driver().error_name_lookups.load(), 1);
+  EXPECT_EQ(init_driver().error_description_lookups.load(), 1);
+  EXPECT_EQ(init_driver().looked_up_error.load(), init_failure);
+
+  const auto *loaded_table = table;
+  EXPECT_EQ(cuda::init(&table, load_fake_table), 0);
+
+  EXPECT_EQ(table, loaded_table);
+  EXPECT_EQ(init_driver().table_loads.load(), 1);
+  EXPECT_EQ(init_driver().cu_inits.load(), 2);
+}
+
+TEST(CudaInitTest, CallersStartingTogetherLoadTheTableOnce) {
+  constexpr int callers = 8;
+  CudaFunctions *table = nullptr;
+  reset_init_driver();
+
+  // Streams that start at the same time all call cuda::init() at once.
+  std::array<int, callers> results {};
+  std::latch start {callers};
+  std::vector<std::jthread> threads;
+  for (auto &result : results) {
+    threads.emplace_back([&result, &start, &table] {
+      start.arrive_and_wait();
+      result = cuda::init(&table, load_fake_table_slowly);
+    });
+  }
+  threads.clear();
+
+  EXPECT_EQ(results, (std::array<int, callers> {}));
+  EXPECT_EQ(init_driver().table_loads.load(), 1);
+  EXPECT_EQ(init_driver().cu_inits.load(), callers);
+}
   #endif  // SUNSHINE_BUILD_CUDA
 
 #endif  // __linux__

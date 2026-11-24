@@ -34,42 +34,42 @@
     },
     ".github/workflows/_release-notifier.yml": {
       "mode": "sync",
-      "sha": "7a30fa1a356c9113993059734de5905b1907e328",
+      "sha": "9667efbb1857e2d4ad1a044beeb7cd8ac40e551c",
       "permissions": "100644"
     },
     ".github/workflows/_top-issues.yml": {
       "mode": "sync",
-      "sha": "3072822c6a6832079de60fe8940953e008da165f",
+      "sha": "83a8bf0617b59cdb96245bac71232aabbb620d14",
       "permissions": "100644"
     },
     ".github/workflows/_update-changelog.yml": {
       "mode": "sync",
-      "sha": "314caf7ef30b645909d3567d1f6a7fd33c268cd0",
+      "sha": "e7b9dc6a758937c95f58fdd1b93cae619f0f5cbc",
       "permissions": "100644"
     },
     ".github/workflows/_update-docs.yml": {
       "mode": "sync",
-      "sha": "22c2a5175dcb70b44a80d0df25795e9a119dafe9",
+      "sha": "dd890841d5b656dc46beb5277250dde9be788c05",
       "permissions": "100644"
     },
     ".github/workflows/_update-flathub-repo.yml": {
       "mode": "sync",
-      "sha": "4b75a2482160981e7370dfe6ed80ff0ef6bc1058",
+      "sha": "3fd24093a0feda111443f3be25ae40ec0d0057d9",
       "permissions": "100644"
     },
     ".github/workflows/_update-homebrew-repo.yml": {
       "mode": "sync",
-      "sha": "cdd96ddb50eb55191a19977cef22d770785c5eec",
+      "sha": "5c796be7311de074c8310030c3b06a08f2958304",
       "permissions": "100644"
     },
     ".github/workflows/_update-pacman-repo.yml": {
       "mode": "sync",
-      "sha": "89a67aaedf9eeb3d14731eb62ebc27c4ff7c9981",
+      "sha": "16561abbb1108a2ecd326509bdb01f26129bad4b",
       "permissions": "100644"
     },
     ".github/workflows/_update-winget-repo.yml": {
       "mode": "sync",
-      "sha": "9bb4d8e97f4171025489854485f7ab6dfe6e64aa",
+      "sha": "5aecabfa2e590e99e2d9b8f58cecc1c902ebb87f",
       "permissions": "100644"
     },
     "renovate.json": {

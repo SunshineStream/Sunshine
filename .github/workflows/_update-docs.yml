@@ -27,7 +27,6 @@ jobs:
   update-docs:
     name: Update docs
     uses: LizardByte/.github/.github/workflows/__call-update-docs.yml@master
-    if: github.repository_owner == 'LizardByte'
     permissions: {}
     with:
       readthedocs_slug: ${{ vars.READTHEDOCS_SLUG }}

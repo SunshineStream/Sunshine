@@ -13,19 +13,23 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
 
-// local includes
-#include "src/config.h"
-#include "src/globals.h"
-#include "src/platform/virtualhid_input.h"
+// lib includes
+#include <lizardbyte/common/env.h>
 
 #if defined(_WIN32) || defined(__APPLE__)
   #include <libvirtualhid/license.hpp>
 #endif
+
+// local includes
+#include "src/config.h"
+#include "src/globals.h"
+#include "src/platform/virtualhid_input.h"
 
 using namespace std::chrono_literals;
 using namespace std::literals;
@@ -214,6 +218,85 @@ namespace {
       public ::testing::WithParamInterface<auto_profile_case_t> {};
 
 }  // namespace
+
+TEST(VirtualHidSeatTest, LeavesDeviceNameUnchangedForDefaultSeat) {
+  EXPECT_EQ(platf::virtualhid::device_name_for_seat("libvirtualhid Keyboard"sv, ""sv), "libvirtualhid Keyboard");
+  EXPECT_EQ(platf::virtualhid::device_name_for_seat("libvirtualhid Keyboard"sv, "seat0"sv), "libvirtualhid Keyboard");
+}
+
+TEST(VirtualHidSeatTest, AppendsNonDefaultSeatToDeviceName) {
+  EXPECT_EQ(platf::virtualhid::device_name_for_seat("libvirtualhid Mouse"sv, "seat1"sv), "libvirtualhid Mouse (seat1)");
+  EXPECT_EQ(platf::virtualhid::device_name_for_seat("Sunshine DualSense"sv, "seat_vr"sv), "Sunshine DualSense (seat_vr)");
+}
+
+namespace {
+
+  /**
+   * @brief Fixture that creates fake virtual devices while `XDG_SEAT` targets a secondary seat.
+   */
+  class VirtualHidSeatDeviceTest: public ::testing::Test {
+  protected:
+    /**
+     * @brief Point `XDG_SEAT` at `seat1` before creating fake devices.
+     */
+    void SetUp() override {
+      if (std::string value; lizardbyte::common::get_env("XDG_SEAT", value)) {
+        original_seat_ = std::move(value);
+      }
+      original_input_ = config::input;
+      ASSERT_EQ(lizardbyte::common::set_env("XDG_SEAT", "seat1"), 0);
+      context_ = std::make_unique<platf::virtualhid::input_context_t>(lvh::BackendKind::fake);
+      client_ = std::make_unique<platf::virtualhid::client_context_t>(*context_);
+      feedback_queue_ = mail::man->queue<platf::gamepad_feedback_msg_t>("virtualhid-input-test-seat");
+    }
+
+    /**
+     * @brief Release fake devices and restore the original seat and input configuration.
+     */
+    void TearDown() override {
+      client_.reset();
+      context_.reset();
+      feedback_queue_.reset();
+      config::input = std::move(original_input_);
+      if (original_seat_) {
+        lizardbyte::common::set_env("XDG_SEAT", *original_seat_);
+      } else {
+        lizardbyte::common::unset_env("XDG_SEAT");
+      }
+    }
+
+    std::unique_ptr<platf::virtualhid::input_context_t> context_;  ///< Shared fake virtual devices.
+    std::unique_ptr<platf::virtualhid::client_context_t> client_;  ///< Per-client fake touch and pen devices.
+    platf::feedback_queue_t feedback_queue_;  ///< Captured gamepad feedback messages.
+
+  private:
+    std::optional<std::string> original_seat_;  ///< `XDG_SEAT` value restored after each test.
+    config::input_t original_input_;  ///< Input configuration restored after each test.
+  };
+
+}  // namespace
+
+TEST_F(VirtualHidSeatDeviceTest, ScopesEveryDeviceNameToTargetSeat) {
+  ASSERT_NE(context_->keyboard, nullptr);
+  ASSERT_NE(context_->mouse, nullptr);
+  ASSERT_NE(client_->touch, nullptr);
+  ASSERT_NE(client_->pen, nullptr);
+  EXPECT_EQ(context_->keyboard->profile().name, lvh::profiles::keyboard().name + " (seat1)");
+  EXPECT_EQ(context_->mouse->profile().name, lvh::profiles::mouse().name + " (seat1)");
+  EXPECT_EQ(client_->touch->profile().name, lvh::profiles::touchscreen().name + " (seat1)");
+  EXPECT_EQ(client_->pen->profile().name, lvh::profiles::pen_tablet().name + " (seat1)");
+
+  config::input.gamepad = "x360";
+  const platf::gamepad_id_t id {0, 0};
+  const platf::gamepad_arrival_t metadata {LI_CTYPE_XBOX, 0, 0};
+  ASSERT_EQ(platf::virtualhid::alloc_gamepad(*context_, id, metadata, feedback_queue_), 0);
+  auto *adapter = platf::virtualhid::gamepad_adapter_for_testing(*context_, 0);
+  ASSERT_NE(adapter, nullptr);
+  ASSERT_NE(adapter->gamepad(), nullptr);
+  EXPECT_TRUE(adapter->gamepad()->profile().name.starts_with("Sunshine "));
+  EXPECT_TRUE(adapter->gamepad()->profile().name.ends_with(" (seat1)"));
+  platf::virtualhid::free_gamepad(*context_, 0);
+}
 
 TEST_F(VirtualHidDeviceTest, CreatesEveryDeviceWithFakeRuntime) {
   EXPECT_EQ(context()->runtime->backend_kind(), lvh::BackendKind::fake);
@@ -885,7 +968,7 @@ TEST_F(VirtualHidDeviceTest, RetargetsRelativeMouseWhenStreamedViewportChanges) 
 }
 
 TEST_F(VirtualHidDeviceTest, TranslatesTouchscreenLifecycleAndGeometry) {
-  const platf::touch_port_t viewport {10, 20, 800, 600, 400, 300};
+  const platf::touch_port_t viewport {10, 20, 800, 600, 400, 300, 0, 0, "DP-1"};
   platf::touch_input_t touch {LI_TOUCH_EVENT_DOWN, 100, 7, -0.1F, 1.1F, 1.2F, 15.0F, 10.0F};
   platf::virtualhid::touch_update(*client(), viewport, touch);
   auto contact = client()->touch->last_submitted_contact();
@@ -896,6 +979,7 @@ TEST_F(VirtualHidDeviceTest, TranslatesTouchscreenLifecycleAndGeometry) {
   EXPECT_EQ(contact.orientation, 80);
   EXPECT_TRUE(contact.touching);
   EXPECT_EQ(contact.viewport.offset_x, 10);
+  EXPECT_EQ(contact.viewport.output_name, "DP-1");
   EXPECT_EQ(contact.viewport.offset_y, 20);
   EXPECT_EQ(contact.viewport.width, 800);
   EXPECT_EQ(contact.viewport.height, 600);
@@ -953,7 +1037,7 @@ TEST_F(VirtualHidDeviceTest, TranslatesTouchscreenLifecycleAndGeometry) {
 }
 
 TEST_F(VirtualHidDeviceTest, TranslatesPenButtonsToolsAndTransitions) {
-  const platf::touch_port_t viewport {1, 2, 1000, 500, 1000, 500};
+  const platf::touch_port_t viewport {1, 2, 1000, 500, 1000, 500, 0, 0, "HDMI-A-1"};
   platf::pen_input_t pen {
     LI_TOUCH_EVENT_DOWN,
     LI_TOOL_TYPE_PEN,
@@ -978,6 +1062,7 @@ TEST_F(VirtualHidDeviceTest, TranslatesPenButtonsToolsAndTransitions) {
   EXPECT_EQ(state.transition, lvh::PointerTransition::update);
   EXPECT_EQ(state.viewport.offset_x, 1);
   EXPECT_EQ(state.viewport.offset_y, 2);
+  EXPECT_EQ(state.viewport.output_name, "HDMI-A-1");
   EXPECT_TRUE(client()->pressed_pen_buttons.contains(lvh::PenButton::primary));
   EXPECT_TRUE(client()->pressed_pen_buttons.contains(lvh::PenButton::secondary));
 

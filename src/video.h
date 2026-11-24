@@ -6,7 +6,13 @@
 
 // standard includes
 #include <chrono>
+#include <deque>
+#include <functional>
+#include <optional>
+#include <span>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 // local includes
 #include "input.h"
@@ -21,11 +27,22 @@ extern "C" {
 
 struct AVPacket;
 
+namespace display_device {
+  struct EnumeratedDevice;
+}
+
 namespace stream {
   struct session_t;
 }
 
 namespace video {
+  inline constexpr int format_h264 = 0;  ///< H.264 High profile wire identifier.
+  inline constexpr int format_hevc = 1;  ///< HEVC Main/Main10 wire identifier.
+  inline constexpr int format_av1 = 2;  ///< AV1 Main/Main10 wire identifier.
+  inline constexpr int format_mpeg2 = 3;  ///< MPEG-2/H.262 wire identifier.
+  inline constexpr int format_h263p = 4;  ///< H.263+ wire identifier.
+
+  constexpr int VIDEO_FORMAT_COUNT = format_h263p + 1;  ///< Number of supported wire codec identifiers.
 
   /**
    * @brief Encoding configuration requested by a remote client.
@@ -39,11 +56,20 @@ namespace video {
     int slicesPerFrame;  ///< Number of slices per frame.
     int numRefFrames;  ///< Maximum number of reference frames.
     int encoderCscMode;  ///< Requested color range and SDR colorspace; HDR always uses BT.2020 and ST2084.
-    int videoFormat;  ///< Video codec format: 0 = H.264, 1 = HEVC, 2 = AV1.
+    int videoFormat;  ///< GameStream wire identifier for the requested video codec.
     int dynamicRange;  ///< Encoding color depth: 0 = 8-bit, 1 = 10-bit.
     int chromaSamplingType;  ///< Chroma sampling type: 0 = 4:2:0, 1 = 4:4:4.
     int enableIntraRefresh;  ///< Intra refresh setting: 0 = disabled, 1 = enabled.
   };
+
+  /**
+   * @brief Describe the streamed display, desktop bounds, and client letterboxing for absolute input.
+   *
+   * @param display Capture display supplying native output identity and geometry.
+   * @param config Client stream dimensions.
+   * @return Touch port forwarded from the video pipeline to input handling.
+   */
+  input::touch_port_t make_port(platf::display_t *display, const config_t &config);
 
   namespace amf {
 
@@ -67,6 +93,14 @@ namespace video {
    * @return FFmpeg H.264 profile applied to the codec context.
    */
   int select_h264_profile(std::string_view encoder_name, const config_t &config, int amd_coder);
+
+  /**
+   * @brief Decide whether encoder probing may proceed with the given display devices.
+   *
+   * @param devices Display devices currently enumerated by libdisplaydevice.
+   * @return True if there should be no issues with the probing, false if it must be prevented.
+   */
+  bool allow_encoder_probing(const std::vector<display_device::EnumeratedDevice> &devices);
 
   /**
    * @brief Map an FFmpeg hardware device type to Sunshine's memory type.
@@ -192,6 +226,34 @@ namespace video {
   };
 
   /**
+   * @brief Capture timestamps of in-flight frames keyed by pts, awaiting their encoded packets.
+   */
+  using frame_timestamp_queue_t = std::deque<std::pair<int64_t, std::chrono::steady_clock::time_point>>;
+
+  /**
+   * @brief Remember a submitted frame's capture timestamp until its encoded packet surfaces.
+   *
+   * Encoders may deliver packets one or more frames behind submission, so the timestamp is
+   * kept keyed by pts until the corresponding packet arrives. The queue is bounded: once
+   * 128 timestamps are outstanding, the oldest entry is evicted per insertion.
+   * @param timestamps Queue of outstanding capture timestamps.
+   * @param frame_nr Monotonic frame index assigned by the video pipeline, used as the frame pts.
+   * @param frame_timestamp Capture timestamp associated with the frame, when known.
+   */
+  void remember_frame_timestamp(frame_timestamp_queue_t &timestamps, int64_t frame_nr, const std::optional<std::chrono::steady_clock::time_point> &frame_timestamp);
+
+  /**
+   * @brief Match an encoded packet to the capture timestamp of the frame it encodes.
+   *
+   * Entries for older frames whose packets never surfaced (e.g. dropped by the encoder)
+   * are discarded; a packet is never paired with another frame's timestamp.
+   * @param timestamps Queue of outstanding capture timestamps.
+   * @param pts Presentation timestamp of the received packet.
+   * @return Capture timestamp of the packet's frame, when known.
+   */
+  std::optional<std::chrono::steady_clock::time_point> match_frame_timestamp(frame_timestamp_queue_t &timestamps, int64_t pts);
+
+  /**
    * @brief Pixel formats supported by one encoder backend.
    */
   struct encoder_platform_formats_t {
@@ -289,6 +351,34 @@ namespace video {
   };
 
   /**
+   * @brief Native VideoToolbox-specific pixel formats supported by a platform.
+   */
+  struct encoder_platform_formats_vt: encoder_platform_formats_t {
+    /**
+     * @brief Construct VideoToolbox platform format mappings.
+     *
+     * @param dev_type Platform memory type.
+     * @param pix_fmt_8bit Platform 8-bit pixel format.
+     * @param pix_fmt_10bit Platform 10-bit pixel format.
+     * @param pix_fmt_yuv444_8bit Platform 8-bit YUV444 pixel format.
+     * @param pix_fmt_yuv444_10bit Platform 10-bit YUV444 pixel format.
+     */
+    encoder_platform_formats_vt(
+      const platf::mem_type_e &dev_type,
+      const platf::pix_fmt_e &pix_fmt_8bit,
+      const platf::pix_fmt_e &pix_fmt_10bit,
+      const platf::pix_fmt_e &pix_fmt_yuv444_8bit,
+      const platf::pix_fmt_e &pix_fmt_yuv444_10bit
+    ) {
+      encoder_platform_formats_t::dev_type = dev_type;
+      encoder_platform_formats_t::pix_fmt_8bit = pix_fmt_8bit;
+      encoder_platform_formats_t::pix_fmt_10bit = pix_fmt_10bit;
+      encoder_platform_formats_t::pix_fmt_yuv444_8bit = pix_fmt_yuv444_8bit;
+      encoder_platform_formats_t::pix_fmt_yuv444_10bit = pix_fmt_yuv444_10bit;
+    }
+  };
+
+  /**
    * @brief Encoder name and feature flags advertised by Sunshine.
    */
   struct encoder_t {
@@ -363,7 +453,7 @@ namespace video {
     const std::unique_ptr<const encoder_platform_formats_t> platform_formats;  ///< Platform-specific memory and pixel formats accepted by the encoder.
 
     /**
-     * @brief Codec capabilities for AV1, HEVC, or H.264.
+     * @brief Codec capabilities for a modern or legacy video format.
      */
     struct codec_t {
       std::vector<option_t> common_options;  ///< Options applied to every encode mode for this codec.
@@ -400,24 +490,30 @@ namespace video {
     codec_t av1;  ///< AV1 codec capability and option set.
     codec_t hevc;  ///< HEVC codec capability and option set.
     codec_t h264;  ///< H.264 codec capability and option set.
+    codec_t mpeg2;  ///< MPEG-2 codec capability and option set.
+    codec_t h263p;  ///< H.263+ codec capability and option set.
 
     /**
      * @brief Select the codec descriptor requested by a stream configuration.
      *
      * @param config Configuration values to apply.
-     * @return Codec descriptor for H.264, HEVC, or AV1.
+     * @return Codec descriptor for H.264, HEVC, AV1, MPEG-2, or H.263+.
      */
     const codec_t &codec_from_config(const config_t &config) const {
       switch (config.videoFormat) {
         default:
           BOOST_LOG(error) << "Unknown video format " << config.videoFormat << ", falling back to H.264";
           // fallthrough
-        case 0:
+        case format_h264:
           return h264;
-        case 1:
+        case format_hevc:
           return hevc;
-        case 2:
+        case format_av1:
           return av1;
+        case format_mpeg2:
+          return mpeg2;
+        case format_h263p:
+          return h263p;
       }
     }
 
@@ -684,6 +780,46 @@ namespace video {
    */
   using hdr_info_t = std::unique_ptr<hdr_info_raw_t>;
 
+  /**
+   * @brief Callback used to probe one encoder for one requested legacy codec.
+   */
+  using codec_probe_t = std::function<bool(encoder_t &, int)>;
+
+  /**
+   * @brief Probe MPEG-2 or H.263+ independently of H.264 support.
+   *
+   * @param encoder Backend whose requested codec should be validated.
+   * @param video_format MPEG-2 or H.263+ wire codec identifier.
+   * @return Whether the backend successfully encoded the requested legacy codec.
+   */
+  bool validate_legacy_codec(encoder_t &encoder, int video_format);
+
+  /**
+   * @brief Choose the first backend that passes a codec-specific probe.
+   *
+   * @param candidates Backend preference order, including software fallbacks.
+   * @param video_format Requested legacy codec identifier.
+   * @param probe Callback validating only the requested codec.
+   * @return Selected backend, or nullptr when no candidate passes.
+   */
+  encoder_t *select_legacy_encoder(std::span<encoder_t *const> candidates, int video_format, const codec_probe_t &probe);
+
+  /**
+   * @brief Encoder probe results for baseline H.264 and the legacy codec modes.
+   */
+  struct probed_codec_modes_t {
+    bool h264 = false;  ///< Whether baseline H.264 passed its probe.
+    int mpeg2 = 0;  ///< Active MPEG-2 advertisement mode.
+    int h263p = 0;  ///< Active H.263+ advertisement mode.
+  };
+
+  /**
+   * @brief Access the codec modes owned by the encoder probe.
+   *
+   * @return Current H.264 probe result and legacy codec advertisement modes.
+   */
+  probed_codec_modes_t &probed_codec_modes();
+
   extern int active_hevc_mode;
   extern int active_av1_mode;
   extern bool last_encoder_probe_supported_ref_frames_invalidation;
@@ -736,6 +872,14 @@ namespace video {
   bool validate_encoder(encoder_t &encoder, bool expect_failure);
 
   /**
+   * @brief Determine whether a backend permits reusing its probe results while the hardware remains unchanged.
+   *
+   * @param encoder Previously validated backend, or nullptr before a successful probe.
+   * @return True when the backend's results can be cached.
+   */
+  bool is_encoder_probe_cacheable(const encoder_t *encoder);
+
+  /**
    * @brief Probe encoders and select the preferred encoder.
    * This is called once at startup and each time a stream is launched to
    * ensure the best encoder is selected. Encoder availability can change
@@ -786,6 +930,25 @@ namespace video {
       return framerateX100_to_rational(config.framerateX100);
     }
     return AVRational {config.framerate, 1};
+  }
+
+  /**
+   * @brief Scale from logical to physical pixels for the touch port.
+   * @details A rotated output (odd transform) is captured in its native orientation, so its logical size is compared
+   * with the physical size swapped.
+   *
+   * @param width Physical width of the captured display.
+   * @param height Physical height of the captured display.
+   * @param logical_width Logical width of the display, as rotated.
+   * @param logical_height Logical height of the display, as rotated.
+   * @param transform Wayland output transform of the display.
+   * @return Physical pixels per logical pixel.
+   */
+  inline float touch_port_scale(float width, float height, float logical_width, float logical_height, int transform) {
+    if (transform % 2 == 1) {
+      std::swap(logical_width, logical_height);
+    }
+    return std::fminf(width / logical_width, height / logical_height);
   }
 
   /**

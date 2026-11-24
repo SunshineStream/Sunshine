@@ -1,60 +1,157 @@
 {
   "name": "cuda",
   "build-options": {
-    "no_debuginfo": true,
-    "prepend-ld-library-path": "/app/lib:/app/lib64"
+    "no_debuginfo": true
   },
   "buildsystem": "simple",
   "cleanup": [
     "*"
   ],
   "build-commands": [
-    "chmod u+x ./cuda.run",
-    "./cuda.run --silent --toolkit --toolkitpath=$FLATPAK_DEST/cuda --no-opengl-libs --no-man-page --no-drm --tmpdir=$FLATPAK_BUILDER_BUILDDIR || { echo '=== cuda-installer.log ==='; cat /tmp/cuda-installer.log 2>/dev/null; true; }",
-    "test -f $FLATPAK_DEST/cuda/bin/nvcc",
-    "rm -rf $FLATPAK_DEST/cuda/nsight-systems-*",
-    "rm ./cuda.run"
-  ],
-  "modules": [
-    {
-      "name": "libxml2",
-      "config-opts": [
-        "--without-python",
-        "--without-debug",
-        "--without-history"
-      ],
-      "cleanup": [
-        "/share",
-        "/include",
-        "/bin"
-      ],
-      "sources": [
-        {
-          "type": "archive",
-          "url": "https://download.gnome.org/sources/libxml2/2.13/libxml2-2.13.9.tar.xz",
-          "sha256": "a2c9ae7b770da34860050c309f903221c67830c86e4a7e760692b803df95143a"
-        }
-      ]
-    }
+    "set -eu; case \"$FLATPAK_ARCH\" in x86_64) target=x86_64-linux ;; aarch64) target=sbsa-linux ;; *) echo \"Unsupported CUDA Flatpak architecture: $FLATPAK_ARCH\" >&2; exit 1 ;; esac; mv cuda/include/fatbinary_section.h \"cuda/targets/$target/include/\"",
+    "test -x cuda/bin/nvcc",
+    "mv cuda \"$FLATPAK_DEST/\""
   ],
   "sources": [
     {
-      "type": "file",
+      "type": "archive",
       "only-arches": [
         "x86_64"
       ],
-      "url": "https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_595.45.04_linux.run",
-      "sha256": "c599b651582c8f345ebde7bcf089b7dcfcd8afd7d3ea7f50525698c563a239d7",
-      "dest-filename": "cuda.run"
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-x86_64/cuda_nvcc-linux-x86_64-13.5.37-archive.tar.xz",
+      "sha256": "ac41262734f3c62cd75a502081cfae093b03b846d7f9274d8b1eb41f83209b96",
+      "dest": "cuda",
+      "strip-components": 1
     },
     {
-      "type": "file",
+      "type": "archive",
+      "only-arches": [
+        "x86_64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/linux-x86_64/libnvvm-linux-x86_64-13.5.37-archive.tar.xz",
+      "sha256": "8dd4866e387f0ce2259e8dcc91bebdbb59f84c6d4505b3bba46ae91b9a11dd16",
+      "dest": "cuda",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "x86_64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cccl/linux-x86_64/cccl-linux-x86_64-13.3.5.0.6-archive.tar.xz",
+      "sha256": "5139f641e72df6b0c64ee9e68cabaeafa9a5e36a4b1f7d370a1dc0dac62dd72f",
+      "dest": "cuda/targets/x86_64-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "x86_64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/linux-x86_64/cuda_crt-linux-x86_64-13.5.37-archive.tar.xz",
+      "sha256": "0df5c0ca27392152f370751c82b27ff1ab67661e4810cfc7248e2e03479c9ae0",
+      "dest": "cuda/targets/x86_64-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "x86_64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-x86_64/cuda_cudart-linux-x86_64-13.5.37-archive.tar.xz",
+      "sha256": "26ca1b8963ce1b73e0e77113c711730545cacaaee7233c0526477d96d4c621fe",
+      "dest": "cuda/targets/x86_64-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "x86_64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_culibos/linux-x86_64/cuda_culibos-linux-x86_64-13.5.25-archive.tar.xz",
+      "sha256": "4c03a0e737f474923823687c93b43a0727e424dcbc53eb44fb116995c87df713",
+      "dest": "cuda/targets/x86_64-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "x86_64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvptxcompiler/linux-x86_64/libnvptxcompiler-linux-x86_64-13.5.37-archive.tar.xz",
+      "sha256": "e92761c2c83fdbe1c582aab568e684371c3023e88b7b4c6fb3d92e3feb160b67",
+      "dest": "cuda/targets/x86_64-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
       "only-arches": [
         "aarch64"
       ],
-      "url": "https://developer.download.nvidia.com/compute/cuda/13.2.0/local_installers/cuda_13.2.0_595.45.04_linux_sbsa.run",
-      "sha256": "9684ebc64988f71ef1c70846cc9d158fb27950c1355bf37c8795c346346b6a72",
-      "dest-filename": "cuda.run"
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/linux-sbsa/cuda_nvcc-linux-sbsa-13.5.37-archive.tar.xz",
+      "sha256": "0c6756fdda5a4c5159dc5181788bd68c9d261e71d6f299ebb241185e113254a3",
+      "dest": "cuda",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "aarch64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvvm/linux-sbsa/libnvvm-linux-sbsa-13.5.37-archive.tar.xz",
+      "sha256": "6c79308860d5eb47c6dd3693652a4d7cd430050438d31d5f036aa0b19583f2ea",
+      "dest": "cuda",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "aarch64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cccl/linux-sbsa/cccl-linux-sbsa-13.3.5.0.6-archive.tar.xz",
+      "sha256": "c308969d8ad6de704c3f8be9ccf5ff2c9b40dd6e23b43b6e4057d255779d5ada",
+      "dest": "cuda/targets/sbsa-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "aarch64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_crt/linux-sbsa/cuda_crt-linux-sbsa-13.5.37-archive.tar.xz",
+      "sha256": "65d373eead42f1544363027c9ee3e6e6eb223c27743749e84ce1e9595bc71b33",
+      "dest": "cuda/targets/sbsa-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "aarch64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/linux-sbsa/cuda_cudart-linux-sbsa-13.5.37-archive.tar.xz",
+      "sha256": "9da80d6aa87f5bc46971c1343024f30a850aca9aac03da95219880aaf854154f",
+      "dest": "cuda/targets/sbsa-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "aarch64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_culibos/linux-sbsa/cuda_culibos-linux-sbsa-13.5.25-archive.tar.xz",
+      "sha256": "78d7ce9b78d69196b85fd1bfae591d7c1537393242c3a39e616ca8dfade68a99",
+      "dest": "cuda/targets/sbsa-linux",
+      "strip-components": 1
+    },
+    {
+      "type": "archive",
+      "only-arches": [
+        "aarch64"
+      ],
+      "url": "https://developer.download.nvidia.com/compute/cuda/redist/libnvptxcompiler/linux-sbsa/libnvptxcompiler-linux-sbsa-13.5.37-archive.tar.xz",
+      "sha256": "8f5503e8a7ced0e676ce327eb83f5a1650b59f54d66e6cf704d2d4ee9583eb2d",
+      "dest": "cuda/targets/sbsa-linux",
+      "strip-components": 1
     }
   ]
 }

@@ -2,62 +2,11 @@
 	path = packaging/linux/flatpak/deps/flatpak-builder-tools
 	url = https://github.com/flatpak/flatpak-builder-tools.git
 	branch = master
-[submodule "third-party/build-deps"]
-	path = third-party/build-deps
-	url = https://github.com/LizardByte/build-deps.git
-	branch = master
 [submodule "third-party/dockle"]
 	path = third-party/dockle
 	url = https://github.com/LizardByte/dockle.git
 	branch = master
-[submodule "third-party/glad"]
-	path = third-party/glad
-	url = https://github.com/Dav1dde/glad.git
-[submodule "third-party/libdisplaydevice"]
-	path = third-party/libdisplaydevice
-	url = https://github.com/LizardByte/libdisplaydevice.git
-	branch = master
-[submodule "third-party/libvirtualhid"]
-	path = third-party/libvirtualhid
-	url = https://github.com/LizardByte/libvirtualhid.git
-	branch = master
 [submodule "third-party/lizardbyte-common"]
 	path = third-party/lizardbyte-common
 	url = https://github.com/LizardByte/lizardbyte-common.git
-	branch = master
-[submodule "third-party/moonlight-common-c"]
-	path = third-party/moonlight-common-c
-	url = https://github.com/moonlight-stream/moonlight-common-c.git
-	branch = master
-[submodule "third-party/nvapi"]
-	path = third-party/nvapi
-	url = https://github.com/NVIDIA/nvapi.git
-	branch = main
-[submodule "third-party/plasma-wayland-protocols"]
-	path = third-party/plasma-wayland-protocols
-	url = https://github.com/KDE/plasma-wayland-protocols.git
-	branch = master
-[submodule "third-party/Simple-Web-Server"]
-	path = third-party/Simple-Web-Server
-	url = https://github.com/LizardByte-infrastructure/Simple-Web-Server.git
-	branch = master
-[submodule "third-party/TPCircularBuffer"]
-	path = third-party/TPCircularBuffer
-	url = https://github.com/michaeltyson/TPCircularBuffer.git
-	branch = master
-[submodule "third-party/tray"]
-	path = third-party/tray
-	url = https://github.com/LizardByte/tray.git
-	branch = master
-[submodule "third-party/ViGEmClient"]
-	path = third-party/ViGEmClient
-	url = https://github.com/LizardByte/Virtual-Gamepad-Emulation-Client.git
-	branch = master
-[submodule "third-party/wayland-protocols"]
-	path = third-party/wayland-protocols
-	url = https://github.com/LizardByte-infrastructure/wayland-protocols.git
-	branch = main
-[submodule "third-party/wlr-protocols"]
-	path = third-party/wlr-protocols
-	url = https://github.com/LizardByte-infrastructure/wlr-protocols.git
 	branch = master

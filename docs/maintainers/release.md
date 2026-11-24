@@ -5,18 +5,18 @@ to be created before making a stable release. Below are the instructions for con
 
 ## npm publishing
 
-Stable releases publish the prebuilt Web UI as `@lizardbyte/sunshine` to npm and GitHub Packages. npm trusts the
-`LizardByte/Sunshine` repository's `ci-release.yml` workflow through the `npmjs` GitHub environment, with direct
-publishing enabled. The shared release workflow derives the package version from the release tag and does not require
-an npm access token.
+Stable releases publish the prebuilt Web UI as `@lizardbyte/sunshine` to npm and GitHub Packages. Configure npm's
+trusted publisher for the `SunshineStream/Sunshine` repository, the `ci-release.yml` workflow, and the `npmjs` GitHub
+environment, with direct publishing enabled. The shared release workflow derives the package version from the
+release tag and does not require an npm access token.
 
 1. Wait for the pre-release to be created.
 2. Once the pre-release is created, the copr build will begin in the
    [beta copr repo](https://copr.fedorainfracloud.org/coprs/lizardbyte/beta/).
    Wait for this build to succeed before continuing. You can view the status
-   [here](https://github.com/LizardByte/Sunshine/actions/workflows/ci-copr.yml?query=event%3Arelease)
+   [here](https://github.com/SunshineStream/Sunshine/actions/workflows/ci-copr.yml?query=event%3Arelease)
 3. Once the workflow mentioned in step 2 completes, it will update the GitHub release with the RPM files from the copr
-   build. It also calls the separate [Cloudsmith workflow](https://github.com/LizardByte/Sunshine/actions/workflows/ci-cloudsmith.yml),
+   build. It also calls the separate [Cloudsmith workflow](https://github.com/SunshineStream/Sunshine/actions/workflows/ci-cloudsmith.yml),
    which publishes currently supported DEB and RPM packages to the
    [beta Cloudsmith repo](https://cloudsmith.io/~lizardbyte/repos/beta/).
 4. At this point, the GitHub release can be edited.
@@ -40,7 +40,7 @@ an npm access token.
        - Facebook
        - X
 
-   - Update changelog in [changelog](https://github.com/LizardByte/Sunshine/tree/changelog) branch
+   - Update changelog in [changelog](https://github.com/SunshineStream/Sunshine/tree/changelog) branch
    - Update docs on [Read The Docs](https://app.readthedocs.org/projects/sunshinestream/)
    - Update official [Flathub repo](https://github.com/flathub/dev.lizardbyte.app.Sunshine/pulls) via a PR
      (we have merge control)

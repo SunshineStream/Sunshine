@@ -9,6 +9,7 @@
 // standard includes
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -19,7 +20,7 @@
 #include <thread>
 #include <vector>
 
-// moonlight-common-c includes
+// lib includes
 extern "C" {
 #include <moonlight-common-c/src/Input.h>
 }
@@ -29,6 +30,11 @@ extern "C" {
 #include "src/input.h"
 #include "src/platform/virtualhid_input.h"
 #include "src/utility.h"
+#include "src/video.h"
+#ifdef SUNSHINE_BUILD_WAYLAND
+  #include "src/platform/linux/display_geometry.h"
+  #include "src/platform/linux/wayland.h"
+#endif
 
 namespace {
   /**
@@ -641,4 +647,359 @@ TEST_F(InputGamepadSessionTest, RetargetsRelativeMouseFromLatestStreamGeometry) 
   EXPECT_EQ(mouse_event.x, -5);
   EXPECT_EQ(mouse_event.y, 9);
   EXPECT_EQ(context().mouse_viewport.offset_x, 0);
+}
+
+namespace {
+  /**
+   * @brief Display that only carries geometry, for building a touch port.
+   */
+  class geometry_display_t: public platf::display_t {
+  public:
+    /**
+     * @brief Report no frames; only the geometry is used.
+     *
+     * @return Always `capture_e::ok`.
+     */
+    platf::capture_e capture(const push_captured_image_cb_t &, const pull_free_image_cb_t &, bool *) override {
+      return platf::capture_e::ok;
+    }
+
+    /**
+     * @brief Allocate no image; only the geometry is used.
+     *
+     * @return Always `nullptr`.
+     */
+    std::shared_ptr<platf::img_t> alloc_img() override {
+      return nullptr;
+    }
+
+    /**
+     * @brief Leave the image untouched; only the geometry is used.
+     *
+     * @return Always 0.
+     */
+    int dummy_img(platf::img_t *) override {
+      return 0;
+    }
+  };
+}  // namespace
+
+TEST_F(InputGamepadSessionTest, RebuildsTheTouchPortForARotatedDisplay) {
+  // The display after turning from 90 to 270 degrees: same 3000x1920 native and 960x1500 logical size.
+  geometry_display_t display;
+  display.width = 3000;
+  display.height = 1920;
+  display.logical_width = 960;
+  display.logical_height = 1500;
+  display.env_width = 3000;
+  display.env_height = 1920;
+  display.env_logical_width = 960;
+  display.env_logical_height = 1500;
+  display.transform = 3;
+
+  video::config_t config {};
+  config.width = 3000;
+  config.height = 1920;
+
+  const auto port = video::make_port(&display, config);
+  EXPECT_EQ(port.transform, 3);
+  EXPECT_FLOAT_EQ(port.scalar_tpcoords, 2.0F);
+
+  auto session_mail = std::make_shared<safe::mail_raw_t>();
+  auto stream_input = input::alloc(session_mail, "rotated-display-client");
+  ASSERT_NE(stream_input, nullptr);
+  session_mail->event<input::touch_port_t>(mail::touch_port)->raise(port);
+
+  input::testing::send_absolute_mouse_packet(stream_input, 300, 200, 3000, 1920);
+
+  const auto mouse_event = context().mouse->last_submitted_event();
+  EXPECT_EQ(mouse_event.kind, lvh::MouseEventKind::absolute_motion);
+  EXPECT_FLOAT_EQ(mouse_event.absolute_x, 100.0F);
+  EXPECT_FLOAT_EQ(mouse_event.absolute_y, 1350.0F);
+}
+
+#ifdef SUNSHINE_BUILD_WAYLAND
+TEST_F(InputGamepadSessionTest, FollowsAWlrOutputThroughARotationOnlyReinit) {
+  // A 3000x1920 output at scale 2 turned by 90 degrees: 960x1500 logical.
+  wl::monitor_t monitor {nullptr};
+  monitor.name = "TABLET";
+  monitor.wl_mode(nullptr, WL_OUTPUT_MODE_CURRENT, 3000, 1920, 120000);
+  monitor.xdg_position(nullptr, 0, 0);
+  monitor.xdg_size(nullptr, 960, 1500);
+  monitor.wl_listener.geometry(&monitor, nullptr, 0, 0, 0, 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, "", "", WL_OUTPUT_TRANSFORM_90);
+
+  video::config_t config {};
+  config.width = 3000;
+  config.height = 1920;
+
+  // What wlr capture initialization does with the selected monitor, then the port the video pipeline publishes.
+  geometry_display_t display;
+  const auto initialize_capture = [&] {
+    wl::apply_monitor_geometry(display, monitor);
+    platf::desktop_geometry_t desktop;
+    desktop.add(monitor.viewport);
+    desktop.apply(display);
+    return video::make_port(&display, config);
+  };
+
+  auto session_mail = std::make_shared<safe::mail_raw_t>();
+  auto stream_input = input::alloc(session_mail, "rotated-capture-client");
+  ASSERT_NE(stream_input, nullptr);
+  const auto tap = [&](const input::touch_port_t &port) {
+    session_mail->event<input::touch_port_t>(mail::touch_port)->raise(port);
+    input::testing::send_absolute_mouse_packet(stream_input, 300, 200, 3000, 1920);
+    return context().mouse->last_submitted_event();
+  };
+
+  auto port = initialize_capture();
+  EXPECT_EQ(port.transform, WL_OUTPUT_TRANSFORM_90);
+  auto mouse_event = tap(port);
+  EXPECT_FLOAT_EQ(mouse_event.absolute_x, 860.0F);
+  EXPECT_FLOAT_EQ(mouse_event.absolute_y, 150.0F);
+
+  // A same-sized frame keeps capture going while the transform is unchanged.
+  EXPECT_FALSE(wl::capture_needs_reinit(3000, 1920, display.width, display.height, monitor.viewport.transform, display.transform));
+
+  // Turning on to 270 degrees changes neither size, so only the geometry event asks for a reinit.
+  monitor.wl_listener.geometry(&monitor, nullptr, 0, 0, 0, 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, "", "", WL_OUTPUT_TRANSFORM_270);
+  EXPECT_TRUE(wl::capture_needs_reinit(3000, 1920, display.width, display.height, monitor.viewport.transform, display.transform));
+
+  port = initialize_capture();
+  EXPECT_EQ(port.transform, WL_OUTPUT_TRANSFORM_270);
+  EXPECT_FLOAT_EQ(port.scalar_tpcoords, 2.0F);
+  mouse_event = tap(port);
+  EXPECT_FLOAT_EQ(mouse_event.absolute_x, 100.0F);
+  EXPECT_FLOAT_EQ(mouse_event.absolute_y, 1350.0F);
+}
+#endif
+
+TEST_F(InputGamepadSessionTest, MapsAbsoluteMouseOntoRotatedOutputs) {
+  auto session_mail = std::make_shared<safe::mail_raw_t>();
+  auto stream_input = input::alloc(session_mail, "absolute-mouse-client");
+  ASSERT_NE(stream_input, nullptr);
+
+  // A 3000x1920 output at scale 2, streamed at its native size. Rotated outputs are captured in their native
+  // orientation, so the stream stays 3000x1920 while the logical size turns to 960x1500.
+  struct rotation_case_t {
+    int transform;  // wl_output transform: rotated by 0, 90, 180 or 270 degrees
+    int logical_width;
+    int logical_height;
+    float expected_x;
+    float expected_y;
+  };
+
+  for (const auto &[transform, logical_width, logical_height, expected_x, expected_y] : {
+         rotation_case_t {0, 1500, 960, 150.0F, 100.0F},
+         rotation_case_t {1, 960, 1500, 860.0F, 150.0F},
+         rotation_case_t {2, 1500, 960, 1350.0F, 860.0F},
+         rotation_case_t {3, 960, 1500, 100.0F, 1350.0F},
+       }) {
+    input::touch_port_t viewport {
+      {
+        .offset_x = 0,
+        .offset_y = 0,
+        .width = 3000,
+        .height = 1920,
+        .logical_width = logical_width,
+        .logical_height = logical_height,
+        .transform = transform,
+      },
+      3000,
+      1920,
+      0.0F,
+      0.0F,
+      1.0F,
+      2.0F,
+      logical_width,
+      logical_height,
+    };
+    session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+
+    input::testing::send_absolute_mouse_packet(stream_input, 300, 200, 3000, 1920);
+
+    const auto mouse_event = context().mouse->last_submitted_event();
+    EXPECT_EQ(mouse_event.kind, lvh::MouseEventKind::absolute_motion) << "transform " << transform;
+    EXPECT_FLOAT_EQ(mouse_event.absolute_x, expected_x) << "transform " << transform;
+    EXPECT_FLOAT_EQ(mouse_event.absolute_y, expected_y) << "transform " << transform;
+  }
+}
+
+TEST_F(InputGamepadSessionTest, TranslatesEditingKeysToCanonicalKeycodes) {
+  config::input.keyboard = true;
+  config::input.key_repeat_delay = std::chrono::milliseconds {0};
+
+  auto mail = std::make_shared<safe::mail_raw_t>();
+  auto session = input::alloc(mail, "editing-keys-client");
+  ASSERT_NE(session, nullptr);
+  ASSERT_NE(context().keyboard, nullptr);
+
+  constexpr std::uint8_t non_normalized = 0x01;  // SS_KBE_FLAG_NON_NORMALIZED
+
+  struct editing_key_case {
+    std::uint16_t client_key;  ///< Keycode sent by the client.
+    std::uint16_t expected_key;  ///< Canonical keycode forwarded to the backend.
+  };
+
+  const std::array<editing_key_case, 8> cases {{
+    {0x7A, 0x0100},  // SDL scancode Undo
+    {0x7B, 0x0101},  // SDL scancode Cut
+    {0x7C, 0x0102},  // SDL scancode Copy
+    {0x7D, 0x0103},  // SDL scancode Paste
+    {0x0100, 0x0100},  // Dedicated Undo
+    {0x0101, 0x0101},  // Dedicated Cut
+    {0x0102, 0x0102},  // Dedicated Copy
+    {0x0103, 0x0103},  // Dedicated Paste
+  }};
+
+  for (const auto &editing_key : cases) {
+    const auto before = context().keyboard->submit_count();
+
+    input::testing::send_keyboard_packet(session, editing_key.client_key, 0, non_normalized, false);
+    EXPECT_EQ(context().keyboard->submit_count(), before + 1);
+    const auto press_event = context().keyboard->last_submitted_event();
+    EXPECT_EQ(press_event.key_code, editing_key.expected_key);
+    EXPECT_TRUE(press_event.pressed);
+
+    input::testing::send_keyboard_packet(session, editing_key.client_key, 0, non_normalized, true);
+    EXPECT_EQ(context().keyboard->submit_count(), before + 2);
+    const auto release_event = context().keyboard->last_submitted_event();
+    EXPECT_EQ(release_event.key_code, editing_key.expected_key);
+    EXPECT_FALSE(release_event.pressed);
+  }
+
+  // Without the non-normalized flag, 0x7A-0x7D are the F11-F14 virtual keys and
+  // must pass through untranslated.
+  const auto before_fn = context().keyboard->submit_count();
+  input::testing::send_keyboard_packet(session, 0x7A, 0, 0, false);
+  EXPECT_EQ(context().keyboard->submit_count(), before_fn + 1);
+  const auto fn_event = context().keyboard->last_submitted_event();
+  EXPECT_EQ(fn_event.key_code, 0x7A);
+  EXPECT_TRUE(fn_event.pressed);
+  input::testing::send_keyboard_packet(session, 0x7A, 0, 0, true);
+
+  // A normalized F11-F14 keycode (0x807A-0x807D) that also carries the
+  // non-normalized flag must remain a function key and not be aliased to an
+  // editing key. Only the low byte reaches the backend after prefix stripping.
+  const std::array<std::uint16_t, 4> normalized_function_keys {0x807A, 0x807B, 0x807C, 0x807D};
+  for (const auto normalized_key : normalized_function_keys) {
+    const auto before = context().keyboard->submit_count();
+    input::testing::send_keyboard_packet(session, normalized_key, 0, non_normalized, false);
+    EXPECT_EQ(context().keyboard->submit_count(), before + 1);
+    const auto event = context().keyboard->last_submitted_event();
+    EXPECT_EQ(event.key_code, normalized_key & 0x00FF);
+    EXPECT_TRUE(event.pressed);
+    input::testing::send_keyboard_packet(session, normalized_key, 0, non_normalized, true);
+  }
+}
+
+TEST_F(InputGamepadSessionTest, RetargetsNativeTouchAndPenWithoutApplyingTheMonitorOffsetTwice) {
+  auto session_mail = std::make_shared<safe::mail_raw_t>();
+  auto stream_input = input::alloc(session_mail, "absolute-input-client");
+  ASSERT_NE(stream_input, nullptr);
+  auto &client = platf::virtualhid::get_client_context(input::testing::client_context(stream_input));
+  ASSERT_NE(client.touch, nullptr);
+  ASSERT_NE(client.pen, nullptr);
+  input::testing::set_input_task_sink([](std::shared_ptr<input::input_t>) {
+  });
+  input::touch_port_t viewport {
+    {.offset_x = -1920, .offset_y = -1080, .width = 2560, .height = 1080, .logical_width = 1920, .logical_height = 1080, .env_offset_x = -1920, .env_offset_y = -1080, .output_name = "DP-1"},
+    7680,
+    4320,
+    320.0F,
+    0.0F,
+    2.0F,
+    2.0F,
+    3840,
+    2160,
+  };
+  const auto write_float = [](netfloat &target, float value) {
+    const auto bits = util::endian::little(std::bit_cast<std::uint32_t>(value));
+    std::memcpy(target, &bits, sizeof(bits));
+  };
+  const auto send_packet = [&]<typename Packet>(Packet &packet, std::uint32_t magic) {
+    packet.header.size = util::endian::big<std::uint32_t>(sizeof(packet) - sizeof(packet.header.size));
+    packet.header.magic = util::endian::little(magic);
+    std::vector<std::uint8_t> bytes(sizeof(packet));
+    std::memcpy(bytes.data(), &packet, sizeof(packet));
+    input::passthrough(stream_input, std::move(bytes));
+    static_cast<void>(input::testing::process_queued_messages(stream_input));
+  };
+  SS_TOUCH_PACKET touch {};
+  touch.eventType = LI_TOUCH_EVENT_DOWN;
+  touch.pointerId = util::endian::little<std::uint32_t>(42);
+  write_float(touch.x, 0.5F);
+  write_float(touch.y, 0.25F);
+  write_float(touch.pressureOrDistance, 0.75F);
+  SS_PEN_PACKET pen {};
+  pen.eventType = LI_TOUCH_EVENT_DOWN;
+  pen.toolType = LI_TOOL_TYPE_PEN;
+  write_float(pen.x, 0.5F);
+  write_float(pen.y, 0.25F);
+  write_float(pen.pressureOrDistance, 0.75F);
+  for (const auto *name : {"DP-1", "HDMI-A-1"}) {
+    viewport.output_name = name;
+    session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+    send_packet(touch, SS_TOUCH_MAGIC);
+    const auto contact = client.touch->last_submitted_contact();
+    EXPECT_EQ(contact.viewport.output_name, name);
+    EXPECT_EQ(contact.viewport.offset_x, viewport.offset_x);
+    EXPECT_EQ(contact.viewport.offset_y, viewport.offset_y);
+    EXPECT_EQ(contact.viewport.width, 1920);
+    EXPECT_EQ(contact.viewport.height, 1080);
+    EXPECT_FLOAT_EQ(contact.x, 0.5F);
+    EXPECT_FLOAT_EQ(contact.y, 0.25F);
+    send_packet(pen, SS_PEN_MAGIC);
+    const auto tool = client.pen->last_submitted_tool();
+    EXPECT_EQ(tool.viewport.output_name, name);
+    EXPECT_EQ(tool.viewport.offset_x, viewport.offset_x);
+    EXPECT_EQ(tool.viewport.offset_y, viewport.offset_y);
+    EXPECT_FLOAT_EQ(tool.x, 0.5F);
+    EXPECT_FLOAT_EQ(tool.y, 0.25F);
+    viewport.offset_x = 0;
+    viewport.offset_y = 0;
+    touch.eventType = LI_TOUCH_EVENT_MOVE;
+    pen.eventType = LI_TOUCH_EVENT_MOVE;
+  }
+  // A capture backend can report monitor scaling before the desktop bounds are available.
+  viewport.scalar_tpcoords = 1.0F;
+  viewport.env_logical_width = 0;
+  viewport.env_logical_height = 0;
+  session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+  send_packet(touch, SS_TOUCH_MAGIC);
+  send_packet(pen, SS_PEN_MAGIC);
+  EXPECT_FLOAT_EQ(client.touch->last_submitted_contact().x, 0.5F);
+  EXPECT_FLOAT_EQ(client.touch->last_submitted_contact().y, 0.25F);
+  EXPECT_FLOAT_EQ(client.pen->last_submitted_tool().x, 0.5F);
+  EXPECT_FLOAT_EQ(client.pen->last_submitted_tool().y, 0.25F);
+  viewport.scalar_tpcoords = 2.0F;
+  viewport.logical_width = 0;
+  viewport.logical_height = 0;
+  session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+  send_packet(touch, SS_TOUCH_MAGIC);
+  send_packet(pen, SS_PEN_MAGIC);
+  EXPECT_EQ(client.touch->last_submitted_contact().viewport.width, 1920);
+  EXPECT_EQ(client.pen->last_submitted_tool().viewport.width, 1920);
+  EXPECT_FLOAT_EQ(client.touch->last_submitted_contact().x, 0.5F);
+  EXPECT_FLOAT_EQ(client.pen->last_submitted_tool().x, 0.5F);
+  viewport.logical_width = 1920;
+  session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+  send_packet(touch, SS_TOUCH_MAGIC);
+  EXPECT_EQ(client.touch->last_submitted_contact().viewport.width, 1920);
+
+  const auto touch_count = client.touch->submit_count();
+  const auto pen_count = client.pen->submit_count();
+  viewport.logical_width = 0;
+  viewport.client_offsetX = viewport.width / 2.0F;
+  session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+  send_packet(touch, SS_TOUCH_MAGIC);
+  send_packet(pen, SS_PEN_MAGIC);
+  EXPECT_EQ(client.touch->submit_count(), touch_count);
+  EXPECT_EQ(client.pen->submit_count(), pen_count);
+  viewport.client_offsetX = 0;
+  viewport.client_offsetY = viewport.height / 2.0F;
+  session_mail->event<input::touch_port_t>(mail::touch_port)->raise(viewport);
+  send_packet(touch, SS_TOUCH_MAGIC);
+  send_packet(pen, SS_PEN_MAGIC);
+  EXPECT_EQ(client.touch->submit_count(), touch_count);
+  EXPECT_EQ(client.pen->submit_count(), pen_count);
 }

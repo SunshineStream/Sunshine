@@ -42,8 +42,8 @@ const emitTrayIconsPlugin = {
             source: fs.readFileSync(resolve(projectRoot, 'sunshine.svg')),
         });
 
-        const virtualHidIcon = resolve(projectRoot, 'third-party/libvirtualhid/libvirtualhid.svg');
-        if ((process.platform === 'win32' || process.platform === 'darwin') && fs.existsSync(virtualHidIcon)) {
+        const virtualHidIcon = process.env.SUNSHINE_LIBVIRTUALHID_ICON;
+        if ((process.platform === 'win32' || process.platform === 'darwin') && virtualHidIcon) {
             this.emitFile({
                 type: 'asset',
                 fileName: 'images/logo-libvirtualhid.svg',
@@ -70,8 +70,8 @@ export default defineConfig({
             bundleName: "sunshine",
             uploadToken: process.env.CODECOV_TOKEN,
             gitService: "github",
-            dryRun: process.env.GITHUB_REPOSITORY !== 'LizardByte/Sunshine',
-            telemetry: process.env.GITHUB_REPOSITORY === 'LizardByte/Sunshine',
+            dryRun: process.env.GITHUB_REPOSITORY !== 'SunshineStream/Sunshine',
+            telemetry: process.env.GITHUB_REPOSITORY === 'SunshineStream/Sunshine',
         }),
     ],
     root: resolve(assetsSrcPath),

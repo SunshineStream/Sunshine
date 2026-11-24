@@ -1135,6 +1135,103 @@ namespace confighttp {
   }
 
   /**
+   * @brief Remove object members whose values are JSON null.
+   *
+   * @param object JSON object to mutate.
+   * @param members Member names to inspect.
+   */
+  void erase_null_members(nlohmann::json &object, std::initializer_list<const char *> members) {
+    for (const char *member : members) {
+      if (object.contains(member) && object[member].is_null()) {
+        object.erase(member);
+      }
+    }
+  }
+
+  /**
+   * @brief Drop empty or invalid prep-cmd arrays and null prep-command members.
+   *
+   * @param input_tree Application JSON from the save request, mutated in place.
+   */
+  void normalize_prep_cmd_field(nlohmann::json &input_tree) {
+    if (!input_tree.contains("prep-cmd")) {
+      return;
+    }
+    if (!input_tree["prep-cmd"].is_array() || input_tree["prep-cmd"].empty()) {
+      input_tree.erase("prep-cmd");
+      return;
+    }
+
+    for (auto &cmd : input_tree["prep-cmd"]) {
+      if (!cmd.is_object()) {
+        continue;
+      }
+      erase_null_members(cmd, {"do", "undo", "elevated"});
+    }
+  }
+
+  /**
+   * @brief Drop empty or invalid detached command arrays.
+   *
+   * @param input_tree Application JSON from the save request, mutated in place.
+   */
+  void normalize_detached_field(nlohmann::json &input_tree) {
+    if (!input_tree.contains("detached")) {
+      return;
+    }
+    if (!input_tree["detached"].is_array() || input_tree["detached"].empty()) {
+      input_tree.erase("detached");
+    }
+  }
+
+  /**
+   * @brief Trim cover paths and omit missing, non-string, empty, or whitespace-only values.
+   *
+   * @param input_tree Application JSON from the save request, mutated in place.
+   */
+  void normalize_image_path_field(nlohmann::json &input_tree) {
+    std::string image_path;
+    if (input_tree.contains("image-path") && input_tree["image-path"].is_string()) {
+      image_path = input_tree["image-path"].get<std::string>();
+    }
+    boost::trim(image_path);
+    if (image_path.empty()) {
+      input_tree.erase("image-path");
+      return;
+    }
+    input_tree["image-path"] = image_path;
+  }
+
+  /**
+   * @brief Omit null optional application fields and normalize empty collections and cover paths.
+   *
+   * Required `name`/`index` handling stays with the caller. Explicit `false` and `0` values are kept.
+   * Null `do`, `undo`, and `elevated` members are removed from preparation-command objects.
+   * Missing, non-string, empty, or whitespace-only image-path values are omitted from the saved
+   * application. Nonempty string values are trimmed before saving.
+   *
+   * @param input_tree Application JSON from the save request, mutated in place.
+   */
+  void normalize_optional_app_fields(nlohmann::json &input_tree) {
+    erase_null_members(input_tree, {
+                                     "prep-cmd",
+                                     "detached",
+                                     "exclude-global-prep-cmd",
+                                     "elevated",
+                                     "auto-detach",
+                                     "wait-all",
+                                     "exit-timeout",
+                                     "cmd",
+                                     "output",
+                                     "working-dir",
+                                     "image-path",
+                                   });
+    normalize_prep_cmd_field(input_tree);
+    normalize_detached_field(input_tree);
+    normalize_image_path_field(input_tree);
+  }
+
+  /**
    * @brief Save an application. To save a new application, the index must be `-1`. To update an existing application, you must provide the current index of the application.
    * @param response The HTTP response object.
    * @param request The HTTP request object.
@@ -1164,6 +1261,10 @@ namespace confighttp {
    * }
    * @endcode
    *
+   * Missing, non-string, empty, or whitespace-only image-path values are omitted
+   * from the saved application. Nonempty string values are trimmed before saving.
+   * Null optional fields are omitted before persistence; explicit `false` and `0` are preserved.
+   *
    * @api_examples{/api/apps|:| POST|:| {"name":"Hello, World!","index":-1}}
    */
   void saveApp(const resp_https_t &response, const req_https_t &request) {
@@ -1191,13 +1292,7 @@ namespace confighttp {
       BOOST_LOG(info) << file;
       nlohmann::json file_tree = nlohmann::json::parse(file);
 
-      if (input_tree["prep-cmd"].empty()) {
-        input_tree.erase("prep-cmd");
-      }
-
-      if (input_tree["detached"].empty()) {
-        input_tree.erase("detached");
-      }
+      normalize_optional_app_fields(input_tree);
 
       auto &apps_node = file_tree["apps"];
       int index = input_tree["index"].get<int>();  // this will intentionally cause an exception if the provided value is the wrong type
