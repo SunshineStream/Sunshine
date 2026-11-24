@@ -508,7 +508,7 @@ namespace audio {
     std::string_view accepted,
     bool ac3_encoder_available,
     bool eac3_encoder_available,
-    bool high_quality
+    bool high_quality_requested
   ) {
     using enum audio::dolby_codec_e;
 
@@ -528,7 +528,7 @@ namespace audio {
       config.packetDuration = 32;
       config.flags[config_t::HIGH_QUALITY] = true;
       config.flags[config_t::CUSTOM_SURROUND_PARAMS] = false;
-      config.high_quality_dolby = high_quality;
+      config.high_quality_dolby = high_quality_requested;
     }
     return selected_codec;
   }
