@@ -996,7 +996,7 @@ namespace rtsp_stream {
    * @param session Active streaming or pairing session for the request.
    * @param req Parsed RTSP request being handled.
    */
-  void cmd_setup(rtsp_server_t *rtsp_server, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+  void cmd_setup(rtsp_server_t *rtsp_server, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
     std::array<OPTION_ITEM, 4> options {};
 
     auto &seqn = options[0];
