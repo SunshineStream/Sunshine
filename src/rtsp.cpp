@@ -61,7 +61,7 @@ namespace rtsp_stream {
   /**
    * @brief RTSP command handler signature used by the server dispatch table.
    */
-  using cmd_func_t = std::function<void(rtsp_server_t *server, tcp::socket &, launch_session_t &, msg_t &&)>;
+  using cmd_func_t = std::function<void(rtsp_server_t *server, tcp::socket &, launch_session_t &, const msg_t &)>;
 
   /**
    * @brief Write msg details to the log.
