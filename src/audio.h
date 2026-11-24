@@ -181,7 +181,7 @@ namespace audio {
    * @param accepted Codec explicitly accepted by the client.
    * @param ac3_encoder_available Whether the AC-3 encoder is available.
    * @param eac3_encoder_available Whether the E-AC-3 encoder is available.
-   * @param high_quality Whether the higher Dolby bitrate was requested.
+   * @param high_quality_requested Whether the client requested the higher Dolby bitrate in ANNOUNCE.
    * @return Selected codec, falling back to Opus when negotiation is unsupported.
    */
   dolby_codec_e configure_dolby_audio(
