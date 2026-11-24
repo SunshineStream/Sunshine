@@ -824,7 +824,10 @@ namespace rtsp_stream {
    */
   void respond(tcp::socket &sock, launch_session_t &session, POPTION_ITEM options, int statuscode, const char *status_msg, int seqn, const std::string_view &payload) {
     msg_t resp {new msg_t::element_type};
-    createRtspResponse(resp.get(), nullptr, 0, const_cast<char *>("RTSP/1.0"), statuscode, const_cast<char *>(status_msg), seqn, options, const_cast<char *>(payload.data()), (int) payload.size());
+    std::string protocol {"RTSP/1.0"};
+    std::string status {status_msg};
+    std::string body {payload};
+    createRtspResponse(resp.get(), nullptr, 0, protocol.data(), statuscode, status.data(), seqn, options, body.data(), (int) body.size());
 
     respond(sock, session, resp);
   }
@@ -1001,10 +1004,11 @@ namespace rtsp_stream {
     auto &port_option = options[2];
     auto &payload_option = options[3];
 
-    seqn.option = const_cast<char *>("CSeq");
+    std::string cseq_header {"CSeq"};
+    seqn.option = cseq_header.data();
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    seqn.content = const_cast<char *>(seqn_str.c_str());
+    seqn.content = seqn_str.data();
 
     std::string_view target {req->message.request.target};
     auto begin = std::ranges::find(target, '=') + 1;
@@ -1026,24 +1030,29 @@ namespace rtsp_stream {
 
     seqn.next = &session_option;
 
-    session_option.option = const_cast<char *>("Session");
-    session_option.content = const_cast<char *>("DEADBEEFCAFE;timeout = 90");
+    std::string session_header {"Session"};
+    std::string session_value {"DEADBEEFCAFE;timeout = 90"};
+    session_option.option = session_header.data();
+    session_option.content = session_value.data();
 
     session_option.next = &port_option;
 
     // Moonlight merely requires 'server_port=<port>'
     auto port_value = std::format("server_port={}", static_cast<int>(port));
 
-    port_option.option = const_cast<char *>("Transport");
+    std::string transport_header {"Transport"};
+    port_option.option = transport_header.data();
     port_option.content = port_value.data();
 
     // Send identifiers that will be echoed in the other connections
     auto connect_data = std::to_string(session.control_connect_data);
     if (type == "control"sv) {
-      payload_option.option = const_cast<char *>("X-SS-Connect-Data");
+      std::string connect_data_header {"X-SS-Connect-Data"};
+      payload_option.option = connect_data_header.data();
       payload_option.content = connect_data.data();
     } else {
-      payload_option.option = const_cast<char *>("X-SS-Ping-Payload");
+      std::string ping_payload_header {"X-SS-Ping-Payload"};
+      payload_option.option = ping_payload_header.data();
       payload_option.content = session.av_ping_payload.data();
     }
 
@@ -1064,10 +1073,11 @@ namespace rtsp_stream {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
-    option.option = const_cast<char *>("CSeq");
+    std::string cseq_header {"CSeq"};
+    option.option = cseq_header.data();
 
     auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = const_cast<char *>(seqn_str.c_str());
+    option.content = seqn_str.data();
 
     std::string_view payload {req->payload, (size_t) req->payloadLength};
 
