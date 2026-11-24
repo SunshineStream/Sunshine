@@ -27,7 +27,6 @@ async function mountConfig({ platform, audioFormat }) {
       platform,
       version: 'test',
       audio_format: audioFormat,
-      high_quality_audio: false,
     }),
   }))
   wrapper = mount(Config, { global: globalOptions })
