@@ -1046,12 +1046,12 @@ namespace rtsp_stream {
 
     // Send identifiers that will be echoed in the other connections
     auto connect_data = std::to_string(session.control_connect_data);
+    std::string connect_data_header {"X-SS-Connect-Data"};
+    std::string ping_payload_header {"X-SS-Ping-Payload"};
     if (type == "control"sv) {
-      std::string connect_data_header {"X-SS-Connect-Data"};
       payload_option.option = connect_data_header.data();
       payload_option.content = connect_data.data();
     } else {
-      std::string ping_payload_header {"X-SS-Ping-Payload"};
       payload_option.option = ping_payload_header.data();
       payload_option.content = session.av_ping_payload.data();
     }
