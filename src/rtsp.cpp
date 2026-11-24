@@ -1061,8 +1061,18 @@ namespace rtsp_stream {
     respond(sock, session, &seqn, 200, "OK", req->sequenceNumber, {});
   }
 
+  /**
+   * @brief Parsed ANNOUNCE attributes, mapping each attribute name to its value.
+   *
+   * The string views refer to storage owned by the original ANNOUNCE payload.
+   */
   using announce_args_t = std::unordered_map<std::string_view, std::string_view>;
 
+  /**
+   * @brief Parse attribute lines from an RTSP ANNOUNCE payload.
+   * @param payload Raw ANNOUNCE payload containing SDP-style attribute lines.
+   * @return Map of parsed attribute names and values, backed by the payload storage.
+   */
   announce_args_t parse_announce_args(std::string_view payload) {
     std::vector<std::string_view> lines;
     auto whitespace = [](char ch) {
@@ -1097,6 +1107,10 @@ namespace rtsp_stream {
     return args;
   }
 
+  /**
+   * @brief Insert default values for optional ANNOUNCE attributes.
+   * @param args Parsed ANNOUNCE attributes to populate; existing values are preserved.
+   */
   void apply_announce_defaults(announce_args_t &args) {
     args.try_emplace("x-nv-video[0].encoderCscMode"sv, "0"sv);
     args.try_emplace("x-nv-vqos[0].bitStreamFormat"sv, "0"sv);
@@ -1115,6 +1129,10 @@ namespace rtsp_stream {
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
   }
 
+  /**
+   * @brief Apply the configured packet-size ceiling to the negotiated stream.
+   * @param config Stream configuration whose packet-size limit may be reduced.
+   */
   void apply_announce_packet_size_limit(stream::config_t &config) {
     if (!config::stream.packetsize || config::stream.packetsize >= config.packetsize) {
       return;
@@ -1133,6 +1151,15 @@ namespace rtsp_stream {
     config.packetsize = config::stream.packetsize;
   }
 
+  /**
+   * @brief Populate stream settings from the parsed ANNOUNCE attributes.
+   * @param args Parsed ANNOUNCE attributes, including defaults for optional fields.
+   * @param session Launch session providing host-side audio and negotiation state.
+   * @param config Stream configuration to populate.
+   * @param configuredBitrateKbps Receives the client's configured video bitrate in kbit/s.
+   * @return True when all required ANNOUNCE attributes are present and validly parsed;
+   *         false when a required attribute is missing or cannot be parsed.
+   */
   bool parse_announce_config(const announce_args_t &args, launch_session_t &session, stream::config_t &config, std::int64_t &configuredBitrateKbps) {
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
@@ -1179,6 +1206,13 @@ namespace rtsp_stream {
     return true;
   }
 
+  /**
+   * @brief Select the audio codec accepted by the client for this ANNOUNCE.
+   * @param config Stream configuration containing the client's audio settings.
+   * @param session Launch session containing the offered codec and encoder state.
+   * @param args Parsed ANNOUNCE attributes used to determine client acceptance.
+   * @return Selected Dolby codec, or Opus when Dolby negotiation is not supported.
+   */
   audio::dolby_codec_e negotiate_announce_audio(stream::config_t &config, launch_session_t &session, const announce_args_t &args) {
     const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
     const std::string_view accepted_audio_codec = audio_accept == args.end() ? std::string_view {} : audio_accept->second;
@@ -1225,6 +1259,11 @@ namespace rtsp_stream {
     return selected_audio_codec;
   }
 
+  /**
+   * @brief Apply and validate the client's custom surround-channel mapping.
+   * @param audio_config Audio configuration whose custom layout and enable flag are updated.
+   * @param surround_params Client-provided channel, stream, coupling, and mapping values.
+   */
   void apply_announce_surround_params(audio::config_t &audio_config, std::string_view surround_params) {
     if (surround_params.length() <= 3) {
       return;
@@ -1251,6 +1290,12 @@ namespace rtsp_stream {
     audio_config.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
   }
 
+  /**
+   * @brief Apply ANNOUNCE audio options that depend on RTSP request headers.
+   * @param config Stream configuration whose audio flags and layout are updated.
+   * @param session Launch session providing surround and continuous-audio settings.
+   * @param request_options Linked list of RTSP request options.
+   */
   void configure_announce_audio(stream::config_t &config, const launch_session_t &session, POPTION_ITEM request_options) {
     if (config.audio.channels == 2) {
       for (auto request_option = request_options; request_option != nullptr; request_option = request_option->next) {
@@ -1273,6 +1318,11 @@ namespace rtsp_stream {
     }
   }
 
+  /**
+   * @brief Reserve bandwidth for audio and protocol overhead in the configured bitrate.
+   * @param config Stream configuration whose video bitrate is adjusted.
+   * @param configuredBitrateKbps Client-configured aggregate bitrate in kbit/s; zero leaves it unchanged.
+   */
   void adjust_announce_bitrate(stream::config_t &config, std::int64_t configuredBitrateKbps) {
     if (!configuredBitrateKbps) {
       return;
