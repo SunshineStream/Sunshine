@@ -862,7 +862,7 @@ namespace rtsp_stream {
     respond(sock, session, &cseq_option, 200, "OK", seqn, {});
   }
 
-  void cmd_not_found(tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+  void cmd_not_found(tcp::socket &sock, launch_session_t &session, const msg_t &req) {
     respond(sock, session, nullptr, 404, "NOT FOUND", req->sequenceNumber, {});
   }
 
@@ -873,7 +873,7 @@ namespace rtsp_stream {
    * @param session Active streaming or pairing session for the request.
    * @param req Parsed RTSP request being handled.
    */
-  void cmd_option(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+  void cmd_option(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
@@ -893,7 +893,7 @@ namespace rtsp_stream {
    * @param session Active streaming or pairing session for the request.
    * @param req Parsed RTSP request being handled.
    */
-  void cmd_describe(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+  void cmd_describe(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
@@ -1069,7 +1069,7 @@ namespace rtsp_stream {
    * @param session Active streaming or pairing session for the request.
    * @param req Parsed RTSP request being handled.
    */
-  void cmd_announce(rtsp_server_t *rtsp_server, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+  void cmd_announce(rtsp_server_t *rtsp_server, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
@@ -1379,7 +1379,7 @@ namespace rtsp_stream {
    * @param session Active streaming or pairing session for the request.
    * @param req Parsed RTSP request being handled.
    */
-  void cmd_play(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, msg_t &&req) {
+  void cmd_play(rtsp_server_t *, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
     OPTION_ITEM option {};
 
     // I know these string literals will not be modified
