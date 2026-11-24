@@ -60,9 +60,8 @@ describe('Dolby audio configuration', () => {
     expect(format.get('option[value="eac3"]').element.disabled).toBe(false)
   })
 
-  it('only disables high quality audio while Opus is selected', async () => {
+  it('does not expose a server-side high quality audio override', async () => {
     const page = await mountConfig({ platform: 'macos', audioFormat: 'opus' })
-    const quality = page.get('#high_quality_audio')
 
     expect(page.find('#high_quality_audio').exists()).toBe(false)
     expect(page.vm.config).not.toHaveProperty('high_quality_audio')
