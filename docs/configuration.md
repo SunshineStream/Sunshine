@@ -954,29 +954,6 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
-### high_quality_audio
-
-<table>
-    <tr>
-        <td>Description</td>
-        <td colspan="2">
-            When AC-3 or E-AC-3 is negotiated with the client, selects the higher Dolby bitrate at the cost of increased network bandwidth. Target bitrates are: stereo for either codec, 128 kbit/s by default and 192 kbit/s with high quality; AC-3 5.1, 384 and 640 kbit/s; E-AC-3 5.1, 192 and 384 kbit/s. This setting has no effect when Opus is selected.
-        </td>
-    </tr>
-    <tr>
-        <td>Default</td>
-        <td colspan="2">@code{}
-            disabled
-            @endcode</td>
-    </tr>
-    <tr>
-        <td>Example</td>
-        <td colspan="2">@code{}
-            high_quality_audio = enabled
-            @endcode</td>
-    </tr>
-</table>
-
 ### install_steam_audio_drivers
 
 <table>
