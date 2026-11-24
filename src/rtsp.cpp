@@ -1061,68 +1061,43 @@ namespace rtsp_stream {
     respond(sock, session, &seqn, 200, "OK", req->sequenceNumber, {});
   }
 
-  /**
-   * @brief Handle RTSP ANNOUNCE requests from the client.
-   *
-   * @param rtsp_server RTSP server instance handling the request.
-   * @param sock Socket used to read or write the protocol message.
-   * @param session Active streaming or pairing session for the request.
-   * @param req Parsed RTSP request being handled.
-   */
-  void cmd_announce(rtsp_server_t *rtsp_server, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
-    OPTION_ITEM option {};
+  using announce_args_t = std::unordered_map<std::string_view, std::string_view>;
 
-    // I know these string literals will not be modified
-    std::string cseq_header {"CSeq"};
-    option.option = cseq_header.data();
-
-    auto seqn_str = std::to_string(req->sequenceNumber);
-    option.content = seqn_str.data();
-
-    std::string_view payload {req->payload, (size_t) req->payloadLength};
-
+  announce_args_t parse_announce_args(std::string_view payload) {
     std::vector<std::string_view> lines;
-
     auto whitespace = [](char ch) {
       return ch == '\n' || ch == '\r';
     };
 
-    {
-      auto pos = std::begin(payload);
-      auto begin = pos;
-      while (pos != std::end(payload)) {
-        if (whitespace(*pos++)) {
-          lines.emplace_back(begin, pos - begin - 1);
-
-          while (pos != std::end(payload) && whitespace(*pos)) {
-            ++pos;
-          }
-          begin = pos;
+    auto pos = std::begin(payload);
+    auto begin = pos;
+    while (pos != std::end(payload)) {
+      if (whitespace(*pos++)) {
+        lines.emplace_back(begin, pos - begin - 1);
+        while (pos != std::end(payload) && whitespace(*pos)) {
+          ++pos;
         }
+        begin = pos;
       }
     }
 
-    std::string_view client;
-    std::unordered_map<std::string_view, std::string_view> args;
-
+    announce_args_t args;
     for (auto line : lines) {
       auto type = line.substr(0, 2);
-      if (type == "s="sv) {
-        client = line.substr(2);
-      } else if (type == "a=") {
-        auto pos = line.find(':');
-
-        auto name = line.substr(2, pos - 2);
-        auto val = line.substr(pos + 1);
-
-        if (val[val.size() - 1] == ' ') {
-          val = val.substr(0, val.size() - 1);
+      if (type == "a=") {
+        auto separator = line.find(':');
+        auto name = line.substr(2, separator - 2);
+        auto value = line.substr(separator + 1);
+        if (!value.empty() && value.back() == ' ') {
+          value.remove_suffix(1);
         }
-        args.try_emplace(name, val);
+        args.try_emplace(name, value);
       }
     }
+    return args;
+  }
 
-    // Initialize any omitted parameters to defaults
+  void apply_announce_defaults(announce_args_t &args) {
     args.try_emplace("x-nv-video[0].encoderCscMode"sv, "0"sv);
     args.try_emplace("x-nv-vqos[0].bitStreamFormat"sv, "0"sv);
     args.try_emplace("x-nv-video[0].dynamicRangeMode"sv, "0"sv);
@@ -1138,19 +1113,33 @@ namespace rtsp_stream {
     args.try_emplace("x-ss-video[0].chromaSamplingType"sv, "0"sv);
     args.try_emplace("x-ss-video[0].intraRefresh"sv, "0"sv);
     args.try_emplace("x-nv-video[0].clientRefreshRateX100"sv, "0"sv);
+  }
 
-    stream::config_t config;
+  void apply_announce_packet_size_limit(stream::config_t &config) {
+    if (!config::stream.packetsize || config::stream.packetsize >= config.packetsize) {
+      return;
+    }
+    if (config::stream.packetsize < config::PACKETSIZE_MIN || config::stream.packetsize > config::PACKETSIZE_MAX) {
+      BOOST_LOG(warning) << "packetsize range: ["sv << config::PACKETSIZE_MIN << "-"sv << config::PACKETSIZE_MAX
+                         << "] invalid value: "sv << config::stream.packetsize;
+      return;
+    }
+    if (config::stream.packetsize < config::PACKETSIZE_SMALL) {
+      BOOST_LOG(info) << "packetsize is small < "sv << config::PACKETSIZE_SMALL << " bytes, reduce bitrate if the stream breaks"sv;
+    } else if (config::stream.packetsize > config::PACKETSIZE_LARGE) {
+      BOOST_LOG(info) << "packetsize is large > "sv << config::PACKETSIZE_LARGE << " bytes, jumbo frames may be used"sv;
+    }
+    BOOST_LOG(info) << "packetsize limit: "sv << config.packetsize << " -> "sv << config::stream.packetsize << " bytes"sv;
+    config.packetsize = config::stream.packetsize;
+  }
 
-    std::int64_t configuredBitrateKbps;
+  bool parse_announce_config(const announce_args_t &args, launch_session_t &session, stream::config_t &config, std::int64_t &configuredBitrateKbps) {
     config.audio.flags[audio::config_t::HOST_AUDIO] = session.host_audio;
     try {
       config.audio.channels = (int) util::from_view(args.at("x-nv-audio.surround.numChannels"sv));
       config.audio.mask = (int) util::from_view(args.at("x-nv-audio.surround.channelMask"sv));
       config.audio.packetDuration = (int) util::from_view(args.at("x-nv-aqos.packetDuration"sv));
-
-      config.audio.flags[audio::config_t::HIGH_QUALITY] =
-        util::from_view(args.at("x-nv-audio.surround.AudioQuality"sv));
-
+      config.audio.flags[audio::config_t::HIGH_QUALITY] = util::from_view(args.at("x-nv-audio.surround.AudioQuality"sv));
       config.controlProtocolType = (int) util::from_view(args.at("x-nv-general.useReliableUdp"sv));
       config.packetsize = (int) util::from_view(args.at("x-nv-video[0].packetSize"sv));
       config.minRequiredFecPackets = (int) util::from_view(args.at("x-nv-vqos[0].fec.minRequiredFecPackets"sv));
@@ -1158,36 +1147,16 @@ namespace rtsp_stream {
       config.audioQosType = (int) util::from_view(args.at("x-nv-aqos.qosTrafficType"sv));
       config.videoQosType = (int) util::from_view(args.at("x-nv-vqos[0].qosTrafficType"sv));
       config.encryptionFlagsEnabled = (uint32_t) util::from_view(args.at("x-ss-general.encryptionEnabled"sv));
-
-      // Legacy clients use nvFeatureFlags to indicate support for audio encryption
       if (util::from_view(args.at("x-nv-general.featureFlags"sv)) & 0x20) {
         config.encryptionFlagsEnabled |= SS_ENC_AUDIO;
       }
 
-      // Limit the packetsize to avoid fragmentation with clients that cannot configure this value
-      if (config::stream.packetsize && config::stream.packetsize < config.packetsize) {
-        if (config::stream.packetsize < config::PACKETSIZE_MIN || config::stream.packetsize > config::PACKETSIZE_MAX) {
-          BOOST_LOG(warning) << "packetsize range: ["sv << config::PACKETSIZE_MIN << "-"sv << config::PACKETSIZE_MAX
-                             << "] invalid value: "sv << config::stream.packetsize;
-        } else {
-          if (config::stream.packetsize < config::PACKETSIZE_SMALL) {
-            BOOST_LOG(info) << "packetsize is small < "sv << config::PACKETSIZE_SMALL << " bytes, reduce bitrate if the stream breaks"sv;
-          } else if (config::stream.packetsize > config::PACKETSIZE_LARGE) {
-            BOOST_LOG(info) << "packetsize is large > "sv << config::PACKETSIZE_LARGE << " bytes, jumbo frames may be used"sv;
-          }
-
-          BOOST_LOG(info) << "packetsize limit: "sv << config.packetsize << " -> "sv << config::stream.packetsize << " bytes"sv;
-          config.packetsize = config::stream.packetsize;
-        }
-      }
+      apply_announce_packet_size_limit(config);
 
       config.monitor.height = (int) util::from_view(args.at("x-nv-video[0].clientViewportHt"sv));
       config.monitor.width = (int) util::from_view(args.at("x-nv-video[0].clientViewportWd"sv));
       config.monitor.framerate = (int) util::from_view(args.at("x-nv-video[0].maxFPS"sv));
       config.monitor.framerateX100 = (int) util::from_view(args.at("x-nv-video[0].clientRefreshRateX100"sv));
-      // Validate framerateX100 against framerate. Some clients (e.g. Moonlight Android) send the
-      // client display's refresh rate as clientRefreshRateX100, which may differ from the requested
-      // streaming framerate. Discard framerateX100 if the derived fps is not within 1% of framerate.
       if (config.monitor.framerateX100 > 0) {
         double fps_strict = config.monitor.framerateX100 / 100.0;
         double ratio = fps_strict / config.monitor.framerate;
@@ -1203,17 +1172,16 @@ namespace rtsp_stream {
       config.monitor.dynamicRange = (int) util::from_view(args.at("x-nv-video[0].dynamicRangeMode"sv));
       config.monitor.chromaSamplingType = (int) util::from_view(args.at("x-ss-video[0].chromaSamplingType"sv));
       config.monitor.enableIntraRefresh = (int) util::from_view(args.at("x-ss-video[0].intraRefresh"sv));
-
       configuredBitrateKbps = util::from_view(args.at("x-ml-video.configuredBitrateKbps"sv));
     } catch (std::out_of_range &) {
-      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
-      return;
+      return false;
     }
+    return true;
+  }
 
-    // A Dolby codec is selected only when the client explicitly accepts the exact offer.
-    // All other cases keep the existing Opus behavior.
+  audio::dolby_codec_e negotiate_announce_audio(stream::config_t &config, launch_session_t &session, const announce_args_t &args) {
     const auto audio_accept = args.find("x-ss-audio-codec-accept"sv);
-    const std::string_view accepted_audio_codec = audio_accept == args.end() ? std::string_view {} : std::string_view {audio_accept->second};
+    const std::string_view accepted_audio_codec = audio_accept == args.end() ? std::string_view {} : audio_accept->second;
     const bool client_accepted_audio_codec =
       !session.audio_negotiation.codec_offered.empty() &&
       audio_accept != args.end() &&
@@ -1222,8 +1190,6 @@ namespace rtsp_stream {
     const bool eac3_encoder_available = session.audio_negotiation.codec_offered == "EAC3"sv && audio::eac3_available();
     const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
     const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
-    // Moonlight communicates its requested audio quality in the ANNOUNCE SDP.
-    // Use that per-session request for Dolby too; do not impose a server-side preference.
     const bool high_quality_audio_requested = config.audio.flags[audio::config_t::HIGH_QUALITY];
     const auto selected_audio_codec = audio::configure_dolby_audio(
       config.audio,
@@ -1256,42 +1222,48 @@ namespace rtsp_stream {
       BOOST_LOG(info) << "Using "sv << codec_name << " audio: "sv << config.audio.channels
                       << " channels, 48 kHz, "sv << bitrate_kbps << " kbit/s"sv;
     }
+    return selected_audio_codec;
+  }
 
-    // When using stereo audio, the audio quality is (strangely) indicated by whether the Host field
-    // in the RTSP message matches a local interface's IP address. Fortunately, Moonlight always sends
-    // 0.0.0.0 when it wants low quality, so it is easy to check without enumerating interfaces.
+  void apply_announce_surround_params(audio::config_t &audio_config, std::string_view surround_params) {
+    if (surround_params.length() <= 3) {
+      return;
+    }
+    const std::uint8_t channels = surround_params[0] - '0';
+    const std::uint8_t streams = surround_params[1] - '0';
+    const std::uint8_t coupled_streams = surround_params[2] - '0';
+    bool valid = (channels == 6 || channels == 8) &&
+                 channels == audio_config.channels &&
+                 streams + coupled_streams == channels &&
+                 surround_params.length() == channels + 3;
+    if (valid) {
+      audio_config.customStreamParams.channelCount = channels;
+      audio_config.customStreamParams.streams = streams;
+      audio_config.customStreamParams.coupledStreams = coupled_streams;
+      for (std::uint8_t i = 0; i < channels; i++) {
+        audio_config.customStreamParams.mapping[i] = surround_params[i + 3] - '0';
+        if (audio_config.customStreamParams.mapping[i] >= channels) {
+          valid = false;
+          break;
+        }
+      }
+    }
+    audio_config.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+  }
+
+  void configure_announce_audio(stream::config_t &config, const launch_session_t &session, POPTION_ITEM request_options) {
     if (config.audio.channels == 2) {
-      for (auto request_option = req->options; request_option != nullptr; request_option = request_option->next) {
+      for (auto request_option = request_options; request_option != nullptr; request_option = request_option->next) {
         if ("Host"sv == request_option->option) {
           std::string_view content {request_option->content};
           BOOST_LOG(debug) << "Found Host: "sv << content;
           config.audio.flags[audio::config_t::HIGH_QUALITY] = !content.contains("0.0.0.0"sv);
         }
       }
-    } else if (session.surround_params.length() > 3) {
-      // Channels
-      std::uint8_t c = session.surround_params[0] - '0';
-      // Streams
-      std::uint8_t n = session.surround_params[1] - '0';
-      // Coupled streams
-      std::uint8_t m = session.surround_params[2] - '0';
-      auto valid = false;
-      if ((c == 6 || c == 8) && c == config.audio.channels && n + m == c && session.surround_params.length() == c + 3) {
-        config.audio.customStreamParams.channelCount = c;
-        config.audio.customStreamParams.streams = n;
-        config.audio.customStreamParams.coupledStreams = m;
-        valid = true;
-        for (std::uint8_t i = 0; i < c; i++) {
-          config.audio.customStreamParams.mapping[i] = session.surround_params[i + 3] - '0';
-          if (config.audio.customStreamParams.mapping[i] >= c) {
-            valid = false;
-            break;
-          }
-        }
-      }
-      config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = valid;
+    } else {
+      apply_announce_surround_params(config.audio, session.surround_params);
     }
-    // AC-3 uses the standard 5.1 speaker order, not an Opus-specific custom mapping.
+
     if (config.audio.use_ac3 || config.audio.use_eac3) {
       config.audio.flags[audio::config_t::CUSTOM_SURROUND_PARAMS] = false;
     }
@@ -1299,41 +1271,67 @@ namespace rtsp_stream {
       BOOST_LOG(info) << "Client requested continuous audio"sv;
       config.audio.flags[audio::config_t::CONTINUOUS_AUDIO] = true;
     }
+  }
 
-    // If the client sent a configured bitrate, we will choose the actual bitrate ourselves
-    // by using FEC percentage and audio quality settings. If the calculated bitrate ends up
-    // too low, we'll allow it to exceed the limits rather than reducing the encoding bitrate
-    // down to nearly nothing.
-    if (configuredBitrateKbps) {
-      BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-
-      // If the FEC percentage isn't too high, adjust the configured bitrate to ensure video
-      // traffic doesn't exceed the user's selected bitrate when the FEC shards are included.
-      if (config::stream.fec_percentage <= 80) {
-        configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
-      }
-
-      // Adjust the bitrate to account for audio traffic bandwidth usage (capped at 20% reduction).
-      // Dolby uses its selected channel-aware bitrate; keep the Opus calculation unchanged.
-      int audioBitrateAdjustment {};
-      if (config.audio.use_ac3 || config.audio.use_eac3) {
-        audioBitrateAdjustment = audio::dolby_bitrate_kbps(
-          config.audio.use_eac3,
-          config.audio.high_quality_dolby,
-          config.audio.channels
-        );
-      } else {
-        audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
-      }
-      configuredBitrateKbps -= std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
-
-      // Reduce it by another 500Kbps to account for A/V packet overhead and control data
-      // traffic (capped at 10% reduction).
-      configuredBitrateKbps -= std::min((std::int64_t) 500, configuredBitrateKbps / 10);
-
-      BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
-      config.monitor.bitrate = (int) configuredBitrateKbps;
+  void adjust_announce_bitrate(stream::config_t &config, std::int64_t configuredBitrateKbps) {
+    if (!configuredBitrateKbps) {
+      return;
     }
+    BOOST_LOG(debug) << "Client configured bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+    if (config::stream.fec_percentage <= 80) {
+      configuredBitrateKbps /= 100.f / (100 - config::stream.fec_percentage);
+    }
+    int audioBitrateAdjustment {};
+    if (config.audio.use_ac3 || config.audio.use_eac3) {
+      audioBitrateAdjustment = audio::dolby_bitrate_kbps(
+        config.audio.use_eac3,
+        config.audio.high_quality_dolby,
+        config.audio.channels
+      );
+    } else {
+      audioBitrateAdjustment = (config.audio.flags[audio::config_t::HIGH_QUALITY] ? 256 : 96) * config.audio.channels;
+    }
+    configuredBitrateKbps -= std::min((std::int64_t) audioBitrateAdjustment, configuredBitrateKbps / 5);
+    configuredBitrateKbps -= std::min((std::int64_t) 500, configuredBitrateKbps / 10);
+    BOOST_LOG(debug) << "Final adjusted video encoding bitrate is "sv << configuredBitrateKbps << " Kbps"sv;
+    config.monitor.bitrate = (int) configuredBitrateKbps;
+  }
+
+  /**
+   * @brief Handle RTSP ANNOUNCE requests from the client.
+   *
+   * @param rtsp_server RTSP server instance handling the request.
+   * @param sock Socket used to read or write the protocol message.
+   * @param session Active streaming or pairing session for the request.
+   * @param req Parsed RTSP request being handled.
+   */
+  void cmd_announce(rtsp_server_t *rtsp_server, tcp::socket &sock, launch_session_t &session, const msg_t &req) {
+    OPTION_ITEM option {};
+
+    // I know these string literals will not be modified
+    std::string cseq_header {"CSeq"};
+    option.option = cseq_header.data();
+
+    auto seqn_str = std::to_string(req->sequenceNumber);
+    option.content = seqn_str.data();
+
+    std::string_view payload {req->payload, (size_t) req->payloadLength};
+    auto args = parse_announce_args(payload);
+    apply_announce_defaults(args);
+
+    stream::config_t config;
+
+    std::int64_t configuredBitrateKbps {};
+    if (!parse_announce_config(args, session, config, configuredBitrateKbps)) {
+      respond(sock, session, &option, 400, "BAD REQUEST", req->sequenceNumber, {});
+      return;
+    }
+
+    const auto selected_audio_codec = negotiate_announce_audio(config, session, args);
+
+    configure_announce_audio(config, session, req->options);
+
+    adjust_announce_bitrate(config, configuredBitrateKbps);
 
     if (config.monitor.videoFormat == 1 && video::active_hevc_mode == 1) {
       BOOST_LOG(warning) << "HEVC is disabled, yet the client requested HEVC"sv;
