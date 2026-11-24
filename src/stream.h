@@ -23,7 +23,16 @@ namespace stream {
 
   struct session_t;
 
-  /** Return whether an audio payload fits the shared transport limit, including CBC padding. */
+  /**
+   * @brief Check whether an audio payload fits the transport buffer.
+   *
+   * The check includes the additional PKCS#7 padding required by encrypted packets.
+   * @param plaintext_size Audio payload size before encryption, in bytes.
+   * @param encrypted Whether the payload will be encrypted using CBC.
+   * @param destination_capacity Available destination buffer capacity, in bytes.
+   * @return True if the payload is within the audio packet limit and its encoded
+   *         representation fits the destination buffer; otherwise false.
+   */
   bool audio_packet_fits(std::size_t plaintext_size, bool encrypted, std::size_t destination_capacity);
 
   /**
