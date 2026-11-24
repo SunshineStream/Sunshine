@@ -242,7 +242,6 @@ namespace config {
     bool install_steam_drivers;  ///< Install Steam audio drivers for enhanced compatibility
     bool external_audio;  ///< Windows capture-only mode; an external router owns endpoint defaults and formats.
     std::string format {"opus"};  ///< Encoded audio format: Opus, AC-3, or E-AC-3.
-    bool high_quality_audio {false};  ///< Use higher bitrates for negotiated Dolby streams; ignored for Opus.
   };
 
   /**
