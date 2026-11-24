@@ -14,6 +14,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  organization:
+    uses: LizardByte/.github/.github/workflows/__call-organization.yml@master
+
   github-env:
     name: GitHub Env Debug
     permissions:
@@ -21,9 +24,14 @@ jobs:
     uses: LizardByte/.github/.github/workflows/__call-github-env.yml@master
 
   release-setup:
+    needs: organization
     name: Release Setup
     outputs:
-      publish_release: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.publish_release || steps.release-setup.outputs.publish_release }}
+      publish_release: >-
+        ${{ github.event_name == 'workflow_dispatch' &&
+        steps.manual-release-setup.outputs.publish_release ||
+        needs.organization.outputs.allowed == 'true' &&
+        steps.release-setup.outputs.publish_release == 'true' }}
       release_body: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_body || steps.release-setup.outputs.release_body }}
       release_commit: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_commit || steps.release-setup.outputs.release_commit }}
       release_generate_release_notes: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_generate_release_notes || steps.release-setup.outputs.release_generate_release_notes }}
@@ -39,7 +47,7 @@ jobs:
       - name: Release Setup
         id: release-setup
         if: github.event_name != 'workflow_dispatch'
-        uses: LizardByte/actions/actions/release_setup@0528b495e6af82b4d698ec6c907a9b1842622068  # v2026.1029.234422
+        uses: LizardByte/actions/actions/release_setup@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -215,8 +223,9 @@ jobs:
     if: >-
       always() &&
       !cancelled() &&
-      startsWith(github.repository, 'LizardByte/')
+      needs.organization.outputs.allowed == 'true'
     needs:
+      - organization
       - build-freebsd
       - build-linux
       - build-archlinux
@@ -305,8 +314,9 @@ jobs:
     name: Release
     if:
       needs.release-setup.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
+      needs.organization.outputs.allowed == 'true'
     needs:
+      - organization
       - release-setup
       - build-archlinux
       - build-alpine
@@ -332,7 +342,7 @@ jobs:
         run: ls -l artifacts
 
       - name: Create/Update GitHub Release
-        uses: LizardByte/actions/actions/release_create@0528b495e6af82b4d698ec6c907a9b1842622068  # v2026.1029.234422
+        uses: LizardByte/actions/actions/release_create@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           allowUpdates: false
           body: ${{ needs.release-setup.outputs.release_body }}
@@ -347,8 +357,9 @@ jobs:
     name: Release Homebrew Beta
     if:
       needs.release-setup.outputs.publish_release == 'true' &&
-      startsWith(github.repository, 'LizardByte/')
+      needs.organization.outputs.allowed == 'true'
     needs:
+      - organization
       - release-setup
       - build-homebrew
       - release
