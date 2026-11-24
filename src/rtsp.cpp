@@ -481,7 +481,7 @@ namespace rtsp_stream {
       if (auto func = _map_cmd_cb.find(req->message.request.command); func != std::end(_map_cmd_cb)) {
         func->second(this, sock, session, std::move(req));
       } else {
-        cmd_not_found(sock, session, std::move(req));
+        cmd_not_found(sock, session, req);
       }
 
       boost::system::error_code ec;
@@ -1023,7 +1023,7 @@ namespace rtsp_stream {
     } else if (type == "control"sv) {
       port = net::map_port(stream::CONTROL_PORT);
     } else {
-      cmd_not_found(sock, session, std::move(req));
+      cmd_not_found(sock, session, req);
 
       return;
     }
