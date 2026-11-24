@@ -1212,13 +1212,16 @@ namespace rtsp_stream {
     const bool eac3_encoder_available = session.audio_negotiation.codec_offered == "EAC3"sv && audio::eac3_available();
     const bool selected_encoder_available = ac3_encoder_available || eac3_encoder_available;
     const bool supported_dolby_channel_count = config.audio.channels == 2 || config.audio.channels == 6;
+    // Moonlight communicates its requested audio quality in the ANNOUNCE SDP.
+    // Use that per-session request for Dolby too; do not impose a server-side preference.
+    const bool high_quality_audio_requested = config.audio.flags[audio::config_t::HIGH_QUALITY];
     const auto selected_audio_codec = audio::configure_dolby_audio(
       config.audio,
       session.audio_negotiation.codec_offered,
       accepted_audio_codec,
       ac3_encoder_available,
       eac3_encoder_available,
-      config::audio.high_quality_audio
+      high_quality_audio_requested
     );
 
     if (config::audio.format != "opus"sv && session.audio_negotiation.codec_offered.empty()) {
