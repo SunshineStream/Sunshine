@@ -6,8 +6,34 @@
 // test includes
 #include "../tests_common.h"
 
+// standard includes
+#include <cstring>
+
+// lib includes
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/udp.hpp>
+
 // local includes
 #include <src/network.h>
+
+namespace {
+  /**
+   * @brief Copy the leading bytes of a socket address storage into a concrete socket address type.
+   *
+   * Copying avoids the strict-aliasing violation of reinterpreting the storage in place.
+   *
+   * @tparam T Concrete socket address type, such as `sockaddr_in` or `sockaddr_in6`.
+   * @param storage The socket address storage to copy from.
+   * @return A copy of the address as `T`.
+   */
+  template<typename T>
+  T sockaddr_as(const sockaddr_storage &storage) {
+    static_assert(sizeof(T) <= sizeof(sockaddr_storage));
+    T address {};
+    std::memcpy(&address, &storage, sizeof(address));
+    return address;
+  }
+}  // namespace
 
 TEST(NetworkClassificationTest, DeducedNetworkListsPreserveAddressScopes) {
   EXPECT_EQ(net::from_address("127.0.0.1"), net::PC);
@@ -222,4 +248,120 @@ TEST_F(BindAddressTest, LinkLocalAddresses) {
 TEST_F(BindAddressTest, WildcardAddressFunction) {
   ASSERT_EQ(net::af_to_any_address_string(net::af_e::IPV4), "0.0.0.0");
   ASSERT_EQ(net::af_to_any_address_string(net::af_e::BOTH), "::");
+}
+
+/**
+ * @brief Test that host_create binds an ENet host on an available loopback port.
+ */
+TEST_F(BindAddressTest, HostCreateBindsAvailablePort) {
+  config::sunshine.bind_address = "127.0.0.1";
+
+  ENetAddress addr {};
+  const auto host = net::host_create(net::af_e::IPV4, addr, 0);
+
+  ASSERT_TRUE(host);
+  ASSERT_EQ(host->address.address.ss_family, AF_INET);
+  EXPECT_NE(sockaddr_as<sockaddr_in>(host->address.address).sin_port, 0);
+}
+
+/**
+ * @brief Test that host_create returns an empty handle instead of crashing when the port is in use.
+ */
+TEST_F(BindAddressTest, HostCreateReturnsEmptyHandleWhenPortIsInUse) {
+  config::sunshine.bind_address = "127.0.0.1";
+
+  boost::asio::io_context io_context;
+  boost::asio::ip::udp::socket blocker(io_context, boost::asio::ip::udp::endpoint(boost::asio::ip::make_address_v4("127.0.0.1"), 0));
+  const auto port = blocker.local_endpoint().port();
+
+  ENetAddress addr {};
+  const auto host = net::host_create(net::af_e::IPV4, addr, port);
+
+  EXPECT_FALSE(host);
+}
+
+/**
+ * @brief Test that set_enet_address converts the IPv6 wildcard without consulting the resolver.
+ */
+TEST(SetEnetAddressTest, ConvertsIpv6Wildcard) {
+  ENetAddress addr {};
+
+  ASSERT_TRUE(net::set_enet_address(addr, "::", 47999));
+
+  ASSERT_EQ(addr.address.ss_family, AF_INET6);
+  ASSERT_EQ(addr.addressLength, sizeof(sockaddr_in6));
+  const auto sin6 = sockaddr_as<sockaddr_in6>(addr.address);
+  EXPECT_EQ(sin6.sin6_port, ENET_HOST_TO_NET_16(47999));
+  const auto bytes = boost::asio::ip::make_address_v6("::").to_bytes();
+  EXPECT_EQ(std::memcmp(&sin6.sin6_addr, bytes.data(), bytes.size()), 0);
+}
+
+/**
+ * @brief Test that set_enet_address converts a numeric IPv4 address.
+ */
+TEST(SetEnetAddressTest, ConvertsIpv4Address) {
+  ENetAddress addr {};
+
+  ASSERT_TRUE(net::set_enet_address(addr, "192.0.2.1", 48010));
+
+  ASSERT_EQ(addr.address.ss_family, AF_INET);
+  ASSERT_EQ(addr.addressLength, sizeof(sockaddr_in));
+  const auto sin = sockaddr_as<sockaddr_in>(addr.address);
+  EXPECT_EQ(sin.sin_port, ENET_HOST_TO_NET_16(48010));
+  const auto bytes = boost::asio::ip::make_address_v4("192.0.2.1").to_bytes();
+  EXPECT_EQ(std::memcmp(&sin.sin_addr, bytes.data(), bytes.size()), 0);
+}
+
+/**
+ * @brief Test that set_enet_address resolves host names through ENet.
+ */
+TEST(SetEnetAddressTest, ResolvesHostName) {
+  ENetAddress addr {};
+
+  ASSERT_TRUE(net::set_enet_address(addr, "localhost", 47999));
+
+  EXPECT_TRUE(addr.address.ss_family == AF_INET || addr.address.ss_family == AF_INET6);
+  EXPECT_GT(addr.addressLength, 0);
+}
+
+/**
+ * @brief Test that set_enet_address reports host names that cannot be resolved.
+ */
+TEST(SetEnetAddressTest, RejectsUnresolvableHostName) {
+  ENetAddress addr {};
+
+  EXPECT_FALSE(net::set_enet_address(addr, "sunshine-test.invalid", 47999));
+}
+
+/**
+ * @brief Test that host_create binds the dual-stack wildcard used by address_family = both.
+ */
+TEST_F(BindAddressTest, HostCreateBindsIpv6Wildcard) {
+  config::sunshine.bind_address = "";
+
+  boost::asio::io_context io_context;
+  boost::asio::ip::udp::socket probe(io_context);
+  boost::system::error_code ec;
+  probe.open(boost::asio::ip::udp::v6(), ec);
+  if (ec) {
+    GTEST_SKIP() << "IPv6 sockets are not available: " << ec.message();
+  }
+
+  ENetAddress addr {};
+  const auto host = net::host_create(net::af_e::BOTH, addr, 0);
+
+  ASSERT_TRUE(host);
+  EXPECT_EQ(host->address.address.ss_family, AF_INET6);
+}
+
+/**
+ * @brief Test that host_create returns an empty handle when the bind address cannot be resolved.
+ */
+TEST_F(BindAddressTest, HostCreateReturnsEmptyHandleForUnresolvableAddress) {
+  config::sunshine.bind_address = "sunshine-test.invalid";
+
+  ENetAddress addr {};
+  const auto host = net::host_create(net::af_e::IPV4, addr, 0);
+
+  EXPECT_FALSE(host);
 }

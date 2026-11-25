@@ -202,6 +202,20 @@ namespace net {
     }
   }
 
+  bool set_enet_address(ENetAddress &addr, const std::string &host, std::uint16_t port) {
+    boost::system::error_code ec;
+    const auto address = ip::make_address(host, ec);
+    if (ec) {
+      // Not a numeric address, so resolve the host name through ENet
+      return enet_address_set_host(&addr, host.c_str()) == 0 && enet_address_set_port(&addr, port) == 0;
+    }
+
+    // Numeric addresses are converted directly because ENet's resolver uses AI_ADDRCONFIG,
+    // which rejects IPv6 addresses such as "::" on hosts without a non-loopback IPv6 address.
+    ip::udp::endpoint endpoint {address, port};
+    return enet_address_set_address(&addr, endpoint.data(), static_cast<socklen_t>(endpoint.size())) == 0;
+  }
+
   /**
    * @brief Create an ENet host with the requested address family.
    */
@@ -213,11 +227,17 @@ namespace net {
 
     af = get_effective_address_family(af);
     const auto bind_addr = net::get_bind_address(af);
-    enet_address_set_host(&addr, bind_addr.c_str());
-    enet_address_set_port(&addr, port);
+    if (!set_enet_address(addr, bind_addr, port)) {
+      BOOST_LOG(error) << "Failed to resolve ENet bind address ["sv << bind_addr << ']';
+      return host_t {};
+    }
 
     // Maximum of 128 clients, which should be enough for anyone
     auto host = host_t {enet_host_create(af == IPV4 ? AF_INET : AF_INET6, &addr, 128, 0, 0, 0)};
+    if (!host) {
+      BOOST_LOG(error) << "Failed to create ENet host on ["sv << bind_addr << "]:"sv << port;
+      return host;
+    }
 
     // Enable opportunistic QoS tagging (automatically disables if the network appears to drop tagged packets)
     enet_socket_set_option(host->socket, ENET_SOCKOPT_QOS, 1);
