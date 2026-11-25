@@ -44,25 +44,24 @@ echo "
 }
 
 function install() {
+  local appimage_path
+  appimage_path="$(readlink -f "$ARGV0")" || return $?
+
   # user input rules
-  # shellcheck disable=SC2002
-  cat "$SUNSHINE_SHARE_HERE/udev/rules.d/60-sunshine.rules" | sudo tee /etc/udev/rules.d/60-sunshine.rules
-  cat "$SUNSHINE_SHARE_HERE/modules-load.d/60-sunshine.conf" | sudo tee /etc/modules-load.d/60-sunshine.conf
-  sudo modprobe uhid
-  sudo udevadm control --reload-rules
-  sudo udevadm trigger --property-match=DEVNAME=/dev/uinput
-  sudo udevadm trigger --property-match=DEVNAME=/dev/uhid
-  sudo udevadm trigger --subsystem-match=hidraw
-  sudo udevadm trigger --subsystem-match=input
+  sudo tee /etc/udev/rules.d/60-sunshine.rules < "$SUNSHINE_SHARE_HERE/udev/rules.d/60-sunshine.rules" || return $?
+  sudo tee /etc/modules-load.d/60-sunshine.conf < "$SUNSHINE_SHARE_HERE/modules-load.d/60-sunshine.conf" || return $?
+  sudo modprobe uhid || return $?
+  sudo udevadm control --reload-rules || return $?
+  sudo udevadm trigger --property-match=DEVNAME=/dev/uinput || return $?
+  sudo udevadm trigger --property-match=DEVNAME=/dev/uhid || return $?
+  sudo udevadm trigger --subsystem-match=hidraw || return $?
+  sudo udevadm trigger --subsystem-match=input || return $?
 
   # sunshine service
-  mkdir -p ~/.config/systemd/user
-  cp -r "$SUNSHINE_SHARE_HERE/systemd/user/" ~/.config/systemd/
+  mkdir -p ~/.config/systemd/user || return $?
+  cp -r "$SUNSHINE_SHARE_HERE/systemd/user/" ~/.config/systemd/ || return $?
   # patch service executable path
-  sed -i -e "s#$SUNSHINE_PATH#$(readlink -f $ARGV0)#g" ~/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service
-
-  # setcap
-  sudo setcap cap_sys_admin,cap_sys_nice+p "$(readlink -f "$SUNSHINE_BIN_HERE")"
+  sed -i -e "s#$SUNSHINE_PATH#$appimage_path#g" ~/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service
 }
 
 function remove() {
