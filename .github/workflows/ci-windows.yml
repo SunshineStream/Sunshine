@@ -271,7 +271,26 @@ jobs:
             exit 1
           fi
 
+      - name: Strip Windows executables before signing
+        if: inputs.publish_release == 'true' && inputs.azure_signing_account != '' && matrix.name != 'Windows-ARM64'
+        shell: msys2 {0}
+        working-directory: build
+        run: |
+          set -euo pipefail
+          binaries=(
+            sunshine.exe
+            tools/audio-info.exe
+            tools/dxgi-info.exe
+            tools/sunshinesvc.exe
+          )
+
+          # Keep the original binaries for the separate debug archive.
+          mkdir -p unstripped
+          cp -p --parents "${binaries[@]}" unstripped
+          strip "${binaries[@]}"
+
       - name: Sign Windows executables
+        id: sign-executables
         # ARM64 is not currently supported, see https://github.com/Azure/artifact-signing-action/issues/92
         if: inputs.publish_release == 'true' && inputs.azure_signing_account != '' && matrix.name != 'Windows-ARM64'
         uses: azure/trusted-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82  # v2.0.0
@@ -293,13 +312,27 @@ jobs:
 
       - name: Package Windows
         shell: msys2 {0}
+        env:
+          SIGNED_EXECUTABLES: ${{ steps.sign-executables.outcome == 'success' }}
         run: |
+          set -euo pipefail
           mkdir -p artifacts
           cd build
 
-          # package
-          cpack -G WIX
-          cpack -G ZIP
+          cpack_args=()
+          if [[ "$SIGNED_EXECUTABLES" == true ]]; then
+            # These binaries have already been stripped and signed. Do not modify them during staging.
+            cpack_args+=(-D CPACK_STRIP_FILES=OFF)
+          fi
+
+          cpack -G WIX "${cpack_args[@]}"
+          cpack -G ZIP "${cpack_args[@]}"
+
+          if [[ "$SIGNED_EXECUTABLES" == true ]]; then
+            # Restore the original binaries for tests and the debug archive.
+            cp -p -R unstripped/. .
+            rm -r unstripped
+          fi
 
           # move
           mv ./cpack_artifacts/Sunshine.msi ../artifacts/Sunshine-${{ matrix.name }}-installer.msi
