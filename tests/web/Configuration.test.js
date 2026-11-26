@@ -99,6 +99,45 @@ describe('configuration accessibility', () => {
   })
 })
 
+describe('display device configuration', () => {
+  it('toggles dd_reapply_on_display_loss only for active display preparation modes', async () => {
+    const avDefaults = structuredClone(configTabs.find(tab => tab.id === 'av').options)
+    expect(avDefaults.dd_reapply_on_display_loss).toBe('disabled')
+
+    const verifyOnlyWrapper = mount(DisplayDeviceOptions, {
+      props: {
+        platform: 'windows',
+        config: {
+          ...avDefaults,
+          dd_configuration_option: 'verify_only',
+        },
+      },
+      global: { ...globalOptions, stubs: { ...globalOptions.stubs, Checkbox: false } },
+    })
+    expect(verifyOnlyWrapper.find('#dd_reapply_on_display_loss').exists()).toBe(false)
+
+    const config = {
+      ...avDefaults,
+      dd_configuration_option: 'ensure_only_display',
+    }
+    const activeWrapper = mount(DisplayDeviceOptions, {
+      props: {
+        platform: 'windows',
+        config,
+      },
+      global: { ...globalOptions, stubs: { ...globalOptions.stubs, Checkbox: false } },
+    })
+    const checkbox = activeWrapper.get('#dd_reapply_on_display_loss')
+    expect(checkbox.element.checked).toBe(false)
+
+    await checkbox.setValue(true)
+    expect(config.dd_reapply_on_display_loss).toBe('enabled')
+
+    await checkbox.setValue(false)
+    expect(config.dd_reapply_on_display_loss).toBe('disabled')
+  })
+})
+
 describe('network configuration', () => {
   it('uses the default Moonlight port when the configured port is absent', () => {
     const wrapper = mount(Network, {

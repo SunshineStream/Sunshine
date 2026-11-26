@@ -225,6 +225,7 @@ namespace config {
       hdr_option_e hdr_option;  ///< HDR-selection mode selected by configuration.
       std::chrono::milliseconds config_revert_delay;  ///< Time to wait until settings are reverted (after stream ends/app exists).
       bool config_revert_on_disconnect;  ///< Specify whether to revert display configuration on client disconnect.
+      bool reapply_on_display_loss;  ///< Specify whether to reapply the active display configuration when the configured display disappears mid-stream.
       mode_remapping_t mode_remapping;  ///< Display mode remapping rules grouped by automatic selection mode.
       workarounds_t wa;  ///< Display-device compatibility workarounds.
     };

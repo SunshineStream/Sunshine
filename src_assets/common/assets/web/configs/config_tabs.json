@@ -54,6 +54,7 @@
       "dd_wa_hdr_toggle_delay": 0,
       "dd_config_revert_delay": 3000,
       "dd_config_revert_on_disconnect": "disabled",
+      "dd_reapply_on_display_loss": "disabled",
       "dd_mode_remapping": {
         "mixed": [],
         "resolution_only": [],

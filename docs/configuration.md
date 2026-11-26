@@ -1413,6 +1413,31 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### dd_reapply_on_display_loss
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            When enabled, Sunshine automatically reapplies the active stream's display configuration if Windows externally
+            deactivates or removes the configured display during an active stream (for example, when a disabled DisplayPort
+            monitor enters standby and triggers a hot-plug topology reset).
+            @note{Only takes effect when [dd_configuration_option](#dd_configuration_option) is set to `ensure_active`, `ensure_primary`, or `ensure_only_display`.}
+            @note{Applies to Windows only.}
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">@code{}disabled@endcode</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            dd_reapply_on_display_loss = enabled
+            @endcode</td>
+    </tr>
+</table>
+
 ### dd_mode_remapping
 
 <table>

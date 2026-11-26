@@ -557,8 +557,11 @@ namespace {
       return device_id;
     }
 
-    [[nodiscard]] ApplyResult applySettings(const display_device::SingleDisplayConfiguration &) override {
-      return ApplyResult::Ok;
+    [[nodiscard]] ApplyResult applySettings(const display_device::SingleDisplayConfiguration &config) override {
+      std::lock_guard lock {mutex};
+      ++apply_calls;
+      last_applied_config = config;
+      return apply_result;
     }
 
     [[nodiscard]] RevertResult revertSettings() override {
@@ -609,6 +612,33 @@ namespace {
     }
 
     /**
+     * @brief Configure the result returned by `applySettings()`.
+     * @param result Result enum to return on subsequent apply calls.
+     */
+    void set_apply_result(const ApplyResult result) {
+      std::lock_guard lock {mutex};
+      apply_result = result;
+    }
+
+    /**
+     * @brief Report how many times `applySettings()` has been called.
+     * @return Total apply count.
+     */
+    [[nodiscard]] int apply_call_count() const {
+      std::lock_guard lock {mutex};
+      return apply_calls;
+    }
+
+    /**
+     * @brief Return the most recent configuration passed to `applySettings()`.
+     * @return Last applied configuration, if any.
+     */
+    [[nodiscard]] std::optional<display_device::SingleDisplayConfiguration> latest_applied_config() const {
+      std::lock_guard lock {mutex};
+      return last_applied_config;
+    }
+
+    /**
      * @brief Revert counters observed by a test.
      */
     struct progress_t {
@@ -646,6 +676,9 @@ namespace {
       {.m_device_id = "panel", .m_friendly_name = "Panel"}
     };  ///< Displays currently connected.
     int revert_calls {0};  ///< Number of revert attempts performed.
+    int apply_calls {0};  ///< Number of apply attempts performed.
+    ApplyResult apply_result {ApplyResult::Ok};  ///< Result returned by `applySettings()`.
+    std::optional<display_device::SingleDisplayConfiguration> last_applied_config {};  ///< Most recent configuration passed to `applySettings()`.
     bool keep_pending {true};  ///< When true, a successful revert still leaves the saved record in place.
     bool pending_saved {false};  ///< True when the latest revert left a saved record.
     bool hdr_restored {false};  ///< True when redocking cleared the pending record.
@@ -724,4 +757,76 @@ TEST(DisplayDeviceRevert, RedockRestoresPendingSettings) {
   ASSERT_TRUE(manager_ptr->wait_for_hdr_restore(2s));
   EXPECT_GE(manager_ptr->progress().revert_calls, 2);
   EXPECT_TRUE(wait_until_revert_stops());
+}
+
+TEST(DisplayDeviceReapply, SkipsWhenInactiveVerifyOnlyOrAfterRevert) {
+  [[maybe_unused]] const display_device_revert_guard_t guard;
+  const auto persistence {display_device::test_make_watched_persistence()};
+  auto manager {std::make_unique<redock_settings_manager_t>(persistence)};
+  manager->set_keep_pending(false);
+  auto *manager_ptr {manager.get()};
+  display_device::test_install_settings_manager(std::move(manager), persistence);
+
+  // No active configuration yet.
+  EXPECT_FALSE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 0);
+
+  // VerifyOnly cannot activate a deactivated display.
+  display_device::SingleDisplayConfiguration verify_config;
+  verify_config.m_device_id = "{vdd}";
+  verify_config.m_device_prep = display_device::SingleDisplayConfiguration::DevicePreparation::VerifyOnly;
+  display_device::configure_display(verify_config);
+  EXPECT_EQ(manager_ptr->apply_call_count(), 1);
+  EXPECT_FALSE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 1);
+
+  // Reverting clears the active configuration so disconnect does not race with reapply.
+  display_device::SingleDisplayConfiguration active_config;
+  active_config.m_device_id = "{vdd}";
+  active_config.m_device_prep = display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay;
+  display_device::configure_display(active_config);
+  EXPECT_EQ(manager_ptr->apply_call_count(), 2);
+
+  display_device::revert_configuration();
+  EXPECT_FALSE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 2);
+}
+
+TEST(DisplayDeviceReapply, ReappliesActiveConfigurationWithCooldownAndHandlesFailure) {
+  [[maybe_unused]] const display_device_revert_guard_t guard;
+  display_device::test_set_reapply_cooldown(50ms);
+  const auto persistence {display_device::test_make_watched_persistence()};
+  auto manager {std::make_unique<redock_settings_manager_t>(persistence)};
+  auto *manager_ptr {manager.get()};
+  display_device::test_install_settings_manager(std::move(manager), persistence);
+
+  display_device::SingleDisplayConfiguration config;
+  config.m_device_id = "{vdd}";
+  config.m_device_prep = display_device::SingleDisplayConfiguration::DevicePreparation::EnsureOnlyDisplay;
+  config.m_resolution = display_device::Resolution {3024, 1964};
+  config.m_refresh_rate = display_device::Rational {120, 1};
+  display_device::configure_display(config);
+  EXPECT_EQ(manager_ptr->apply_call_count(), 1);
+
+  EXPECT_TRUE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 2);
+  ASSERT_TRUE(manager_ptr->latest_applied_config().has_value());
+  EXPECT_EQ(manager_ptr->latest_applied_config()->m_device_id, "{vdd}");
+
+  // Immediate repeat inside the cooldown window is skipped.
+  EXPECT_FALSE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 2);
+
+  // After cooldown expires, another reapply runs and propagates apply failure.
+  std::this_thread::sleep_for(70ms);
+  manager_ptr->set_apply_result(display_device::SettingsManagerInterface::ApplyResult::DevicePrepFailed);
+  EXPECT_FALSE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 3);
+
+  // Resetting persistence also clears active configuration.
+  EXPECT_TRUE(display_device::reset_persistence());
+  std::this_thread::sleep_for(70ms);
+  manager_ptr->set_apply_result(display_device::SettingsManagerInterface::ApplyResult::Ok);
+  EXPECT_FALSE(display_device::reapply_configuration_on_display_loss());
+  EXPECT_EQ(manager_ptr->apply_call_count(), 3);
 }

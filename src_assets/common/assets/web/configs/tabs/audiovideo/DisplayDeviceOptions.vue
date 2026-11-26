@@ -168,6 +168,15 @@ function addRemappingEntry() {
                 ></Checkbox>
               </div>
 
+              <!-- Reapply configuration on display loss -->
+              <div class="mb-3" v-if="config.dd_configuration_option !== 'disabled' && config.dd_configuration_option !== 'verify_only'">
+                <Checkbox id="dd_reapply_on_display_loss"
+                  locale-prefix="config"
+                  v-model="config.dd_reapply_on_display_loss"
+                  default="false"
+                ></Checkbox>
+              </div>
+
               <!-- Display mode remapping -->
               <div class="mb-3" v-if="canBeRemapped()">
                 <label for="dd_mode_remapping" class="form-label">
