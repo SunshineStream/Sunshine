@@ -185,8 +185,9 @@ TEST(AudioPacketTransportTest, EncryptsAndWritesMaximumPayloadWithinExactShardCa
     );
 
     EXPECT_EQ(bytes, static_cast<int>(required_capacity));
-    EXPECT_NE(std::all_of(destination.begin(), destination.end(), [](std::uint8_t value) { return value == 0xA5; }), true);
-    if (!encrypted) {
+    if (encrypted) {
+      EXPECT_FALSE(std::all_of(destination.begin(), destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
+    } else {
       EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), destination.begin()));
     }
   }
