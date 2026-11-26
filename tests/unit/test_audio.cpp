@@ -177,7 +177,7 @@ TEST(AudioPacketTransportTest, EncryptsAndWritesMaximumPayloadWithinExactShardCa
 
     EXPECT_EQ(bytes, static_cast<int>(required_capacity));
     if (encrypted) {
-      EXPECT_FALSE(std::all_of(writer.destination.begin(), writer.destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
+      EXPECT_FALSE(writer.is_filled_with(0xA5));
     } else {
       EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), writer.destination.begin()));
     }
@@ -197,7 +197,7 @@ TEST(AudioPacketTransportTest, RejectsInsufficientShardCapacityBeforeWriting) {
     const auto bytes = writer.encode(encrypted, plaintext, required_capacity - 1);
 
     EXPECT_EQ(bytes, -1);
-    EXPECT_TRUE(std::all_of(writer.destination.begin(), writer.destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
+    EXPECT_TRUE(writer.is_filled_with(0xA5));
   }
 }
 
