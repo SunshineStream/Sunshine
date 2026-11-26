@@ -183,7 +183,7 @@ describe('FEC configuration', () => {
 })
 
 describe('gamepad input configuration', () => {
-  function mountInputs(platform, gamepadDriver = '', gamepad = 'auto', controller = 'enabled') {
+  function mountInputs(platform, gamepadDriver = '', gamepad = 'auto', controller = 'enabled', guideButtonCombo = '') {
     return mount(Inputs, {
       props: {
         platform,
@@ -191,6 +191,7 @@ describe('gamepad input configuration', () => {
           controller,
           gamepad,
           gamepad_driver: gamepadDriver,
+          guide_button_combo: guideButtonCombo,
           keybindings: '[]',
           motion_as_ds4: 'enabled',
           touchpad_as_ds4: 'enabled',
@@ -244,6 +245,7 @@ describe('gamepad input configuration', () => {
     expect(wrapper.find('#gamepad').exists()).toBe(false)
     expect(wrapper.find('#motion_as_ds4').exists()).toBe(false)
     expect(wrapper.find('#back_button_timeout').exists()).toBe(false)
+    expect(wrapper.find('#guide-button-a').exists()).toBe(false)
     expect(wrapper.find('#keyboard').exists()).toBe(true)
     expect(wrapper.find('#mouse').exists()).toBe(true)
   })
@@ -257,5 +259,31 @@ describe('gamepad input configuration', () => {
       'auto', 'x360', 'ds4',
     ])
     expect(wrapper.get('#gamepad').element.value).toBe('auto')
+  })
+
+  it('lets users choose and clear a Guide button combination', async () => {
+    const wrapper = mountInputs('windows', 'vigembus', 'x360')
+    const config = wrapper.props().config
+    expect(wrapper.findAll('input[id^="guide-button-"]')).toHaveLength(8)
+    expect(config.guide_button_combo).toBe('')
+
+    for (const button of ['x', 'y', 'l1', 'r1']) {
+      await wrapper.get(`#guide-button-${button}`).setValue(true)
+    }
+    expect(config.guide_button_combo).toBe('x+y+l1+r1')
+    expect(wrapper.find('.text-warning').exists()).toBe(false)
+
+    for (const button of ['x', 'y', 'l1']) {
+      await wrapper.get(`#guide-button-${button}`).setValue(false)
+    }
+    expect(config.guide_button_combo).toBe('r1')
+    expect(wrapper.find('.text-warning').exists()).toBe(true)
+
+    await wrapper.get('#guide-button-r1').setValue(false)
+    expect(config.guide_button_combo).toBe('')
+
+    await wrapper.get('#guide-button-l2').setValue(true)
+    await wrapper.get('#guide-button-r2').setValue(true)
+    expect(config.guide_button_combo).toBe('l2+r2')
   })
 })

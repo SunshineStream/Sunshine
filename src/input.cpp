@@ -1677,7 +1677,7 @@ namespace input {
   }
 
   /**
-   * @brief Forward a client input packet directly to the platform backend.
+   * @brief Forward a client gamepad packet, applying the configured Guide combination.
    *
    * @param input Platform input backend that receives the event.
    * @param packet Protocol packet being processed.
@@ -1726,6 +1726,25 @@ namespace input {
       packet->rightStickX,
       packet->rightStickY
     };
+
+    const auto guide_combo = config::input.guide_button_combo;
+    auto pressed_buttons = gamepad_state.buttonFlags;
+    if (gamepad_state.lt >= 128) {
+      pressed_buttons |= config::GUIDE_COMBO_L2;
+    }
+    if (gamepad_state.rt >= 128) {
+      pressed_buttons |= config::GUIDE_COMBO_R2;
+    }
+    if (guide_combo && (pressed_buttons & guide_combo) == guide_combo) {
+      gamepad_state.buttonFlags &= ~guide_combo;
+      if (guide_combo & config::GUIDE_COMBO_L2) {
+        gamepad_state.lt = 0;
+      }
+      if (guide_combo & config::GUIDE_COMBO_R2) {
+        gamepad_state.rt = 0;
+      }
+      gamepad_state.buttonFlags |= platf::HOME;
+    }
 
     auto bf_new = gamepad_state.buttonFlags;
     switch (gamepad.back_button_state) {

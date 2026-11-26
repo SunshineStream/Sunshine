@@ -848,6 +848,7 @@ namespace config {
       {0x12, 0xA4},
     },
     -1ms,  // back_button_timeout
+    0,  // guide_button_combo disabled by default
     500ms,  // key_repeat_delay
     std::chrono::duration<double> {1 / 24.9},  // key_repeat_period
 
@@ -1581,6 +1582,52 @@ namespace config {
     return options;
   }
 
+  std::optional<std::uint32_t> parse_guide_button_combo(std::string_view value) {
+    if (value.empty()) {
+      return 0;
+    }
+
+    constexpr std::array<std::pair<std::string_view, std::uint32_t>, 8> buttons {{
+      {"a", platf::A},
+      {"b", platf::B},
+      {"x", platf::X},
+      {"y", platf::Y},
+      {"l1", platf::LEFT_BUTTON},
+      {"l2", GUIDE_COMBO_L2},
+      {"r1", platf::RIGHT_BUTTON},
+      {"r2", GUIDE_COMBO_R2},
+    }};
+    std::uint32_t mask = 0;
+    std::size_t count = 0;
+    while (!value.empty()) {
+      const auto delimiter = value.find('+');
+      const auto token = value.substr(0, delimiter);
+      bool found = false;
+      for (const auto &[name, button] : buttons) {
+        if (token == name) {
+          if (mask & button) {
+            return std::nullopt;
+          }
+          mask |= button;
+          found = true;
+          break;
+        }
+      }
+      if (!found) {
+        return std::nullopt;
+      }
+      ++count;
+      if (delimiter == std::string_view::npos) {
+        break;
+      }
+      value.remove_prefix(delimiter + 1);
+      if (value.empty()) {
+        return std::nullopt;
+      }
+    }
+    return count >= 2 ? std::optional {mask} : std::nullopt;
+  }
+
   /**
    * @brief Log parsed configuration entries and optionally record them as modified.
    */
@@ -1885,6 +1932,15 @@ namespace config {
 
     if (to > std::numeric_limits<int>::min()) {
       input.back_button_timeout = std::chrono::milliseconds {to};
+    }
+
+    std::string guide_button_combo;
+    string_f(vars, "guide_button_combo", guide_button_combo);
+    input.guide_button_combo = 0;
+    if (const auto mask = parse_guide_button_combo(guide_button_combo)) {
+      input.guide_button_combo = *mask;
+    } else {
+      BOOST_LOG(warning) << "Invalid guide_button_combo: "sv << guide_button_combo;
     }
 
     double repeat_frequency {0};

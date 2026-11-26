@@ -475,6 +475,87 @@ TEST_F(InputGamepadSessionTest, BatchesContinuousPacketsWithoutCrossingStateChan
   expect_packet_dispatches(motion, changed_motion, SS_CONTROLLER_MOTION_MAGIC, 2);
 }
 
+/**
+ * @brief A configured client combination holds Guide while preserving other controls.
+ */
+TEST_F(InputGamepadSessionTest, ConvertsConfiguredGuideComboOnlyWhileAllButtonsArePressed) {
+  config::input.back_button_timeout = std::chrono::milliseconds {-1};
+  auto stream_input = input::alloc(std::make_shared<safe::mail_raw_t>(), "guide-chord");
+  ASSERT_NE(stream_input, nullptr);
+  const auto id = input::testing::alloc_gamepad(stream_input, 0, {LI_CTYPE_XBOX, 0, 0});
+  ASSERT_GE(id, 0);
+  auto *adapter = platf::virtualhid::gamepad_adapter_for_testing(context(), id);
+  ASSERT_NE(adapter, nullptr);
+
+  const auto send_buttons = [&](std::uint32_t buttons, std::uint8_t left_trigger = 0, std::uint8_t right_trigger = 0) {
+    NV_MULTI_CONTROLLER_PACKET packet {};
+    packet.header.size = util::endian::big<std::uint32_t>(sizeof(packet) - sizeof(packet.header.size));
+    packet.header.magic = util::endian::little(MULTI_CONTROLLER_MAGIC_GEN5);
+    packet.controllerNumber = 0;
+    packet.activeGamepadMask = 1;
+    packet.buttonFlags = static_cast<std::uint16_t>(buttons);
+    packet.buttonFlags2 = static_cast<std::uint16_t>(buttons >> 16);
+    packet.leftTrigger = left_trigger;
+    packet.rightTrigger = right_trigger;
+    std::vector<std::uint8_t> bytes(sizeof(packet));
+    std::memcpy(bytes.data(), &packet, sizeof(packet));
+    input::passthrough(stream_input, std::move(bytes));
+    input::testing::process_queued_messages(stream_input);
+    return adapter->state();
+  };
+
+  using enum lvh::GamepadButton;
+  constexpr auto chord = platf::X | platf::Y | platf::LEFT_BUTTON | platf::RIGHT_BUTTON;
+  const auto disabled = send_buttons(chord);
+  EXPECT_FALSE(disabled.buttons.test(guide));
+  EXPECT_TRUE(disabled.buttons.test(x));
+
+  config::input.guide_button_combo = chord;
+  const auto partial = send_buttons(chord & ~platf::Y);
+  EXPECT_FALSE(partial.buttons.test(guide));
+  EXPECT_TRUE(partial.buttons.test(x));
+  EXPECT_TRUE(partial.buttons.test(left_shoulder));
+
+  const auto pressed = send_buttons(chord | platf::A | platf::DPAD_UP);
+  EXPECT_TRUE(pressed.buttons.test(guide));
+  EXPECT_TRUE(pressed.buttons.test(a));
+  EXPECT_TRUE(pressed.buttons.test(dpad_up));
+  for (const auto button : {x, y, left_shoulder, right_shoulder}) {
+    EXPECT_FALSE(pressed.buttons.test(button));
+  }
+
+  const auto held = send_buttons(chord | platf::A);
+  EXPECT_TRUE(held.buttons.test(guide));
+  const auto partly_released = send_buttons(platf::X | platf::LEFT_BUTTON | platf::A);
+  EXPECT_FALSE(partly_released.buttons.test(guide));
+  EXPECT_TRUE(partly_released.buttons.test(x));
+  EXPECT_TRUE(partly_released.buttons.test(left_shoulder));
+
+  const auto released = send_buttons(platf::A | platf::DPAD_DOWN);
+  EXPECT_FALSE(released.buttons.test(guide));
+  EXPECT_TRUE(released.buttons.test(a));
+  EXPECT_TRUE(released.buttons.test(dpad_down));
+  const auto separate_button = send_buttons(platf::X);
+  EXPECT_TRUE(separate_button.buttons.test(x));
+  EXPECT_FALSE(separate_button.buttons.test(guide));
+
+  EXPECT_TRUE(send_buttons(chord).buttons.test(guide));
+  EXPECT_FALSE(send_buttons(0).buttons.test(guide));
+
+  config::input.guide_button_combo = platf::A | config::GUIDE_COMBO_L2 | config::GUIDE_COMBO_R2;
+  EXPECT_FALSE(send_buttons(platf::A, 127, 255).buttons.test(guide));
+  EXPECT_FALSE(send_buttons(platf::A, 255, 127).buttons.test(guide));
+  const auto trigger_chord = send_buttons(platf::A, 128, 255);
+  EXPECT_TRUE(trigger_chord.buttons.test(guide));
+  EXPECT_FALSE(trigger_chord.buttons.test(a));
+  EXPECT_FLOAT_EQ(trigger_chord.left_trigger, 0.0F);
+  EXPECT_FLOAT_EQ(trigger_chord.right_trigger, 0.0F);
+  const auto trigger_released = send_buttons(platf::A, 127, 255);
+  EXPECT_FALSE(trigger_released.buttons.test(guide));
+  EXPECT_TRUE(trigger_released.buttons.test(a));
+  EXPECT_GT(trigger_released.left_trigger, 0.0F);
+}
+
 TEST_F(InputGamepadSessionTest, ReusesGamepadsAcrossPauseAndDestroysThemOnTermination) {
   const std::string session_id = "paired-client-certificate";
   auto first_mail = std::make_shared<safe::mail_raw_t>();
