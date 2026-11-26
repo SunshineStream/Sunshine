@@ -7,6 +7,7 @@
 #include "../tests_common.h"
 
 // standard includes
+#include <algorithm>
 #include <array>
 #include <string_view>
 #include <utility>
@@ -145,15 +146,77 @@ TEST(AudioDolbyEncoderTest, RejectsInvalidInputAndUnsupportedChannelCount) {
 }
 #endif
 
-TEST(AudioPacketTransportTest, ChecksPlaintextAndEncryptedDestinationCapacity) {
+TEST(AudioPacketTransportTest, ChecksPkcs7CiphertextCapacityAtBlockBoundaries) {
+  EXPECT_TRUE(stream::audio_packet_fits(1400, true, 1408));
+  EXPECT_TRUE(stream::audio_packet_fits(1401, true, 1408));
+  EXPECT_FALSE(stream::audio_packet_fits(1408, true, 1408));
+
   constexpr std::size_t max_audio_payload = MAX_DOLBY_PACKET_SIZE;
+  constexpr auto max_encrypted_payload = crypto::cipher::round_to_pkcs7_padded(max_audio_payload);
+  static_assert(max_audio_payload == 2560);
+  static_assert(max_encrypted_payload == 2576);
 
   EXPECT_TRUE(stream::audio_packet_fits(max_audio_payload, false, max_audio_payload));
   EXPECT_FALSE(stream::audio_packet_fits(max_audio_payload + 1, false, max_audio_payload));
-  EXPECT_TRUE(stream::audio_packet_fits(max_audio_payload, true, max_audio_payload));
-  EXPECT_FALSE(stream::audio_packet_fits(max_audio_payload, true, max_audio_payload - 1));
-  EXPECT_TRUE(stream::audio_packet_fits(1400, true, 1408));
-  EXPECT_FALSE(stream::audio_packet_fits(1401, true, 1408));
+  EXPECT_TRUE(stream::audio_packet_fits(max_audio_payload, true, max_encrypted_payload));
+  EXPECT_FALSE(stream::audio_packet_fits(max_audio_payload, true, max_encrypted_payload - 1));
+}
+
+TEST(AudioPacketTransportTest, EncryptsAndWritesMaximumPayloadWithinExactShardCapacity) {
+  constexpr std::size_t plaintext_size = MAX_DOLBY_PACKET_SIZE;
+  constexpr auto encrypted_size = crypto::cipher::round_to_pkcs7_padded(plaintext_size);
+  const audio::buffer_t plaintext(plaintext_size, 0x5A);
+
+  for (const bool encrypted : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
+    const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
+    std::vector<std::uint8_t> destination(required_capacity, 0xA5);
+    crypto::aes_t key(16, 0);
+    crypto::aes_t iv(16, 0);
+    crypto::cipher::cbc_t cipher(key, true);
+
+    const auto bytes = stream::encode_audio(
+      encrypted,
+      plaintext,
+      destination.data(),
+      destination.size(),
+      iv,
+      cipher
+    );
+
+    EXPECT_EQ(bytes, static_cast<int>(required_capacity));
+    EXPECT_NE(std::all_of(destination.begin(), destination.end(), [](std::uint8_t value) { return value == 0xA5; }), true);
+    if (!encrypted) {
+      EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), destination.begin()));
+    }
+  }
+}
+
+TEST(AudioPacketTransportTest, RejectsInsufficientShardCapacityBeforeWriting) {
+  constexpr std::size_t plaintext_size = MAX_DOLBY_PACKET_SIZE;
+  constexpr auto encrypted_size = crypto::cipher::round_to_pkcs7_padded(plaintext_size);
+  const audio::buffer_t plaintext(plaintext_size, 0x5A);
+
+  for (const bool encrypted : {false, true}) {
+    SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
+    const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
+    std::vector<std::uint8_t> destination(required_capacity, 0xA5);
+    crypto::aes_t key(16, 0);
+    crypto::aes_t iv(16, 0);
+    crypto::cipher::cbc_t cipher(key, true);
+
+    const auto bytes = stream::encode_audio(
+      encrypted,
+      plaintext,
+      destination.data(),
+      required_capacity - 1,
+      iv,
+      cipher
+    );
+
+    EXPECT_EQ(bytes, -1);
+    EXPECT_TRUE(std::all_of(destination.begin(), destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
+  }
 }
 
 TEST(AudioPacketSessionTest, EncoderPreservesTheReceivingSession) {
