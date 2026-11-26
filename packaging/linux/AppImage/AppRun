@@ -60,9 +60,6 @@ function install() {
   cp -r "$SUNSHINE_SHARE_HERE/systemd/user/" ~/.config/systemd/
   # patch service executable path
   sed -i -e "s#$SUNSHINE_PATH#$(readlink -f $ARGV0)#g" ~/.config/systemd/user/app-dev.lizardbyte.app.Sunshine.service
-
-  # setcap
-  sudo setcap cap_sys_admin,cap_sys_nice+p "$(readlink -f "$SUNSHINE_BIN_HERE")"
 }
 
 function remove() {
