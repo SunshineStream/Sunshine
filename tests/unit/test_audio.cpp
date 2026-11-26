@@ -5,6 +5,7 @@
 
 // test includes
 #include "../tests_common.h"
+#include "audio_transport_test_helper.h"
 
 // standard includes
 #include <algorithm>
@@ -170,25 +171,15 @@ TEST(AudioPacketTransportTest, EncryptsAndWritesMaximumPayloadWithinExactShardCa
   for (const bool encrypted : {false, true}) {
     SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
     const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
-    std::vector<std::uint8_t> destination(required_capacity, 0xA5);
-    crypto::aes_t key(16, 0);
-    crypto::aes_t iv(16, 0);
-    crypto::cipher::cbc_t cipher(key, true);
+    audio_transport_test::packet_writer writer(required_capacity);
 
-    const auto bytes = stream::encode_audio(
-      encrypted,
-      plaintext,
-      destination.data(),
-      destination.size(),
-      iv,
-      cipher
-    );
+    const auto bytes = writer.encode(encrypted, plaintext, writer.destination.size());
 
     EXPECT_EQ(bytes, static_cast<int>(required_capacity));
     if (encrypted) {
-      EXPECT_FALSE(std::all_of(destination.begin(), destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
+      EXPECT_FALSE(std::all_of(writer.destination.begin(), writer.destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
     } else {
-      EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), destination.begin()));
+      EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), writer.destination.begin()));
     }
   }
 }
@@ -201,22 +192,12 @@ TEST(AudioPacketTransportTest, RejectsInsufficientShardCapacityBeforeWriting) {
   for (const bool encrypted : {false, true}) {
     SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
     const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
-    std::vector<std::uint8_t> destination(required_capacity, 0xA5);
-    crypto::aes_t key(16, 0);
-    crypto::aes_t iv(16, 0);
-    crypto::cipher::cbc_t cipher(key, true);
+    audio_transport_test::packet_writer writer(required_capacity);
 
-    const auto bytes = stream::encode_audio(
-      encrypted,
-      plaintext,
-      destination.data(),
-      required_capacity - 1,
-      iv,
-      cipher
-    );
+    const auto bytes = writer.encode(encrypted, plaintext, required_capacity - 1);
 
     EXPECT_EQ(bytes, -1);
-    EXPECT_TRUE(std::all_of(destination.begin(), destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
+    EXPECT_TRUE(std::all_of(writer.destination.begin(), writer.destination.end(), [](std::uint8_t value) { return value == 0xA5; }));
   }
 }
 
