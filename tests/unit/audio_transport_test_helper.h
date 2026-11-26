@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 #include <src/crypto.h>
@@ -39,5 +40,18 @@ struct packet_writer {
   crypto::aes_t iv;
   crypto::cipher::cbc_t cipher;
 };
+
+template<typename Test>
+void for_each_maximum_packet_case(Test &&test) {
+  constexpr std::size_t plaintext_size = MAX_DOLBY_PACKET_SIZE;
+  constexpr auto encrypted_size = crypto::cipher::round_to_pkcs7_padded(plaintext_size);
+  const audio::buffer_t plaintext(plaintext_size, 0x5A);
+
+  for (const bool encrypted : {false, true}) {
+    const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
+    packet_writer writer(required_capacity);
+    std::forward<Test>(test)(encrypted, required_capacity, plaintext, writer);
+  }
+}
 
 }  // namespace audio_transport_test
