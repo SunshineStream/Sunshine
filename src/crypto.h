@@ -215,7 +215,8 @@ namespace crypto {
      * @return `size` rounded up to the next PKCS#7 block boundary.
      */
     constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
-      return ((size + 15) / 16) * 16;
+      // PKCS#7 always appends padding, including a full block for aligned input.
+      return size + (16 - (size % 16));
     }
 
     /**
