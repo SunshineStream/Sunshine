@@ -1,4 +1,3 @@
-
 ---
 name: CI
 permissions: {}
@@ -29,16 +28,13 @@ jobs:
     name: Release Setup
     outputs:
       publish_release: >-
-        ${{
-        github.event_name == 'workflow_dispatch' &&
-        steps.manual-release-setup.outputs.publish_release ||
-        needs.organization.outputs.allowed == 'true' &&
+        ${{ needs.organization.outputs.allowed == 'true' &&
         steps.release-setup.outputs.publish_release == 'true' }}
-      release_body: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_body || steps.release-setup.outputs.release_body }}
-      release_commit: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_commit || steps.release-setup.outputs.release_commit }}
-      release_generate_release_notes: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_generate_release_notes || steps.release-setup.outputs.release_generate_release_notes }}
-      release_tag: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_tag || steps.release-setup.outputs.release_tag }}
-      release_version: ${{ github.event_name == 'workflow_dispatch' && steps.manual-release-setup.outputs.release_version || steps.release-setup.outputs.release_version }}
+      release_body: ${{ steps.release-setup.outputs.release_body }}
+      release_commit: ${{ steps.release-setup.outputs.release_commit }}
+      release_generate_release_notes: ${{ steps.release-setup.outputs.release_generate_release_notes }}
+      release_tag: ${{ steps.release-setup.outputs.release_tag }}
+      release_version: ${{ steps.release-setup.outputs.release_version }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -48,22 +44,9 @@ jobs:
 
       - name: Release Setup
         id: release-setup
-        if: github.event_name != 'workflow_dispatch'
         uses: LizardByte/actions/actions/release_setup@81873587bacc6842098865a35bbb32f2f21cee3b  # v2026.1123.33249
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Release Setup for manual build
-        id: manual-release-setup
-        if: github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          echo "publish_release=false" >> "$GITHUB_OUTPUT"
-          echo "release_body=" >> "$GITHUB_OUTPUT"
-          echo "release_commit=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
-          echo "release_generate_release_notes=true" >> "$GITHUB_OUTPUT"
-          echo "release_version=0.0.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
-          echo "release_tag=v0.0.$GITHUB_RUN_NUMBER" >> "$GITHUB_OUTPUT"
 
   build-docker:
     name: Docker
