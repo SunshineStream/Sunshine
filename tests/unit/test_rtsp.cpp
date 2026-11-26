@@ -83,7 +83,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Request to handle.
    */
-  void cmd_option(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_option(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Respond to DESCRIBE through the common dispatcher signature.
@@ -91,7 +91,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Request to handle.
    */
-  void cmd_describe(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_describe(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Validate ANNOUNCE input before creating a stream.
@@ -101,7 +101,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Parsed ANNOUNCE request.
    */
-  void cmd_announce(rtsp_server_t *server, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_announce(rtsp_server_t *server, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Respond to PLAY through the common dispatcher signature.
@@ -109,7 +109,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Request to handle.
    */
-  void cmd_play(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_play(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Send the successful ANNOUNCE response through the production response path.
@@ -142,7 +142,7 @@ TEST(RtspResponseTest, CommonDispatcherPreservesResponsesWithoutServerContext) {
     rtsp_stream::launch_session_t session {};
     rtsp_stream::msg_t request {new RTSP_MESSAGE {}};
     request->sequenceNumber = 42;
-    handler(nullptr, server_socket, session, std::move(request));
+    handler(nullptr, server_socket, session, request);
     server_socket.shutdown(tcp::socket::shutdown_send);
 
     std::string response;
@@ -177,7 +177,7 @@ TEST(RtspDescribeTest, SurroundParamsCompensateClientRotationForEveryStreamConfi
 
   rtsp_stream::launch_session_t session {};
   rtsp_stream::msg_t request {new RTSP_MESSAGE {}};
-  rtsp_stream::cmd_describe(nullptr, server_socket, session, std::move(request));
+  rtsp_stream::cmd_describe(nullptr, server_socket, session, request);
   server_socket.shutdown(tcp::socket::shutdown_send);
 
   std::string response;
@@ -284,7 +284,7 @@ TEST(RtspAnnounceTest, ValidatesH263PlusDimensionsAfterApplyingResolutionCap) {
     client.connect(acceptor.local_endpoint());
     auto server_socket = acceptor.accept();
     rtsp_stream::launch_session_t session {};
-    rtsp_stream::cmd_announce(nullptr, server_socket, session, std::move(request));
+    rtsp_stream::cmd_announce(nullptr, server_socket, session, request);
     server_socket.shutdown(tcp::socket::shutdown_send);
 
     std::string response;
