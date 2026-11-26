@@ -304,6 +304,24 @@ TEST(VideoRefreshDisplaysTest, SelectsConfiguredOutputOnInitialAndEmptyEnumerati
   ASSERT_EQ(initial_names.size(), 2U);
   EXPECT_EQ(initial_index, 1);
   EXPECT_EQ(initial_names[initial_index], "DISPLAY16");
+
+  std::vector<std::string> fallback_names;
+  int fallback_index = -1;
+  video::refresh_displays_with_callbacks(
+    fallback_names,
+    fallback_index,
+    false,
+    []() {
+      return std::vector<std::string> {"DISPLAY1", "DISPLAY2"};
+    },
+    []() {
+      return std::string {"DISPLAY99"};
+    },
+    []() {
+      return false;
+    }
+  );
+  EXPECT_EQ(fallback_index, 0);
 }
 
 TEST(VideoRefreshDisplaysTest, MatchesPreviousDisplayNameAfterReapplyWhenOutputMappingIsEmpty) {

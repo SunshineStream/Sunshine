@@ -125,6 +125,14 @@ namespace display_device {
       std::optional<std::chrono::milliseconds> test_retry_interval {};  ///< Override for the revert retry delay.
       std::optional<std::chrono::milliseconds> test_reapply_cooldown {};  ///< Override for the mid-stream reapply cooldown.
 #endif
+
+      /**
+       * @brief Clear the active stream configuration and reapply cooldown state.
+       */
+      void clear_active_config() {
+        active_config.reset();
+        last_reapply_attempt.reset();
+      }
     } DD_DATA;
 
     /**
@@ -848,8 +856,7 @@ namespace display_device {
      * @note This is function does not lock mutex.
      */
     void revert_configuration_unlocked(const revert_option_e option) {
-      DD_DATA.active_config.reset();
-      DD_DATA.last_reapply_attempt.reset();
+      DD_DATA.clear_active_config();
       if (!DD_DATA.sm_instance) {
         // Platform is not supported, nothing to do.
         return;
@@ -1055,8 +1062,7 @@ namespace display_device {
 
   bool reset_persistence() {
     std::lock_guard lock {DD_DATA.mutex};
-    DD_DATA.active_config.reset();
-    DD_DATA.last_reapply_attempt.reset();
+    DD_DATA.clear_active_config();
     if (!DD_DATA.sm_instance) {
       // Platform is not supported, assume success.
       return true;
@@ -1197,8 +1203,7 @@ namespace display_device {
     }
     DD_DATA.sm_instance.reset();
     DD_DATA.persistence_watch.reset();
-    DD_DATA.active_config.reset();
-    DD_DATA.last_reapply_attempt.reset();
+    DD_DATA.clear_active_config();
     DD_DATA.test_retry_interval.reset();
     DD_DATA.test_reapply_cooldown.reset();
   }
