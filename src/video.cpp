@@ -1745,14 +1745,14 @@ namespace video {
       if (const auto idx = find_display_index(display_names, preferred); idx.has_value()) {
         return *idx;
       }
-      if (const auto idx = find_display_index(display_names, fallback); idx.has_value()) {
-        return *idx;
-      }
-      return 0;
+      return find_display_index(display_names, fallback).value_or(0);
     }
 
     /**
      * @brief Reapply the active display configuration and refresh enumerated outputs when enabled.
+     * @tparam ReapplyFn Callable attempting to reapply the active display configuration and returning `bool`.
+     * @tparam EnumFn Callable returning currently active capture display names.
+     * @tparam MapFn Callable mapping the configured output to an active display name.
      * @param reapply_on_display_loss True when automatic mid-stream reapply is enabled.
      * @param reapply_display Callback attempting to reapply the active display configuration.
      * @param enum_displays Callback returning currently active capture display names.
@@ -1761,11 +1761,12 @@ namespace video {
      * @param output_name Mapped output name refreshed after a successful re-enumeration.
      * @return True if configuration was reapplied and a non-empty display list was enumerated.
      */
+    template<typename ReapplyFn, typename EnumFn, typename MapFn>
     bool try_reapply_displays(
       const bool reapply_on_display_loss,
-      const std::function<bool()> &reapply_display,
-      const std::function<std::vector<std::string>()> &enum_displays,
-      const std::function<std::string()> &map_configured_output,
+      const ReapplyFn &reapply_display,
+      const EnumFn &enum_displays,
+      const MapFn &map_configured_output,
       std::vector<std::string> &display_names,
       std::string &output_name
     ) {
