@@ -329,22 +329,7 @@ namespace stream {
   static_assert(offsetof(control_adaptive_triggers_t, left) == 9);
   static_assert(offsetof(control_adaptive_triggers_t, right) == 9 + DS_EFFECT_PAYLOAD_SIZE);
 
-  /**
-   * @brief Round a byte count up to the next PKCS#7 padding boundary.
-   *
-   * @param size Number of bytes or elements requested.
-   * @return `size` rounded up to the next PKCS#7 block boundary.
-   */
-  constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
-    return ((size + 15) / 16) * 16;
-  }
-
   constexpr std::size_t MAX_AUDIO_PACKET_SIZE = audio::MAX_DOLBY_PACKET_SIZE;  ///< Shared encoder and transport payload limit.
-
-  /**
-   * @brief AES key storage used for audio packet encryption.
-   */
-  using audio_aes_t = std::array<char, round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE)>;
 
   /**
    * @brief Audio/video session identifier carried by GameStream packets.
@@ -361,7 +346,7 @@ namespace stream {
 
   // return bytes written on success
   // return -1 on error
-  static inline int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
+  int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
     if (!audio_packet_fits(plaintext.size(), encrypted, destination_capacity)) {
       return -1;
     }
