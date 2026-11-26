@@ -15,8 +15,6 @@ namespace audio_transport_test {
 struct packet_writer {
   explicit packet_writer(const std::size_t capacity):
     destination(capacity, 0xA5),
-    key(16, 0),
-    iv(16, 0),
     cipher(key, true) {}
 
   bool is_filled_with(const std::uint8_t value) const {
@@ -37,8 +35,8 @@ struct packet_writer {
   }
 
   std::vector<std::uint8_t> destination;
-  crypto::aes_t key;
-  crypto::aes_t iv;
+  crypto::aes_t key = crypto::aes_t(16, 0);
+  crypto::aes_t iv = crypto::aes_t(16, 0);
   crypto::cipher::cbc_t cipher;
 };
 
