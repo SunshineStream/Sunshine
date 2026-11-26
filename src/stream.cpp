@@ -344,8 +344,16 @@ namespace stream {
    */
   using message_queue_queue_t = std::shared_ptr<safe::queue_t<std::tuple<socket_e, av_session_id_t, message_queue_t>>>;
 
-  // return bytes written on success
-  // return -1 on error
+  /**
+   * @brief Copy or encrypt an audio packet into a destination buffer.
+   * @param encrypted Whether the packet must be encrypted with AES-CBC.
+   * @param plaintext Encoded audio packet to write.
+   * @param destination Destination buffer receiving the packet.
+   * @param destination_capacity Available capacity of the destination buffer.
+   * @param iv Initialization vector used for AES-CBC encryption.
+   * @param cbc AES-CBC cipher used to encrypt the packet.
+   * @return Number of bytes written on success, or -1 if the destination capacity is insufficient.
+   */
   int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
     if (!audio_packet_fits(plaintext.size(), encrypted, destination_capacity)) {
       return -1;
