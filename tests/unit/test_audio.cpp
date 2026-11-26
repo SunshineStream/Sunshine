@@ -167,6 +167,8 @@ TEST(AudioPacketTransportTest, EncryptsAndWritesMaximumPayloadWithinExactShardCa
   audio_transport_test::for_each_maximum_packet_case(
     [](const bool encrypted, const std::size_t required_capacity, const audio::buffer_t &plaintext, audio_transport_test::packet_writer &writer) {
       SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
+      ASSERT_EQ(writer.key.size(), 16U);
+      ASSERT_EQ(writer.iv.size(), 16U);
 
       const auto bytes = writer.encode(encrypted, plaintext, writer.destination.size());
 
@@ -184,6 +186,8 @@ TEST(AudioPacketTransportTest, RejectsInsufficientShardCapacityBeforeWriting) {
   audio_transport_test::for_each_maximum_packet_case(
     [](const bool encrypted, const std::size_t required_capacity, const audio::buffer_t &plaintext, audio_transport_test::packet_writer &writer) {
       SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
+      ASSERT_EQ(writer.key.size(), 16U);
+      ASSERT_EQ(writer.iv.size(), 16U);
 
       const auto bytes = writer.encode(encrypted, plaintext, required_capacity - 1);
 
