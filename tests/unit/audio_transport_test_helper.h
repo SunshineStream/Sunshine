@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <utility>
 #include <vector>
 
+#include <src/audio.h>
 #include <src/crypto.h>
 #include <src/stream.h>
 
@@ -50,7 +50,7 @@ void for_each_maximum_packet_case(Test &&test) {
   for (const bool encrypted : {false, true}) {
     const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
     packet_writer writer(required_capacity);
-    std::forward<Test>(test)(encrypted, required_capacity, plaintext, writer);
+    test(encrypted, required_capacity, plaintext, writer);
   }
 }
 
