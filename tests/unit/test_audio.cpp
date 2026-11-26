@@ -164,41 +164,33 @@ TEST(AudioPacketTransportTest, ChecksPkcs7CiphertextCapacityAtBlockBoundaries) {
 }
 
 TEST(AudioPacketTransportTest, EncryptsAndWritesMaximumPayloadWithinExactShardCapacity) {
-  constexpr std::size_t plaintext_size = MAX_DOLBY_PACKET_SIZE;
-  constexpr auto encrypted_size = crypto::cipher::round_to_pkcs7_padded(plaintext_size);
-  const audio::buffer_t plaintext(plaintext_size, 0x5A);
+  audio_transport_test::for_each_maximum_packet_case(
+    [](const bool encrypted, const std::size_t required_capacity, const audio::buffer_t &plaintext, audio_transport_test::packet_writer &writer) {
+      SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
 
-  for (const bool encrypted : {false, true}) {
-    SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
-    const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
-    audio_transport_test::packet_writer writer(required_capacity);
+      const auto bytes = writer.encode(encrypted, plaintext, writer.destination.size());
 
-    const auto bytes = writer.encode(encrypted, plaintext, writer.destination.size());
-
-    EXPECT_EQ(bytes, static_cast<int>(required_capacity));
-    if (encrypted) {
-      EXPECT_FALSE(writer.is_filled_with(0xA5));
-    } else {
-      EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), writer.destination.begin()));
+      EXPECT_EQ(bytes, static_cast<int>(required_capacity));
+      if (encrypted) {
+        EXPECT_FALSE(writer.is_filled_with(0xA5));
+      } else {
+        EXPECT_TRUE(std::equal(plaintext.begin(), plaintext.end(), writer.destination.begin()));
+      }
     }
-  }
+  );
 }
 
 TEST(AudioPacketTransportTest, RejectsInsufficientShardCapacityBeforeWriting) {
-  constexpr std::size_t plaintext_size = MAX_DOLBY_PACKET_SIZE;
-  constexpr auto encrypted_size = crypto::cipher::round_to_pkcs7_padded(plaintext_size);
-  const audio::buffer_t plaintext(plaintext_size, 0x5A);
+  audio_transport_test::for_each_maximum_packet_case(
+    [](const bool encrypted, const std::size_t required_capacity, const audio::buffer_t &plaintext, audio_transport_test::packet_writer &writer) {
+      SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
 
-  for (const bool encrypted : {false, true}) {
-    SCOPED_TRACE(testing::Message() << "encrypted=" << encrypted);
-    const auto required_capacity = encrypted ? encrypted_size : plaintext_size;
-    audio_transport_test::packet_writer writer(required_capacity);
+      const auto bytes = writer.encode(encrypted, plaintext, required_capacity - 1);
 
-    const auto bytes = writer.encode(encrypted, plaintext, required_capacity - 1);
-
-    EXPECT_EQ(bytes, -1);
-    EXPECT_TRUE(writer.is_filled_with(0xA5));
-  }
+      EXPECT_EQ(bytes, -1);
+      EXPECT_TRUE(writer.is_filled_with(0xA5));
+    }
+  );
 }
 
 TEST(AudioPacketSessionTest, EncoderPreservesTheReceivingSession) {
