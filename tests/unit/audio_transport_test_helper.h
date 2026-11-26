@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -15,6 +16,12 @@ struct packet_writer {
     key(16, 0),
     iv(16, 0),
     cipher(key, true) {}
+
+  bool is_filled_with(const std::uint8_t value) const {
+    return std::all_of(destination.begin(), destination.end(), [value](const std::uint8_t byte) {
+      return byte == value;
+    });
+  }
 
   int encode(const bool encrypted, const audio::buffer_t &plaintext, const std::size_t capacity) {
     return stream::encode_audio(
