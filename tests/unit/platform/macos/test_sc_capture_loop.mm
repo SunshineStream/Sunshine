@@ -140,7 +140,7 @@ namespace {
   };
 }  // namespace
 
-TEST(SCCaptureLoop, StreamStartFailureReturnsReinitAndDisablesSckit) {
+TEST(SCCaptureLoop, StreamStartFailureReturnsReinitAndRecordsFailure) {
   fake_frame_source_t source;
   source.start_result = false;
   platf::sckit::backend_policy_t policy;
@@ -148,7 +148,6 @@ TEST(SCCaptureLoop, StreamStartFailureReturnsReinitAndDisablesSckit) {
 
   EXPECT_EQ(pipeline.run(source, policy), platf::capture_e::reinit);
   EXPECT_TRUE(policy.stream_start_failed());
-  EXPECT_FALSE(policy.prefer_sckit(true));
   EXPECT_EQ(source.start_calls, 1);
   EXPECT_EQ(source.stop_calls, 0);
   EXPECT_TRUE(pipeline.pushed.empty());
@@ -166,7 +165,6 @@ TEST(SCCaptureLoop, UnexpectedStreamStopReturnsReinit) {
   EXPECT_EQ(pipeline.processed, 2);
   EXPECT_EQ(source.stop_calls, 1);
   EXPECT_FALSE(policy.stream_start_failed());
-  EXPECT_TRUE(policy.prefer_sckit(true));
 }
 
 TEST(SCCaptureLoop, PollTimeoutReportsRepeatFrame) {
@@ -211,35 +209,51 @@ TEST(SCCaptureLoop, UnusableFrameIsSkipped) {
   EXPECT_EQ(source.stop_calls, 1);
 }
 
-TEST(SCCaptureLoop, BackendPolicyPrefersSckitUntilAStreamFailsToStart) {
+TEST(SCCaptureLoop, BackendPolicyStreamStartFailureIsTakenOnce) {
   platf::sckit::backend_policy_t policy;
 
   EXPECT_FALSE(policy.stream_start_failed());
-  EXPECT_TRUE(policy.prefer_sckit(true));
-  EXPECT_FALSE(policy.prefer_sckit(false));
+  EXPECT_FALSE(policy.take_stream_start_failure());
 
   policy.note_stream_start_failure();
 
+  // Peeking leaves the failure for the display rebuild to take.
   EXPECT_TRUE(policy.stream_start_failed());
-  EXPECT_FALSE(policy.prefer_sckit(true));
-  EXPECT_FALSE(policy.prefer_sckit(false));
+  EXPECT_TRUE(policy.stream_start_failed());
+  EXPECT_TRUE(policy.take_stream_start_failure());
+
+  // Only that rebuild falls back; later displays try ScreenCaptureKit again.
+  EXPECT_FALSE(policy.stream_start_failed());
+  EXPECT_FALSE(policy.take_stream_start_failure());
+
+  // Repeated failures before a rebuild still steer only one rebuild.
+  policy.note_stream_start_failure();
+  policy.note_stream_start_failure();
+  EXPECT_TRUE(policy.take_stream_start_failure());
+  EXPECT_FALSE(policy.take_stream_start_failure());
 }
 
-TEST(SCCaptureLoop, BackendPolicyStreamStartFailureExpiresAfterBackoff) {
-  using policy_t = platf::sckit::backend_policy_t;
-  policy_t policy;
-  const auto failed_at = policy_t::clock::now();
+TEST(SCCaptureLoop, StreamStartFailureFallsBackForOneRebuildThenRetriesSckit) {
+  using event_e = fake_frame_source_t::event_e;
+  platf::sckit::backend_policy_t policy;
+  fake_pipeline_t pipeline;
+  pipeline.push_limit = 1;
 
-  policy.note_stream_start_failure(failed_at);
+  // The first stream can't start (e.g. the session is locked).
+  fake_frame_source_t failing;
+  failing.start_result = false;
+  EXPECT_EQ(pipeline.run(failing, policy), platf::capture_e::reinit);
 
-  EXPECT_TRUE(policy.stream_start_failed(failed_at));
-  EXPECT_TRUE(policy.stream_start_failed(failed_at + policy_t::failure_backoff - std::chrono::milliseconds {1}));
-  EXPECT_FALSE(policy.stream_start_failed(failed_at + policy_t::failure_backoff));
+  // The rebuild that follows takes the failure and uses AVFoundation.
+  EXPECT_TRUE(policy.take_stream_start_failure());
 
-  // A later failure restarts the backoff.
-  const auto failed_again_at = failed_at + policy_t::failure_backoff * 2;
-  policy.note_stream_start_failure(failed_again_at);
-  EXPECT_TRUE(policy.stream_start_failed(failed_again_at + std::chrono::seconds {1}));
+  // The next rebuild tries ScreenCaptureKit, which now starts and captures.
+  EXPECT_FALSE(policy.take_stream_start_failure());
+  fake_frame_source_t recovered;
+  recovered.events = {event_e::frame};
+  EXPECT_EQ(pipeline.run(recovered, policy), platf::capture_e::ok);
+  EXPECT_EQ(pipeline.pushed, (std::vector<bool> {true}));
+  EXPECT_FALSE(policy.stream_start_failed());
 }
 
 TEST(SCCaptureLoop, StopDelegateMarksStreamFailedUnlessStopping) {

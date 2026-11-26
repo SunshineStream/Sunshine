@@ -3,7 +3,6 @@
  * @brief Definitions for the ScreenCaptureKit capture loop and backend fallback policy on macOS.
  */
 // standard includes
-#include <algorithm>
 #include <memory>
 #include <utility>
 
@@ -12,18 +11,16 @@
 #include "src/utility.h"
 
 namespace platf::sckit {
-  void backend_policy_t::note_stream_start_failure(clock::time_point now) {
-    // 0 means "no failure", so never store it.
-    _last_failure = std::max<clock::rep>(now.time_since_epoch().count(), 1);
+  void backend_policy_t::note_stream_start_failure() {
+    _stream_start_failed = true;
   }
 
-  bool backend_policy_t::stream_start_failed(clock::time_point now) const {
-    const auto last {_last_failure.load()};
-    return last != 0 && now - clock::time_point {clock::duration {last}} < failure_backoff;
+  bool backend_policy_t::stream_start_failed() const {
+    return _stream_start_failed;
   }
 
-  bool backend_policy_t::prefer_sckit(bool sckit_available) const {
-    return sckit_available && !stream_start_failed();
+  bool backend_policy_t::take_stream_start_failure() {
+    return _stream_start_failed.exchange(false);
   }
 
   backend_policy_t &backend_policy() {
@@ -41,7 +38,7 @@ namespace platf::sckit {
   ) {
     if (!source.start()) {
       // The display was built for ScreenCaptureKit but the stream never came up: ask the
-      // capture thread to rebuild the display, which the policy now steers to AVFoundation.
+      // capture thread to rebuild the display, which the policy steers to AVFoundation once.
       policy.note_stream_start_failure();
       return capture_e::reinit;
     }

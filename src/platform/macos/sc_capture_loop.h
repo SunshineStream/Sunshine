@@ -7,7 +7,6 @@
 // standard includes
 #include <atomic>
 #include <chrono>
-#include <cstdint>
 #include <functional>
 
 // platform includes
@@ -18,47 +17,38 @@
 
 namespace platf::sckit {
   /**
-   * @brief Process-wide policy deciding whether ScreenCaptureKit is still the preferred capture backend.
+   * @brief Process-wide policy deciding whether the next display may use ScreenCaptureKit.
    *
    * ScreenCaptureKit is selected when a display is created, but its stream can only be started once
-   * capture begins. A stream that fails to start flips this policy so that the display is rebuilt
-   * on AVFoundation instead, for `failure_backoff`. Start failures are often transient (the session
-   * locking, a display being added), and AVFoundation can't capture those cases either, so a
-   * permanent switch would leave later sessions on the weaker backend until Sunshine restarts.
+   * capture begins. A stream that fails to start is recorded here so that the display rebuilt right
+   * after it falls back to AVFoundation. That rebuild consumes the failure: start failures are often
+   * transient (the session locking, a display being added), and AVFoundation can't capture those cases
+   * either, so every later display tries ScreenCaptureKit again.
    */
   class backend_policy_t {
   public:
-    using clock = std::chrono::steady_clock;  ///< Clock the backoff is measured on.
-
-    /// How long a stream start failure keeps ScreenCaptureKit from being preferred.
-    static constexpr std::chrono::seconds failure_backoff {30};
-
     /**
      * @brief Record that an SCStream could not be started.
-     *
-     * @param now Time of the failure.
      */
-    void note_stream_start_failure(clock::time_point now = clock::now());
+    void note_stream_start_failure();
 
     /**
-     * @brief Check whether an SCStream failed to start within the last `failure_backoff`.
+     * @brief Check, without consuming it, whether a stream start failure is pending.
      *
-     * @param now Time to evaluate the backoff at.
-     * @return `true` while the most recent stream start failure is younger than `failure_backoff`.
+     * @return `true` when a failure was recorded and no display has taken it yet.
      */
-    [[nodiscard]] bool stream_start_failed(clock::time_point now = clock::now()) const;
+    [[nodiscard]] bool stream_start_failed() const;
 
     /**
-     * @brief Decide whether ScreenCaptureKit should be used for a new display.
+     * @brief Consume a pending stream start failure.
      *
-     * @param sckit_available Whether the running system supports ScreenCaptureKit capture.
-     * @return `true` when ScreenCaptureKit is available and has not failed to start a stream.
+     * Called when a display is created; a `true` result means that display should use AVFoundation.
+     * @return `true` when a failure was pending; it is cleared either way.
      */
-    [[nodiscard]] bool prefer_sckit(bool sckit_available) const;
+    [[nodiscard]] bool take_stream_start_failure();
 
   private:
-    /// Time of the most recent stream start failure, as `clock` ticks; 0 when there was none.
-    std::atomic<clock::rep> _last_failure {0};
+    std::atomic<bool> _stream_start_failed {false};  ///< Set by a stream start failure until a display takes it.
   };
 
   /**
@@ -125,7 +115,7 @@ namespace platf::sckit {
    * Frames are pushed as they arrive; a poll interval without a frame is reported as a timeout so
    * the pipeline can repeat the previous frame. A stream that fails to start or stops on its own
    * yields `capture_e::reinit`, which makes the capture thread rebuild the display; a start failure
-   * also updates the backend policy, so that rebuild falls back to AVFoundation.
+   * also records a failure in the backend policy, so that rebuild falls back to AVFoundation.
    * @param source Stream to capture from; started here and stopped before returning unless the start failed.
    * @param policy Backend policy updated when the stream cannot be started.
    * @param push_captured_image_cb Pipeline callback receiving captured or repeated images.
