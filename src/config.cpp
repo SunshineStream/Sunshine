@@ -994,9 +994,12 @@ namespace config {
       return std::make_pair(endl, std::nullopt);
     }
 
+    auto end_val = endc;
+
     // Lists might contain newlines
     if (*begin_val == '[') {
       endl = skip_list(begin_val + 1, end);
+      end_val = endl;
 
       // Check if we reached the end of the file without finding a closing bracket
       // We know we have a valid closing bracket if:
@@ -1010,7 +1013,7 @@ namespace config {
 
     return std::make_pair(
       endl,
-      std::make_pair(to_string(begin, end_name), to_string(begin_val, endl))
+      std::make_pair(to_string(begin, end_name), to_string(begin_val, end_val))
     );
   }
 

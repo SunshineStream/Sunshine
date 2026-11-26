@@ -59,6 +59,21 @@ TEST(ConfigParsingTest, DuplicateKeysPreserveFirstValueAfterIgnoredEmptyEntry) {
   EXPECT_EQ(entries.size(), 2);
 }
 
+/**
+ * @brief Inline comments and trailing whitespace are not part of a value.
+ */
+TEST(ConfigParsingTest, ValuesExcludeTrailingCommentsAndWhitespace) {
+  const auto entries = config::parse_config("upnp = enabled # open ports
+port = 47989 	
+encoder = software	# fallback
+apps = [a, b] # list
+");
+  EXPECT_EQ(entries.at("upnp"), "enabled");
+  EXPECT_EQ(entries.at("port"), "47989");
+  EXPECT_EQ(entries.at("encoder"), "software");
+  EXPECT_EQ(entries.at("apps"), "[a, b]");
+}
+
 TEST(ConfigDefaultsTest, UsesAutomaticGamepadSelection) {
   EXPECT_EQ(config::input.gamepad, "auto");
 }
