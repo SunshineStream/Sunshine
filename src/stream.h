@@ -36,6 +36,19 @@ namespace stream {
   bool audio_packet_fits(std::size_t plaintext_size, bool encrypted, std::size_t destination_capacity);
 
   /**
+   * @brief Encode an audio packet into its transport shard.
+   *
+   * @param encrypted Whether AES-CBC encryption is enabled for this session.
+   * @param plaintext Encoded audio payload before transport encryption.
+   * @param destination Destination shard buffer.
+   * @param destination_capacity Available destination capacity in bytes.
+   * @param iv Mutable AES initialization vector for this packet.
+   * @param cbc AES-CBC cipher used when encryption is enabled.
+   * @return Number of bytes written, or -1 when the payload does not fit or encryption fails.
+   */
+  int encode_audio(bool encrypted, const audio::buffer_t &plaintext, std::uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc);
+
+  /**
    * @brief Stream configuration shared by capture and network senders.
    */
   struct config_t {
