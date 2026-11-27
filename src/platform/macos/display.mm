@@ -539,10 +539,11 @@ namespace platf {
     // Prefer ScreenCaptureKit: it composites the cursor into frames server-side, which avoids
     // an AVCaptureScreenInput bug where a hidden cursor never reappears in the captured frames.
     if (@available(macOS 14.0, *)) {
-      auto &policy = sckit::backend_policy();
-      if (policy.stream_start_failed()) {
-        BOOST_LOG(info) << "ScreenCaptureKit disabled after a stream start failure; using AVFoundation"sv;
-      } else if (policy.prefer_sckit([SCCapture isAvailable])) {
+      // A stream start failure steers only this rebuild to AVFoundation; the next display tries
+      // ScreenCaptureKit again.
+      if (sckit::backend_policy().take_stream_start_failure()) {
+        BOOST_LOG(info) << "SCCapture stream failed to start; using AVFoundation for this display"sv;
+      } else if ([SCCapture isAvailable]) {
         auto display = std::make_shared<sc_display_t>();
         display->display_id = display_id;
         display->display_power_guard = std::move(display_power_guard);

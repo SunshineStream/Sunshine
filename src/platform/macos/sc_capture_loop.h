@@ -17,11 +17,13 @@
 
 namespace platf::sckit {
   /**
-   * @brief Process-wide policy deciding whether ScreenCaptureKit is still the preferred capture backend.
+   * @brief Process-wide policy deciding whether the next display may use ScreenCaptureKit.
    *
    * ScreenCaptureKit is selected when a display is created, but its stream can only be started once
-   * capture begins. A stream that fails to start flips this policy so that the display is rebuilt
-   * on AVFoundation instead.
+   * capture begins. A stream that fails to start is recorded here so that the display rebuilt right
+   * after it falls back to AVFoundation. That rebuild consumes the failure: start failures are often
+   * transient (the session locking, a display being added), and AVFoundation can't capture those cases
+   * either, so every later display tries ScreenCaptureKit again.
    */
   class backend_policy_t {
   public:
@@ -31,22 +33,22 @@ namespace platf::sckit {
     void note_stream_start_failure();
 
     /**
-     * @brief Check whether an SCStream previously failed to start in this process.
+     * @brief Check, without consuming it, whether a stream start failure is pending.
      *
-     * @return `true` once a stream start failure was recorded.
+     * @return `true` when a failure was recorded and no display has taken it yet.
      */
     [[nodiscard]] bool stream_start_failed() const;
 
     /**
-     * @brief Decide whether ScreenCaptureKit should be used for a new display.
+     * @brief Consume a pending stream start failure.
      *
-     * @param sckit_available Whether the running system supports ScreenCaptureKit capture.
-     * @return `true` when ScreenCaptureKit is available and has not failed to start a stream.
+     * Called when a display is created; a `true` result means that display should use AVFoundation.
+     * @return `true` when a failure was pending; it is cleared either way.
      */
-    [[nodiscard]] bool prefer_sckit(bool sckit_available) const;
+    [[nodiscard]] bool take_stream_start_failure();
 
   private:
-    std::atomic<bool> _stream_start_failed {false};  ///< Set once an SCStream fails to start.
+    std::atomic<bool> _stream_start_failed {false};  ///< Set by a stream start failure until a display takes it.
   };
 
   /**
@@ -113,7 +115,7 @@ namespace platf::sckit {
    * Frames are pushed as they arrive; a poll interval without a frame is reported as a timeout so
    * the pipeline can repeat the previous frame. A stream that fails to start or stops on its own
    * yields `capture_e::reinit`, which makes the capture thread rebuild the display; a start failure
-   * also updates the backend policy, so that rebuild falls back to AVFoundation.
+   * also records a failure in the backend policy, so that rebuild falls back to AVFoundation.
    * @param source Stream to capture from; started here and stopped before returning unless the start failed.
    * @param policy Backend policy updated when the stream cannot be started.
    * @param push_captured_image_cb Pipeline callback receiving captured or repeated images.

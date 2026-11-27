@@ -19,8 +19,8 @@ namespace platf::sckit {
     return _stream_start_failed;
   }
 
-  bool backend_policy_t::prefer_sckit(bool sckit_available) const {
-    return sckit_available && !_stream_start_failed;
+  bool backend_policy_t::take_stream_start_failure() {
+    return _stream_start_failed.exchange(false);
   }
 
   backend_policy_t &backend_policy() {
@@ -38,7 +38,7 @@ namespace platf::sckit {
   ) {
     if (!source.start()) {
       // The display was built for ScreenCaptureKit but the stream never came up: ask the
-      // capture thread to rebuild the display, which the policy now steers to AVFoundation.
+      // capture thread to rebuild the display, which the policy steers to AVFoundation once.
       policy.note_stream_start_failure();
       return capture_e::reinit;
     }
