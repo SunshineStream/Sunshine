@@ -45,6 +45,7 @@
 namespace display_device {
   namespace {
     constexpr std::chrono::milliseconds DEFAULT_RETRY_INTERVAL {5000};
+    constexpr std::chrono::milliseconds DEFAULT_REAPPLY_COOLDOWN {2000};
 
     /**
      * @brief Persistence wrapper that remembers whether a settings record is still stored.
@@ -118,9 +119,20 @@ namespace display_device {
       std::chrono::milliseconds config_revert_delay {0};
       std::unique_ptr<RetryScheduler<SettingsManagerInterface>> sm_instance {nullptr};
       std::shared_ptr<watched_settings_persistence_t> persistence_watch {};  ///< Observes whether revert left settings stored.
+      std::optional<SingleDisplayConfiguration> active_config {};  ///< Display configuration active for the current stream.
+      std::optional<std::chrono::steady_clock::time_point> last_reapply_attempt {};  ///< Timestamp of the latest mid-stream reapply attempt.
 #ifdef SUNSHINE_TESTS
       std::optional<std::chrono::milliseconds> test_retry_interval {};  ///< Override for the revert retry delay.
+      std::optional<std::chrono::milliseconds> test_reapply_cooldown {};  ///< Override for the mid-stream reapply cooldown.
 #endif
+
+      /**
+       * @brief Clear the active stream configuration and reapply cooldown state.
+       */
+      void clear_active_config() {
+        active_config.reset();
+        last_reapply_attempt.reset();
+      }
     } DD_DATA;
 
     /**
@@ -741,7 +753,9 @@ namespace display_device {
       DD_DATA.persistence_watch.reset();
 #ifdef _WIN32
       return std::make_unique<SettingsManager>(
-        std::make_shared<WinDisplayDevice>(std::make_shared<WinApiLayer>(), false),
+        // Save CCD changes to Windows' display database so display wake, session switches,
+        // and DisplayPort standby/HPD events do not revert the active stream layout.
+        std::make_shared<WinDisplayDevice>(std::make_shared<WinApiLayer>(), true),
         std::make_shared<sunshine_audio_context_t>(),
         std::make_unique<PersistentState>(make_persistence_watch(persistence_filepath)),
         WinWorkarounds {
@@ -842,6 +856,7 @@ namespace display_device {
      * @note This is function does not lock mutex.
      */
     void revert_configuration_unlocked(const revert_option_e option) {
+      DD_DATA.clear_active_config();
       if (!DD_DATA.sm_instance) {
         // Platform is not supported, nothing to do.
         return;
@@ -974,6 +989,9 @@ namespace display_device {
       return;
     }
 
+    DD_DATA.active_config = config;
+    DD_DATA.last_reapply_attempt.reset();
+
     BOOST_LOG(info) << "Scheduling display device configuration:\n"
                     << toJson(config);
 
@@ -998,6 +1016,45 @@ namespace display_device {
                                   {.m_sleep_durations = {DEFAULT_RETRY_INTERVAL}});
   }
 
+  bool reapply_configuration_on_display_loss() {
+    std::lock_guard lock {DD_DATA.mutex};
+    if (!DD_DATA.sm_instance || !DD_DATA.active_config) {
+      return false;
+    }
+
+    if (DD_DATA.active_config->m_device_prep == SingleDisplayConfiguration::DevicePreparation::VerifyOnly) {
+      return false;
+    }
+
+#ifdef SUNSHINE_TESTS
+    const auto cooldown {DD_DATA.test_reapply_cooldown.value_or(DEFAULT_REAPPLY_COOLDOWN)};
+#else
+    const auto cooldown {DEFAULT_REAPPLY_COOLDOWN};
+#endif
+    const auto now {std::chrono::steady_clock::now()};
+    if (DD_DATA.last_reapply_attempt && now - *DD_DATA.last_reapply_attempt < cooldown) {
+      BOOST_LOG(debug) << "Skipping display device configuration reapply during cooldown window.";
+      return false;
+    }
+    DD_DATA.last_reapply_attempt = now;
+
+    const auto config {*DD_DATA.active_config};
+    BOOST_LOG(warning) << "Configured display disappeared during active stream; reapplying display device configuration:\n"
+                       << toJson(config);
+
+    using enum SettingsManagerInterface::ApplyResult;
+    const auto result {DD_DATA.sm_instance->execute([&config](auto &settings_iface) {
+      return settings_iface.applySettings(config);
+    })};
+    if (result == Ok) {
+      BOOST_LOG(info) << "Display device configuration reapplied successfully.";
+      return true;
+    }
+
+    BOOST_LOG(warning) << "Failed to reapply display device configuration with result: " << apply_result_name(result);
+    return false;
+  }
+
   void revert_configuration() {
     std::lock_guard lock {DD_DATA.mutex};
     revert_configuration_unlocked(revert_option_e::try_indefinitely_with_delay);
@@ -1005,6 +1062,7 @@ namespace display_device {
 
   bool reset_persistence() {
     std::lock_guard lock {DD_DATA.mutex};
+    DD_DATA.clear_active_config();
     if (!DD_DATA.sm_instance) {
       // Platform is not supported, assume success.
       return true;
@@ -1128,6 +1186,11 @@ namespace display_device {
     DD_DATA.test_retry_interval = interval;
   }
 
+  void test_set_reapply_cooldown(const std::chrono::milliseconds cooldown) {
+    std::lock_guard lock {DD_DATA.mutex};
+    DD_DATA.test_reapply_cooldown = cooldown;
+  }
+
   bool test_revert_retry_is_scheduled() {
     std::lock_guard lock {DD_DATA.mutex};
     return DD_DATA.sm_instance && DD_DATA.sm_instance->isScheduled();
@@ -1140,7 +1203,9 @@ namespace display_device {
     }
     DD_DATA.sm_instance.reset();
     DD_DATA.persistence_watch.reset();
+    DD_DATA.clear_active_config();
     DD_DATA.test_retry_interval.reset();
+    DD_DATA.test_reapply_cooldown.reset();
   }
 #endif
 }  // namespace display_device

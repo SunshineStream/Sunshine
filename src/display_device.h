@@ -105,6 +105,16 @@ namespace display_device {
   void configure_display(const SingleDisplayConfiguration &config);
 
   /**
+   * @brief Reapply the active stream's display configuration when the configured display disappears mid-stream.
+   *
+   * Runs synchronously when an active configuration exists, uses a preparation mode that can activate
+   * displays, and is outside the reapply cooldown window.
+   *
+   * @return True if the active display configuration was reapplied successfully, false otherwise.
+   */
+  [[nodiscard]] bool reapply_configuration_on_display_loss();
+
+  /**
    * @brief Revert the display configuration and restore the previous state.
    *
    * In case the state could not be restored, by default it will be retried again in 5 seconds
@@ -202,6 +212,12 @@ namespace display_device {
    * @param interval Delay between attempts. Must be greater than zero.
    */
   void test_set_retry_interval(std::chrono::milliseconds interval);
+
+  /**
+   * @brief Override the minimum cooldown between mid-stream display reapply attempts.
+   * @param cooldown Minimum delay between reapply attempts.
+   */
+  void test_set_reapply_cooldown(std::chrono::milliseconds cooldown);
 
   /**
    * @brief Report whether another revert attempt is still scheduled.

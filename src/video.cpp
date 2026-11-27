@@ -1713,16 +1713,88 @@ namespace video {
     }
   }
 
-  /**
-   * @brief Update the list of display names before or during a stream.
-   * @details This will attempt to keep `current_display_index` pointing at the same display.
-   * @param dev_type The encoder device type used for display lookup.
-   * @param display_names The list of display names to repopulate.
-   * @param current_display_index The current display index or -1 if not yet known.
-   */
-  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+  namespace {
+    /**
+     * @brief Find the index of a non-empty display name in a list of enumerated displays.
+     * @param display_names Available capture display names.
+     * @param target Display name to locate.
+     * @return Zero-based index into `display_names`, or `std::nullopt` when absent or empty.
+     */
+    std::optional<int> find_display_index(const std::vector<std::string> &display_names, const std::string_view target) {
+      if (target.empty()) {
+        return std::nullopt;
+      }
+
+      for (int x = 0; x < display_names.size(); ++x) {
+        if (display_names[x] == target) {
+          return x;
+        }
+      }
+
+      return std::nullopt;
+    }
+
+    /**
+     * @brief Select the first matching display index from preferred and fallback names, defaulting to `0`.
+     * @param display_names Available capture display names.
+     * @param preferred Primary display name to search for first.
+     * @param fallback Optional secondary display name to search for if `preferred` is absent.
+     * @return Zero-based index into `display_names`.
+     */
+    int select_display_index(const std::vector<std::string> &display_names, const std::string_view preferred, const std::string_view fallback = {}) {
+      if (const auto idx = find_display_index(display_names, preferred); idx.has_value()) {
+        return *idx;
+      }
+      return find_display_index(display_names, fallback).value_or(0);
+    }
+
+    /**
+     * @brief Reapply the active display configuration and refresh enumerated outputs when enabled.
+     * @tparam ReapplyFn Callable attempting to reapply the active display configuration and returning `bool`.
+     * @tparam EnumFn Callable returning currently active capture display names.
+     * @tparam MapFn Callable mapping the configured output to an active display name.
+     * @param reapply_on_display_loss True when automatic mid-stream reapply is enabled.
+     * @param reapply_display Callback attempting to reapply the active display configuration.
+     * @param enum_displays Callback returning currently active capture display names.
+     * @param map_configured_output Callback mapping the configured output to an active display name.
+     * @param display_names Output list updated only when re-enumeration produces at least one display.
+     * @param output_name Mapped output name refreshed after a successful re-enumeration.
+     * @return True if configuration was reapplied and a non-empty display list was enumerated.
+     */
+    template<typename ReapplyFn, typename EnumFn, typename MapFn>
+    bool try_reapply_displays(
+      const bool reapply_on_display_loss,
+      const ReapplyFn &reapply_display,
+      const EnumFn &enum_displays,
+      const MapFn &map_configured_output,
+      std::vector<std::string> &display_names,
+      std::string &output_name
+    ) {
+      if (!reapply_on_display_loss || !reapply_display()) {
+        return false;
+      }
+
+      auto reapplied_displays = enum_displays();
+      if (reapplied_displays.empty()) {
+        return false;
+      }
+
+      display_names = std::move(reapplied_displays);
+      output_name = map_configured_output();
+      return true;
+    }
+  }  // namespace
+
+  void refresh_displays_with_callbacks(
+    std::vector<std::string> &display_names,
+    int &current_display_index,
+    const bool reapply_on_display_loss,
+    const std::function<std::vector<std::string>()> &enum_displays,
+    const std::function<std::string()> &map_configured_output,
+    const std::function<bool()> &reapply_display
+  ) {
     // It is possible that the output name may be empty even if it wasn't before (device disconnected) or vice-versa
-    const auto output_name {display_device::map_output_name(config::video.output_name)};
+    auto output_name {map_configured_output()};
     std::string current_display_name;
 
     // If we have a current display index, let's start with that
@@ -1732,13 +1804,15 @@ namespace video {
 
     // Refresh the display names
     auto old_display_names = std::move(display_names);
-    display_names = platf::display_names(dev_type);
+    display_names = enum_displays();
 
-    // If we now have no displays, let's put the old display array back and fail
+    // If we now have no displays, try reapplying configuration if enabled before falling back to old list
     if (display_names.empty() && !old_display_names.empty()) {
-      BOOST_LOG(error) << "No displays were found after reenumeration!"sv;
-      display_names = std::move(old_display_names);
-      return;
+      if (!try_reapply_displays(reapply_on_display_loss, reapply_display, enum_displays, map_configured_output, display_names, output_name)) {
+        BOOST_LOG(error) << "No displays were found after reenumeration!"sv;
+        display_names = std::move(old_display_names);
+        return;
+      }
     } else if (display_names.empty()) {
       display_names.emplace_back(output_name);
     }
@@ -1746,25 +1820,50 @@ namespace video {
     // We now have a new display name list, so reset the index back to 0
     current_display_index = 0;
 
-    // If we had a name previously, let's try to find it in the new list
-    if (!current_display_name.empty()) {
-      for (int x = 0; x < display_names.size(); ++x) {
-        if (display_names[x] == current_display_name) {
-          current_display_index = x;
-          return;
-        }
-      }
-
-      // The old display was removed, so we'll start back at the first display again
-      BOOST_LOG(warning) << "Previous active display ["sv << current_display_name << "] is no longer present"sv;
-    } else {
-      for (int x = 0; x < display_names.size(); ++x) {
-        if (display_names[x] == output_name) {
-          current_display_index = x;
-          return;
-        }
-      }
+    if (current_display_name.empty()) {
+      current_display_index = select_display_index(display_names, output_name);
+      return;
     }
+
+    if (const auto idx = find_display_index(display_names, current_display_name); idx.has_value()) {
+      current_display_index = *idx;
+      return;
+    }
+
+    // The old display was removed; check if the configured output is still active under a new name
+    BOOST_LOG(warning) << "Previous active display ["sv << current_display_name << "] is no longer present"sv;
+    if (const auto idx = find_display_index(display_names, output_name); idx.has_value()) {
+      current_display_index = *idx;
+      return;
+    }
+
+    if (try_reapply_displays(reapply_on_display_loss, reapply_display, enum_displays, map_configured_output, display_names, output_name)) {
+      current_display_index = select_display_index(display_names, output_name, current_display_name);
+    }
+  }
+
+  /**
+   * @brief Update the list of display names before or during a stream.
+   * @details This will attempt to keep `current_display_index` pointing at the same display.
+   * @param dev_type The encoder device type used for display lookup.
+   * @param display_names The list of display names to repopulate.
+   * @param current_display_index The current display index or -1 if not yet known.
+   */
+  void refresh_displays(platf::mem_type_e dev_type, std::vector<std::string> &display_names, int &current_display_index) {
+    refresh_displays_with_callbacks(
+      display_names,
+      current_display_index,
+      config::video.dd.reapply_on_display_loss,
+      [dev_type]() {
+        return platf::display_names(dev_type);
+      },
+      []() {
+        return display_device::map_output_name(config::video.output_name);
+      },
+      []() {
+        return display_device::reapply_configuration_on_display_loss();
+      }
+    );
   }
 
   /**

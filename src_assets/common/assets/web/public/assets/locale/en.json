@@ -206,6 +206,8 @@
     "dd_config_revert_delay_desc": "Additional delay in milliseconds to wait before reverting configuration when the app has been closed or the last session terminated. Main purpose is to provide a smoother transition when quickly switching between apps.",
     "dd_config_revert_on_disconnect": "Config revert on disconnect",
     "dd_config_revert_on_disconnect_desc": "Revert configuration upon disconnect of all clients instead of app close or last session termination.",
+    "dd_reapply_on_display_loss": "Reapply configuration on display loss",
+    "dd_reapply_on_display_loss_desc": "Automatically reapply the active display configuration if Windows deactivates or removes the configured display during a stream (for example, after a DisplayPort standby hot-plug reset).",
     "dd_config_verify_only": "Verify that the display is enabled",
     "dd_hdr_option": "HDR",
     "dd_hdr_option_auto": "Switch on/off the HDR mode as requested by the client (default)",

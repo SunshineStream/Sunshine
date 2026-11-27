@@ -103,6 +103,29 @@ namespace video {
   bool allow_encoder_probing(const std::vector<display_device::EnumeratedDevice> &devices);
 
   /**
+   * @brief Refresh active capture display names and choose the display index to capture.
+   *
+   * When the previously active display disappears, checks whether the configured output name
+   * matches another enumerated display and, if `reapply_on_display_loss` is enabled and the
+   * configured display is no longer active, invokes `reapply_display` before re-enumerating.
+   *
+   * @param display_names Current display name list, updated with the refreshed list.
+   * @param current_display_index Current display index or -1 before initial selection.
+   * @param reapply_on_display_loss True to reapply the active display configuration on display loss.
+   * @param enum_displays Callback returning currently active capture display names.
+   * @param map_configured_output Callback mapping the configured `output_name` to an active display name.
+   * @param reapply_display Callback attempting to reapply the active stream display configuration.
+   */
+  void refresh_displays_with_callbacks(
+    std::vector<std::string> &display_names,
+    int &current_display_index,
+    bool reapply_on_display_loss,
+    const std::function<std::vector<std::string>()> &enum_displays,
+    const std::function<std::string()> &map_configured_output,
+    const std::function<bool()> &reapply_display
+  );
+
+  /**
    * @brief Map an FFmpeg hardware device type to Sunshine's memory type.
    *
    * @param type FFmpeg hardware device type reported by the encoder backend.

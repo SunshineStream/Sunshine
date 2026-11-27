@@ -75,6 +75,281 @@ TEST(VideoEncoderProbingTest, InactiveDevicesBlockProbingOnlyOnWindows) {
 #endif
 }
 
+TEST(VideoRefreshDisplaysTest, KeepsCurrentDisplayWhenStillPresent) {
+  std::vector<std::string> display_names {"DISPLAY1", "DISPLAY16"};
+  int display_index = 1;
+  int reapply_calls = 0;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    []() {
+      return std::vector<std::string> {"DISPLAY1", "DISPLAY16"};
+    },
+    []() {
+      return std::string {"DISPLAY16"};
+    },
+    [&reapply_calls]() {
+      ++reapply_calls;
+      return true;
+    }
+  );
+
+  EXPECT_EQ(display_index, 1);
+  EXPECT_EQ(reapply_calls, 0);
+}
+
+TEST(VideoRefreshDisplaysTest, SelectsRenumberedConfiguredOutputWithoutReapply) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+  int reapply_calls = 0;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    []() {
+      return std::vector<std::string> {"DISPLAY1", "DISPLAY17"};
+    },
+    []() {
+      return std::string {"DISPLAY17"};
+    },
+    [&reapply_calls]() {
+      ++reapply_calls;
+      return true;
+    }
+  );
+
+  EXPECT_EQ(display_index, 1);
+  EXPECT_EQ(display_names[display_index], "DISPLAY17");
+  EXPECT_EQ(reapply_calls, 0);
+}
+
+TEST(VideoRefreshDisplaysTest, FallsBackToFirstDisplayWhenReapplyIsDisabled) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+  int reapply_calls = 0;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    false,
+    []() {
+      return std::vector<std::string> {"DISPLAY1"};
+    },
+    []() {
+      return std::string {};
+    },
+    [&reapply_calls]() {
+      ++reapply_calls;
+      return true;
+    }
+  );
+
+  EXPECT_EQ(display_index, 0);
+  EXPECT_EQ(display_names[display_index], "DISPLAY1");
+  EXPECT_EQ(reapply_calls, 0);
+}
+
+TEST(VideoRefreshDisplaysTest, ReappliesConfigurationAndRecoversConfiguredOutputOnDisplayLoss) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+  int reapply_calls = 0;
+  bool reapplied = false;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    [&reapplied]() {
+      if (!reapplied) {
+        return std::vector<std::string> {"DISPLAY1"};
+      }
+      return std::vector<std::string> {"DISPLAY1", "DISPLAY17"};
+    },
+    [&reapplied]() {
+      return reapplied ? std::string {"DISPLAY17"} : std::string {};
+    },
+    [&reapply_calls, &reapplied]() {
+      ++reapply_calls;
+      reapplied = true;
+      return true;
+    }
+  );
+
+  EXPECT_EQ(reapply_calls, 1);
+  ASSERT_EQ(display_names.size(), 2U);
+  EXPECT_EQ(display_index, 1);
+  EXPECT_EQ(display_names[display_index], "DISPLAY17");
+}
+
+TEST(VideoRefreshDisplaysTest, ReappliesConfigurationWhenEnumerationIsTemporarilyEmpty) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+  int reapply_calls = 0;
+  bool reapplied = false;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    [&reapplied]() {
+      return reapplied ? std::vector<std::string> {"DISPLAY16"} : std::vector<std::string> {};
+    },
+    [&reapplied]() {
+      return reapplied ? std::string {"DISPLAY16"} : std::string {};
+    },
+    [&reapply_calls, &reapplied]() {
+      ++reapply_calls;
+      reapplied = true;
+      return true;
+    }
+  );
+
+  EXPECT_EQ(reapply_calls, 1);
+  ASSERT_EQ(display_names.size(), 1U);
+  EXPECT_EQ(display_index, 0);
+  EXPECT_EQ(display_names[display_index], "DISPLAY16");
+}
+
+TEST(VideoRefreshDisplaysTest, KeepsFallbackDisplayWhenReapplyFails) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+  int reapply_calls = 0;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    []() {
+      return std::vector<std::string> {"DISPLAY1"};
+    },
+    []() {
+      return std::string {};
+    },
+    [&reapply_calls]() {
+      ++reapply_calls;
+      return false;
+    }
+  );
+
+  EXPECT_EQ(reapply_calls, 1);
+  ASSERT_EQ(display_names.size(), 1U);
+  EXPECT_EQ(display_index, 0);
+  EXPECT_EQ(display_names[display_index], "DISPLAY1");
+}
+
+TEST(VideoRefreshDisplaysTest, RetainsPreviousDisplayListWhenReenumerationStaysEmpty) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    []() {
+      return std::vector<std::string> {};
+    },
+    []() {
+      return std::string {};
+    },
+    []() {
+      return false;
+    }
+  );
+
+  ASSERT_EQ(display_names.size(), 1U);
+  EXPECT_EQ(display_names[0], "DISPLAY16");
+  EXPECT_EQ(display_index, 0);
+}
+
+TEST(VideoRefreshDisplaysTest, SelectsConfiguredOutputOnInitialAndEmptyEnumeration) {
+  std::vector<std::string> empty_names;
+  int empty_index = -1;
+  video::refresh_displays_with_callbacks(
+    empty_names,
+    empty_index,
+    false,
+    []() {
+      return std::vector<std::string> {};
+    },
+    []() {
+      return std::string {"DISPLAY9"};
+    },
+    []() {
+      return false;
+    }
+  );
+  ASSERT_EQ(empty_names.size(), 1U);
+  EXPECT_EQ(empty_names[0], "DISPLAY9");
+  EXPECT_EQ(empty_index, 0);
+
+  std::vector<std::string> initial_names;
+  int initial_index = -1;
+  video::refresh_displays_with_callbacks(
+    initial_names,
+    initial_index,
+    false,
+    []() {
+      return std::vector<std::string> {"DISPLAY1", "DISPLAY16"};
+    },
+    []() {
+      return std::string {"DISPLAY16"};
+    },
+    []() {
+      return false;
+    }
+  );
+  ASSERT_EQ(initial_names.size(), 2U);
+  EXPECT_EQ(initial_index, 1);
+  EXPECT_EQ(initial_names[initial_index], "DISPLAY16");
+
+  std::vector<std::string> fallback_names;
+  int fallback_index = -1;
+  video::refresh_displays_with_callbacks(
+    fallback_names,
+    fallback_index,
+    false,
+    []() {
+      return std::vector<std::string> {"DISPLAY1", "DISPLAY2"};
+    },
+    []() {
+      return std::string {"DISPLAY99"};
+    },
+    []() {
+      return false;
+    }
+  );
+  EXPECT_EQ(fallback_index, 0);
+}
+
+TEST(VideoRefreshDisplaysTest, MatchesPreviousDisplayNameAfterReapplyWhenOutputMappingIsEmpty) {
+  std::vector<std::string> display_names {"DISPLAY16"};
+  int display_index = 0;
+  bool reapplied = false;
+
+  video::refresh_displays_with_callbacks(
+    display_names,
+    display_index,
+    true,
+    [&reapplied]() {
+      return reapplied ? std::vector<std::string> {"DISPLAY1", "DISPLAY16"} : std::vector<std::string> {"DISPLAY1"};
+    },
+    []() {
+      return std::string {};
+    },
+    [&reapplied]() {
+      reapplied = true;
+      return true;
+    }
+  );
+
+  ASSERT_EQ(display_names.size(), 2U);
+  EXPECT_EQ(display_index, 1);
+  EXPECT_EQ(display_names[display_index], "DISPLAY16");
+}
+
 TEST(VideoFormatMappingTest, MapsSupportedHardwareDevicesAndRejectsUnsupportedOnes) {
   using enum platf::mem_type_e;
   const std::array cases {

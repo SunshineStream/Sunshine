@@ -67,6 +67,10 @@ TEST(ConfigDefaultsTest, TreatsFp16SdrCapturesAsLinear) {
   EXPECT_FALSE(config::video.fp16_sdr_gamma_encoded);
 }
 
+TEST(ConfigDefaultsTest, DisablesDisplayLossReapplyByDefault) {
+  EXPECT_FALSE(config::video.dd.reapply_on_display_loss);
+}
+
 TEST(ConfigDefaultsTest, PreservesAmdEncoderNumericDefaults) {
   EXPECT_EQ(config::video.amd.amd_usage_h264, 1);
   EXPECT_EQ(config::video.amd.amd_usage_hevc, 1);
@@ -233,6 +237,25 @@ TEST_F(ConfigPersistenceTest, ParsesDscpTaggingOption) {
 
   config::apply_config_for_test("dscp_tagging = enabled\n");
   EXPECT_TRUE(config::stream.dscp_tagging);
+}
+
+/**
+ * @brief Verify dd_reapply_on_display_loss parses enabled and disabled values.
+ */
+TEST_F(ConfigPersistenceTest, ParsesDisplayLossReapplyOption) {
+  const auto original_video = config::video;
+  const auto restore_video = util::fail_guard([original_video]() {
+    config::video = original_video;
+  });
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  config::apply_config_for_test("dd_reapply_on_display_loss = enabled\n");
+  EXPECT_TRUE(config::video.dd.reapply_on_display_loss);
+
+  config::apply_config_for_test("dd_reapply_on_display_loss = disabled\n");
+  EXPECT_FALSE(config::video.dd.reapply_on_display_loss);
 }
 
 /**

@@ -789,6 +789,7 @@ namespace config {
       video_t::dd_t::hdr_option_e::automatic,  // hdr_option
       3s,  // config_revert_delay
       {},  // config_revert_on_disconnect
+      {},  // reapply_on_display_loss
       {},  // mode_remapping
       {}  // wa
     },  // display_device
@@ -1787,6 +1788,7 @@ namespace config {
       }
     }
     bool_f(vars, "dd_config_revert_on_disconnect", video.dd.config_revert_on_disconnect);
+    bool_f(vars, "dd_reapply_on_display_loss", video.dd.reapply_on_display_loss);
     generic_f(vars, "dd_mode_remapping", video.dd.mode_remapping, dd::mode_remapping_from_view);
     {
       int value = 0;
