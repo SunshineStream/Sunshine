@@ -92,6 +92,7 @@ namespace {
       spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
       spa_pod_frame frame {};
       const spa_rectangle size {640, 480};
+      const spa_fraction framerate {60, 1};  // Required by PipeWire 0.3's raw format parser.
       spa_pod_builder_push_object(&builder, &frame, SPA_TYPE_OBJECT_Format, SPA_PARAM_Format);
       spa_pod_builder_add(
         &builder,
@@ -103,6 +104,8 @@ namespace {
         SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx),
         SPA_FORMAT_VIDEO_size,
         SPA_POD_Rectangle(&size),
+        SPA_FORMAT_VIDEO_framerate,
+        SPA_POD_Fraction(&framerate),
         0
       );
       if (dma) {
