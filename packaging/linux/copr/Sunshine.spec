@@ -204,13 +204,9 @@ cuda_supported_architectures=("x86_64" "aarch64")
 
 # prepare CMAKE args
 cmake_args=(
-  "-B=%{_builddir}/Sunshine/build"
-  "-G=Unix Makefiles"
-  "-S=."
   "-DBUILD_DOCS=OFF"
   "-DBUILD_WERROR=ON"
   "-DCMAKE_BUILD_TYPE=Release"
-  "-DCMAKE_INSTALL_PREFIX=%{_prefix}"
   "-DSUNSHINE_ASSETS_DIR=%{_datadir}/sunshine"
   "-DSUNSHINE_EXECUTABLE_PATH=%{_bindir}/sunshine"
   "-DSUNSHINE_ENABLE_DRM=ON"
@@ -221,6 +217,7 @@ cmake_args=(
   "-DSUNSHINE_PUBLISHER_NAME=LizardByte"
   "-DSUNSHINE_PUBLISHER_WEBSITE=https://app.lizardbyte.dev"
   "-DSUNSHINE_PUBLISHER_ISSUE_URL=https://app.lizardbyte.dev/support"
+  "-DCMAKE_TEST_LAUNCHER=xvfb-run"
 )
 
 %if 0%{?fedora}
@@ -439,8 +436,8 @@ uv sync \
 %endif
 echo "cmake args:"
 echo "${cmake_args[@]}"
-cmake "${cmake_args[@]}"
-make -j$(nproc) -C "%{_builddir}/Sunshine/build"
+%cmake ${cmake_args[@]}
+%cmake_build
 
 %check
 # validate the metainfo file
@@ -449,8 +446,8 @@ appstream-util validate --nonet %{buildroot}%{_metainfodir}/*.metainfo.xml
 desktop-file-validate %{buildroot}%{_datadir}/applications/*.desktop
 
 # run tests
-cd %{_builddir}/Sunshine/build
-xvfb-run ./tests/test_sunshine
+cd %{_builddir}/Sunshine/
+%ctest
 
 %install
 # Load NVM for Fedora 44+ so npm is available during make install
@@ -468,8 +465,8 @@ echo "Node.js version: $(node --version)"
 echo "npm version: $(npm --version)"
 %endif
 
-cd %{_builddir}/Sunshine/build
-%make_install
+cd %{_builddir}/Sunshine
+%cmake_install
 
 %post
 # Note: this is copied from the postinst script
