@@ -6,6 +6,8 @@ if(APPLE AND NOT SUNSHINE_BUILD_HOMEBREW)
 else()
     add_executable(sunshine ${SUNSHINE_TARGET_FILES})
 endif()
+target_include_directories(sunshine BEFORE PRIVATE "${CMAKE_SOURCE_DIR}")
+
 foreach(dep ${SUNSHINE_TARGET_DEPENDENCIES})
     add_dependencies(sunshine ${dep})  # compile these before sunshine
 endforeach()
