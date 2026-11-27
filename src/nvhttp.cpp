@@ -1622,13 +1622,25 @@ namespace nvhttp {
    * @param response HTTP response object to populate.
    * @param request HTTP request data from the client.
    */
-  void appasset(resp_https_t response, req_https_t request) {
-    print_req<SunshineHTTPS>(request);
+  template<typename T>
+  void appasset(std::shared_ptr<typename SimpleWeb::ServerBase<T>::Response> response, std::shared_ptr<typename SimpleWeb::ServerBase<T>::Request> request) {
+    print_req<T>(request);
 
     auto args = request->parse_query_string();
     auto app_image = proc::proc.get_app_image((int) util::from_view(get_arg(args, "appid")));
 
     std::ifstream in(app_image, std::ios::binary);
+    if (!in.is_open()) {
+      std::error_code ec;
+      bool exists = std::filesystem::exists(app_image, ec);
+      if (ec || exists) {
+        response->write(SimpleWeb::StatusCode::server_error_internal_server_error);
+      } else {
+        response->write(SimpleWeb::StatusCode::client_error_not_found);
+      }
+      response->close_connection_after_response = true;
+      return;
+    }
     SimpleWeb::CaseInsensitiveMultimap headers;
     headers.emplace("Content-Type", "image/png");
     response->write(SimpleWeb::StatusCode::success_ok, in, headers);
@@ -1742,7 +1754,7 @@ namespace nvhttp {
       pair<SunshineHTTPS>(resp, req);
     };
     https_server.resource["^/applist$"]["GET"] = applist;
-    https_server.resource["^/appasset$"]["GET"] = appasset;
+    https_server.resource["^/appasset$"]["GET"] = appasset<SunshineHTTPS>;
     https_server.resource["^/launch$"]["GET"] = [&host_audio](auto resp, auto req) {
       launch(host_audio, resp, req);
     };
@@ -1883,6 +1895,13 @@ namespace nvhttp {
       std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request
     ) {
       pair<SimpleWeb::HTTP>(std::move(response), std::move(request));
+    }
+
+    void appasset_http(
+      std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Response> response,
+      std::shared_ptr<typename SimpleWeb::ServerBase<SimpleWeb::HTTP>::Request> request
+    ) {
+      appasset<SimpleWeb::HTTP>(std::move(response), std::move(request));
     }
 
     void reset_client_state() {
