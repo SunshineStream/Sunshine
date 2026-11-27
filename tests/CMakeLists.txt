@@ -10,8 +10,6 @@ if(NOT DEFINED CMAKE_CUDA_STANDARD)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
-include_directories("${CMAKE_SOURCE_DIR}")
-
 enable_testing()
 
 # Add GoogleTest directory to the project
@@ -182,6 +180,7 @@ list(REMOVE_ITEM SUNSHINE_SOURCES ${CMAKE_SOURCE_DIR}/src/main.cpp)
 add_executable(${PROJECT_NAME}
         ${TEST_SOURCES}
         ${SUNSHINE_SOURCES})
+target_include_directories(${PROJECT_NAME} BEFORE PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Copy integration-test fixtures to the build directory.
 # Preserve repository-relative paths for source and installed-test layouts.

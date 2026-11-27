@@ -106,7 +106,9 @@ if(WIN32)
     # add_nvenc_sdk_implementation: args = `target_name`, `sdk_version`, `sdk_include_dir`
     function(add_nvenc_sdk_implementation target_name sdk_version sdk_include_dir)
         add_library(${target_name} OBJECT ${NVENC_IMPLEMENTATION_SOURCES})
-        target_include_directories(${target_name} BEFORE PRIVATE "${sdk_include_dir}")
+        target_include_directories(${target_name} BEFORE PRIVATE
+                "${CMAKE_SOURCE_DIR}"
+                "${sdk_include_dir}")
         target_compile_definitions(${target_name} PRIVATE
                 NVENC_FACTORY_SUFFIX=${sdk_version}
                 NVENC_NAMESPACE=nvenc_${sdk_version}
@@ -206,8 +208,6 @@ list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_ASSETS_DIR="${SUNSHINE_ASSETS_DIR_DEF}
 list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_PUBLISHER_NAME="${SUNSHINE_PUBLISHER_NAME}")
 list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_PUBLISHER_WEBSITE="${SUNSHINE_PUBLISHER_WEBSITE}")
 list(APPEND SUNSHINE_DEFINITIONS SUNSHINE_PUBLISHER_ISSUE_URL="${SUNSHINE_PUBLISHER_ISSUE_URL}")
-
-include_directories(BEFORE "${CMAKE_SOURCE_DIR}")
 
 include_directories(
         BEFORE
