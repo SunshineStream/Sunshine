@@ -8,6 +8,7 @@
 
 #include <src/audio.h>
 #include <src/crypto.h>
+#include <src/rtsp.h>
 #include <src/stream.h>
 
 namespace audio_transport_test {
