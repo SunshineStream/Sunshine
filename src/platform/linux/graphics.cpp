@@ -771,7 +771,7 @@ namespace egl {
    * @return Imported RGB image, or empty when import fails.
    */
   std::optional<rgb_t> import_source(display_t::pointer egl_display, const surface_descriptor_t &xrgb) {
-    auto attribs = surface_descriptor_to_egl_attribs(xrgb);
+    const auto attribs = surface_descriptor_to_egl_attribs(xrgb);
 
     rgb_t rgb {
       egl_display,
@@ -780,9 +780,29 @@ namespace egl {
     };
 
     if (!rgb->xrgb8) {
-      BOOST_LOG(error) << "Couldn't import RGB Image: "sv << util::hex(eglGetError()).to_string_view();
+      auto err = eglGetError();
 
-      return std::nullopt;
+      // Fallback: retry without modifier if GPU rejects the display's format modifier
+      // Some displays (e.g. USB/DisplayLink) report modifiers the GPU cannot handle
+      if (err == EGL_BAD_MATCH && xrgb.modifier != DRM_FORMAT_MOD_INVALID) {
+        surface_descriptor_t xrgb_linear = xrgb;
+        xrgb_linear.modifier = DRM_FORMAT_MOD_INVALID;
+        auto attribs_linear = surface_descriptor_to_egl_attribs(xrgb_linear);
+
+        rgb = {
+          egl_display,
+          eglCreateImage(egl_display, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs_linear.data()),
+          gl::tex_t::make(1)
+        };
+
+        if (!rgb->xrgb8) {
+          BOOST_LOG(error) << "Couldn't import RGB Image: "sv << util::hex(err).to_string_view();
+          return std::nullopt;
+        }
+      } else {
+        BOOST_LOG(error) << "Couldn't import RGB Image: "sv << util::hex(err).to_string_view();
+        return std::nullopt;
+      }
     }
 
     gl::ctx.BindTexture(GL_TEXTURE_2D, rgb->tex[0]);
