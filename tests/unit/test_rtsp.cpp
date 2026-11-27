@@ -330,20 +330,20 @@ TEST(RtspAnnounceResponseTest, SerializesDolbyCodecAndHostConfirmedQuality) {
     boost::system::error_code read_error;
     boost::asio::read(client, boost::asio::dynamic_buffer(response), read_error);
     ASSERT_EQ(read_error, boost::asio::error::eof);
-    EXPECT_TRUE(response.starts_with("RTSP/1.0 200 OK\\r\\n"));
-    EXPECT_NE(response.find("CSeq: 73\\r\\n"), std::string::npos);
+    EXPECT_TRUE(response.starts_with("RTSP/1.0 200 OK\r\n"));
+    EXPECT_NE(response.find("CSeq: 73\r\n"), std::string::npos);
 
     const auto codec_header = response.find("X-SS-Audio-Codec:");
     const auto quality_header = response.find("x-nv-audio.surround.AudioQuality:");
     if (expected_codec.empty()) {
       EXPECT_EQ(codec_header, std::string::npos);
       EXPECT_EQ(quality_header, std::string::npos);
-      EXPECT_TRUE(response.ends_with("\\r\\n\\r\\n"));
+      EXPECT_TRUE(response.ends_with("\r\n\r\n"));
     } else {
       ASSERT_NE(codec_header, std::string::npos);
-      EXPECT_NE(response.find(std::string("X-SS-Audio-Codec: ") + std::string(expected_codec) + "\\r\\n"), std::string::npos);
+      EXPECT_NE(response.find(std::string("X-SS-Audio-Codec: ") + std::string(expected_codec) + "\r\n"), std::string::npos);
       ASSERT_NE(quality_header, std::string::npos);
-      EXPECT_NE(response.find(std::string("x-nv-audio.surround.AudioQuality: ") + std::string(expected_quality) + "\\r\\n"), std::string::npos);
+      EXPECT_NE(response.find(std::string("x-nv-audio.surround.AudioQuality: ") + std::string(expected_quality) + "\r\n"), std::string::npos);
     }
   }
 }
