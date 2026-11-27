@@ -862,7 +862,7 @@ namespace rtsp_stream {
    * @param seqn ANNOUNCE request sequence number.
    * @param selected_audio_codec Codec accepted during negotiation.
    */
-  void respond_announce_success(tcp::socket &sock, launch_session_t &session, int seqn, audio::dolby_codec_e selected_audio_codec) {
+  void respond_announce_success(tcp::socket &sock, launch_session_t &session, int seqn, audio::dolby_codec_e selected_audio_codec, bool high_quality_audio_selected) {
     OPTION_ITEM cseq_option {};
     std::string cseq_header {"CSeq"};
     auto seqn_str = std::to_string(seqn);
@@ -872,10 +872,20 @@ namespace rtsp_stream {
     OPTION_ITEM audio_codec_option {};
     std::string audio_codec_header {"X-SS-Audio-Codec"};
     std::string audio_codec_name {audio::dolby_codec_name(selected_audio_codec)};
+    OPTION_ITEM audio_quality_option {};
+    std::string audio_quality_header {"x-nv-audio.surround.AudioQuality"};
+    std::string audio_quality_value {high_quality_audio_selected ? "1" : "0"};
     if (selected_audio_codec != audio::dolby_codec_e::opus) {
       audio_codec_option.option = audio_codec_header.data();
       audio_codec_option.content = audio_codec_name.data();
       cseq_option.next = &audio_codec_option;
+
+      // Report the quality actually selected by the host. Moonlight uses this
+      // RTSP response header to distinguish a host-confirmed HQ mode from
+      // a quality level that was merely requested by the client.
+      audio_quality_option.option = audio_quality_header.data();
+      audio_quality_option.content = audio_quality_value.data();
+      audio_codec_option.next = &audio_quality_option;
     }
 
     respond(sock, session, &cseq_option, 200, "OK", seqn, {});
@@ -1454,7 +1464,7 @@ namespace rtsp_stream {
       return;
     }
 
-    respond_announce_success(sock, session, req->sequenceNumber, selected_audio_codec);
+    respond_announce_success(sock, session, req->sequenceNumber, selected_audio_codec, config.audio.high_quality_dolby);
   }
 
   /**
