@@ -1,3 +1,4 @@
+
 /**
  * @file tests/unit/test_rtsp.cpp
  * @brief Verify RTSP response handlers through their common dispatcher signature.
@@ -14,6 +15,7 @@
 #include <array>
 #include <format>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -81,7 +83,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Request to handle.
    */
-  void cmd_option(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_option(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Respond to DESCRIBE through the common dispatcher signature.
@@ -89,7 +91,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Request to handle.
    */
-  void cmd_describe(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_describe(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Validate ANNOUNCE input before creating a stream.
@@ -99,7 +101,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Parsed ANNOUNCE request.
    */
-  void cmd_announce(rtsp_server_t *server, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_announce(rtsp_server_t *server, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
 
   /**
    * @brief Respond to PLAY through the common dispatcher signature.
@@ -107,7 +109,17 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param req Request to handle.
    */
-  void cmd_play(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, msg_t &&req);
+  void cmd_play(rtsp_server_t *, boost::asio::ip::tcp::socket &sock, launch_session_t &session, const msg_t &req);
+
+  /**
+   * @brief Send the successful ANNOUNCE response through the production response path.
+   * @param sock Connected client socket.
+   * @param session Launch session.
+   * @param sequence_number ANNOUNCE request sequence number.
+   * @param selected_audio_codec Codec accepted during negotiation.
+   * @param high_quality_audio_selected Whether high-quality Dolby audio was selected by the host.
+   */
+  void respond_announce_success(boost::asio::ip::tcp::socket &sock, launch_session_t &session, int sequence_number, audio::dolby_codec_e selected_audio_codec, bool high_quality_audio_selected);
 }  // namespace rtsp_stream
 
 /**
@@ -131,7 +143,7 @@ TEST(RtspResponseTest, CommonDispatcherPreservesResponsesWithoutServerContext) {
     rtsp_stream::launch_session_t session {};
     rtsp_stream::msg_t request {new RTSP_MESSAGE {}};
     request->sequenceNumber = 42;
-    handler(nullptr, server_socket, session, std::move(request));
+    handler(nullptr, server_socket, session, request);
     server_socket.shutdown(tcp::socket::shutdown_send);
 
     std::string response;
@@ -166,7 +178,7 @@ TEST(RtspDescribeTest, SurroundParamsCompensateClientRotationForEveryStreamConfi
 
   rtsp_stream::launch_session_t session {};
   rtsp_stream::msg_t request {new RTSP_MESSAGE {}};
-  rtsp_stream::cmd_describe(nullptr, server_socket, session, std::move(request));
+  rtsp_stream::cmd_describe(nullptr, server_socket, session, request);
   server_socket.shutdown(tcp::socket::shutdown_send);
 
   std::string response;
@@ -273,7 +285,7 @@ TEST(RtspAnnounceTest, ValidatesH263PlusDimensionsAfterApplyingResolutionCap) {
     client.connect(acceptor.local_endpoint());
     auto server_socket = acceptor.accept();
     rtsp_stream::launch_session_t session {};
-    rtsp_stream::cmd_announce(nullptr, server_socket, session, std::move(request));
+    rtsp_stream::cmd_announce(nullptr, server_socket, session, request);
     server_socket.shutdown(tcp::socket::shutdown_send);
 
     std::string response;
@@ -281,5 +293,58 @@ TEST(RtspAnnounceTest, ValidatesH263PlusDimensionsAfterApplyingResolutionCap) {
     boost::asio::read(client, boost::asio::dynamic_buffer(response), read_error);
     ASSERT_EQ(read_error, boost::asio::error::eof);
     EXPECT_TRUE(response.starts_with(std::format("RTSP/1.0 {} ", test_case.status))) << response;
+  }
+}
+
+/**
+ * @brief ANNOUNCE success responses expose the selected Dolby codec and quality while keeping legacy Opus headers unchanged.
+ */
+TEST(RtspAnnounceResponseTest, SerializesDolbyCodecAndHostConfirmedQuality) {
+  using boost::asio::ip::tcp;
+
+  struct negotiation_t {
+    audio::dolby_codec_e codec;
+    bool high_quality;
+    std::string_view expected_codec;
+    std::string_view expected_quality;
+  };
+  const std::array negotiations {
+    negotiation_t {audio::dolby_codec_e::ac3, true, "AC3", "1"},
+    negotiation_t {audio::dolby_codec_e::ac3, false, "AC3", "0"},
+    negotiation_t {audio::dolby_codec_e::eac3, true, "EAC3", "1"},
+    negotiation_t {audio::dolby_codec_e::opus, false, {}, {}},
+  };
+
+  for (const auto &[codec, high_quality, expected_codec, expected_quality] : negotiations) {
+    SCOPED_TRACE(expected_codec.empty() ? "legacy Opus client" : std::string(expected_codec));
+    boost::asio::io_context io;
+    tcp::acceptor acceptor {io, {boost::asio::ip::address_v4::loopback(), 0}};
+    tcp::socket client {io};
+    client.connect(acceptor.local_endpoint());
+    auto server_socket = acceptor.accept();
+
+    rtsp_stream::launch_session_t session {};
+    rtsp_stream::respond_announce_success(server_socket, session, 73, codec, high_quality);
+    server_socket.shutdown(tcp::socket::shutdown_send);
+
+    std::string response;
+    boost::system::error_code read_error;
+    boost::asio::read(client, boost::asio::dynamic_buffer(response), read_error);
+    ASSERT_EQ(read_error, boost::asio::error::eof);
+    EXPECT_TRUE(response.starts_with("RTSP/1.0 200 OK\r\n"));
+    EXPECT_NE(response.find("CSeq: 73\r\n"), std::string::npos);
+
+    const auto codec_header = response.find("X-SS-Audio-Codec:");
+    const auto quality_header = response.find("x-nv-audio.surround.AudioQuality:");
+    if (expected_codec.empty()) {
+      EXPECT_EQ(codec_header, std::string::npos);
+      EXPECT_EQ(quality_header, std::string::npos);
+      EXPECT_TRUE(response.ends_with("\r\n\r\n"));
+    } else {
+      ASSERT_NE(codec_header, std::string::npos);
+      EXPECT_NE(response.find(std::string("X-SS-Audio-Codec: ") + std::string(expected_codec) + "\r\n"), std::string::npos);
+      ASSERT_NE(quality_header, std::string::npos);
+      EXPECT_NE(response.find(std::string("x-nv-audio.surround.AudioQuality: ") + std::string(expected_quality) + "\r\n"), std::string::npos);
+    }
   }
 }

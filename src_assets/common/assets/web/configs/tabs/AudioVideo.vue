@@ -67,6 +67,17 @@ const config = ref(props.config)
       </template>
     </PlatformLayout>
 
+    <!-- Optional Dolby audio output for clients that support passthrough -->
+    <div class="mb-3">
+      <label for="audio_format" class="form-label">{{ $t('config.audio_format') }}</label>
+      <select id="audio_format" class="form-select" v-model="config.audio_format">
+        <option value="opus">Opus (default)</option>
+        <option value="ac3">AC-3 (Dolby Digital)</option>
+        <option value="eac3">E-AC-3 (Dolby Digital Plus)</option>
+      </select>
+      <div class="form-text">{{ $t('config.audio_format_fallback_desc') }}</div>
+    </div>
+
     <!-- Disable Audio -->
     <Checkbox class="mb-3"
               id="stream_audio"

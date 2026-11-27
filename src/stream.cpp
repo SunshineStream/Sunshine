@@ -329,22 +329,7 @@ namespace stream {
   static_assert(offsetof(control_adaptive_triggers_t, left) == 9);
   static_assert(offsetof(control_adaptive_triggers_t, right) == 9 + DS_EFFECT_PAYLOAD_SIZE);
 
-  /**
-   * @brief Round a byte count up to the next PKCS#7 padding boundary.
-   *
-   * @param size Number of bytes or elements requested.
-   * @return `size` rounded up to the next PKCS#7 block boundary.
-   */
-  constexpr std::size_t round_to_pkcs7_padded(std::size_t size) {
-    return ((size + 15) / 16) * 16;
-  }
-
-  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = 1400;  ///< Protocol or platform constant for max audio packet size.
-
-  /**
-   * @brief AES key storage used for audio packet encryption.
-   */
-  using audio_aes_t = std::array<char, round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE)>;
+  constexpr std::size_t MAX_AUDIO_PACKET_SIZE = audio::MAX_DOLBY_PACKET_SIZE;  ///< Shared encoder and transport payload limit.
 
   /**
    * @brief Audio/video session identifier carried by GameStream packets.
@@ -359,9 +344,21 @@ namespace stream {
    */
   using message_queue_queue_t = std::shared_ptr<safe::queue_t<std::tuple<socket_e, av_session_id_t, message_queue_t>>>;
 
-  // return bytes written on success
-  // return -1 on error
-  static inline int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
+  /**
+   * @brief Copy or encrypt an audio packet into a destination buffer.
+   * @param encrypted Whether the packet must be encrypted with AES-CBC.
+   * @param plaintext Encoded audio packet to write.
+   * @param destination Destination buffer receiving the packet.
+   * @param destination_capacity Available capacity of the destination buffer.
+   * @param iv Initialization vector used for AES-CBC encryption.
+   * @param cbc AES-CBC cipher used to encrypt the packet.
+   * @return Number of bytes written on success, or -1 if the destination capacity is insufficient.
+   */
+  int encode_audio(bool encrypted, const audio::buffer_t &plaintext, uint8_t *destination, std::size_t destination_capacity, crypto::aes_t &iv, crypto::cipher::cbc_t &cbc) {
+    if (!audio_packet_fits(plaintext.size(), encrypted, destination_capacity)) {
+      return -1;
+    }
+
     // If encryption isn't enabled
     if (!encrypted) {
       std::ranges::copy(plaintext, destination);
@@ -369,6 +366,14 @@ namespace stream {
     }
 
     return cbc.encrypt(std::string_view {(char *) std::begin(plaintext), plaintext.size()}, destination, &iv);
+  }
+
+  bool audio_packet_fits(std::size_t plaintext_size, bool encrypted, std::size_t destination_capacity) {
+    if (plaintext_size > MAX_AUDIO_PACKET_SIZE) {
+      return false;
+    }
+    const auto required_size = encrypted ? crypto::cipher::round_to_pkcs7_padded(plaintext_size) : plaintext_size;
+    return required_size <= destination_capacity;
   }
 
   static inline void while_starting_do_nothing(std::atomic<session::state_e> &state) {
@@ -1966,7 +1971,7 @@ namespace stream {
 
       auto &shards_p = session->audio.shards_p;
 
-      auto bytes = encode_audio(session->config.encryptionFlagsEnabled & SS_ENC_AUDIO, packet_data, shards_p[sequenceNumber % RTPA_DATA_SHARDS], iv, session->audio.cipher);
+      auto bytes = encode_audio(session->config.encryptionFlagsEnabled & SS_ENC_AUDIO, packet_data, shards_p[sequenceNumber % RTPA_DATA_SHARDS], crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE), iv, session->audio.cipher);
       if (bytes < 0) {
         BOOST_LOG(error) << "Couldn't encode audio packet"sv;
         break;
@@ -2421,7 +2426,7 @@ namespace stream {
         session->video.gcm_iv_counter = 0;
       }
 
-      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(2048);
+      constexpr auto max_block_size = crypto::cipher::round_to_pkcs7_padded(MAX_AUDIO_PACKET_SIZE);
 
       util::buffer_t<char> shards {RTPA_TOTAL_SHARDS * max_block_size};
       util::buffer_t<uint8_t *> shards_p {RTPA_TOTAL_SHARDS};
