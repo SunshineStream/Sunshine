@@ -1059,10 +1059,12 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
             During Sunshine startup, you should see the list of detected displays:
             @code{}
             Info: Detecting displays
-            Info: Detected display: Monitor-0 (id: 3) connected: true
-            Info: Detected display: Monitor-1 (id: 2) connected: true
+            Info: Detected display: Monitor-0 (id: 3, uuid: 37D8832A-2D66-02CA-B9F7-8F30A301B230) connected: true
+            Info: Detected display: Monitor-1 (id: 2, uuid: 5B0E6E59-4F2B-4A1A-9C64-1A9E6B9E0C11) connected: true
             @endcode
-            You need to use the id value inside the parenthesis, e.g. `3`.
+            You can use either the id value inside the parenthesis, e.g. `3`, or the uuid value.
+            The id may change when a display (for example a virtual display) is disconnected and reconnected,
+            while the uuid stays the same.
             <br>
             <br>
             **Windows:**
@@ -1134,6 +1136,9 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
         <td>Example (macOS)</td>
         <td colspan="2">@code{}
             output_name = 3
+            @endcode
+            @code{}
+            output_name = 37D8832A-2D66-02CA-B9F7-8F30A301B230
             @endcode</td>
     </tr>
     <tr>

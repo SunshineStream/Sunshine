@@ -530,8 +530,11 @@ namespace platf {
         continue;
       }
 
+      const auto detected_display_id {parse_display_id(device.m_display_name)};
       BOOST_LOG(debug) << "Detected display: "sv << device.m_friendly_name
-                       << " (id: "sv << device.m_display_name << ") connected: true"sv;
+                       << " (id: "sv << device.m_display_name
+                       << ", uuid: "sv << (detected_display_id ? display_uuid(*detected_display_id) : std::string {})
+                       << ") connected: true"sv;
     }
 
     BOOST_LOG(info) << "Configuring selected display ("sv << display_id << ") to stream"sv;

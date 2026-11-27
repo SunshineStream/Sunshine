@@ -57,8 +57,8 @@ const outputNamePlaceholder = _outputNamePlaceholder;  // NOSONAR(javascript:S14
         <template #macos>
           <pre style="white-space: pre-line;">
             Info: Detecting displays
-            Info: Detected display: Monitor-0 (id: 3) connected: true
-            Info: Detected display: Monitor-1 (id: 2) connected: true
+            Info: Detected display: Monitor-0 (id: 3, uuid: 37D8832A-2D66-02CA-B9F7-8F30A301B230) connected: true
+            Info: Detected display: Monitor-1 (id: 2, uuid: 5B0E6E59-4F2B-4A1A-9C64-1A9E6B9E0C11) connected: true
           </pre>
         </template>
       </PlatformLayout>
