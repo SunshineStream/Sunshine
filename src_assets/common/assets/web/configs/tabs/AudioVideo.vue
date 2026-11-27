@@ -75,17 +75,13 @@ const config = ref(props.config)
               default="true"
     ></Checkbox>
 
-    <PlatformLayout :platform="platform">
-      <template #windows>
-        <!-- Externally Managed Audio -->
-        <Checkbox class="mb-3"
-                  id="external_audio"
-                  locale-prefix="config"
-                  v-model="config.external_audio"
-                  default="false"
-        ></Checkbox>
-      </template>
-    </PlatformLayout>
+    <!-- Keep Default Sink -->
+    <Checkbox class="mb-3"
+              id="keep_default_sink"
+              locale-prefix="config"
+              v-model="config.keep_default_sink"
+              default="false"
+    ></Checkbox>
 
     <AdapterNameSelector
         :platform="platform"

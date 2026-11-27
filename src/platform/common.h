@@ -6,6 +6,7 @@
 
 // standard includes
 #include <bitset>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
@@ -883,6 +884,31 @@ namespace platf {
   };
 
   /**
+   * @brief User-level audio capture intent, independent of platform mechanism.
+   */
+  enum class audio_capture_intent_e {
+    client_only,  ///< Client hears the audio; the host should stay silent.
+    host_and_client,  ///< Audio plays on the host and is also streamed.
+    pinned_sink,  ///< Capture one explicitly configured sink, device, or input.
+  };
+
+  /**
+   * @brief Microphone capture parameters for audio_control_t::microphone().
+   *
+   * Groups the six capture arguments into one named bundle so call sites pass
+   * a single struct instead of a long positional list. Field order matches the
+   * positional microphone() override for a mechanical translation.
+   */
+  struct microphone_params_t {
+    const std::uint8_t *mapping = nullptr;  ///< Opus channel mapping table for the requested layout.
+    int channels = 2;  ///< Number of audio channels in the stream.
+    std::uint32_t sample_rate = 48000;  ///< Audio sample rate in hertz.
+    std::uint32_t frame_size = 0;  ///< Number of samples captured per audio frame.
+    bool continuous_audio = false;  ///< Whether silent audio should continue to be emitted.
+    bool host_audio_enabled = false;  ///< Whether host playback should remain enabled during capture.
+  };
+
+  /**
    * @brief Platform audio controller that manages sinks and microphone capture.
    */
   class audio_control_t {
@@ -896,6 +922,71 @@ namespace platf {
     virtual int set_sink(const std::string &sink) = 0;
 
     /**
+     * @brief Whether the backend can capture a sink without changing the host default.
+     *
+     * Backends that return true must implement capture_sink(). Legacy backends
+     * return false and keep the historical swap-and-restore behavior.
+     *
+     * @return True when capture_sink() captures without touching the host default.
+     */
+    virtual bool supports_keep_default_sink() const {
+      return false;
+    }
+
+    /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * Only called when supports_keep_default_sink() is true. The default
+     * implementation preserves legacy behavior by swapping via set_sink().
+     *
+     * @param sink Audio sink name to capture.
+     * @return Status from selecting the capture sink.
+     */
+    virtual int capture_sink(const std::string &sink) {
+      return set_sink(sink);
+    }
+
+    /**
+     * @brief Record the capture target for the next microphone() call.
+     *
+     * The default implementation is a no-op so backends without per-process
+     * capture are unchanged. Backends that support process loopback override
+     * this to store the intent and PID together, so microphone() never sees
+     * a mismatched pair. A PID of 0 selects ordinary endpoint or sink capture.
+     *
+     * @param intent Capture intent resolved from the audio configuration.
+     * @param process_id Operating-system PID to capture, or 0 for endpoint capture.
+     */
+    virtual void set_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
+      // Intentionally empty: backends without per-process capture inherit this no-op.
+    }
+
+    /**
+     * @brief Release the recorded capture target when it still belongs to the caller.
+     *
+     * The default implementation is a no-op so backends without per-process
+     * capture are unchanged. Backends that store a capture target override
+     * this to reset to endpoint capture only when the stored intent and PID
+     * still equal the given ones, so one exiting session cannot wipe another
+     * session's recorded target.
+     *
+     * @param intent Capture intent recorded by the session being torn down.
+     * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
+     */
+    virtual void clear_capture_target([[maybe_unused]] audio_capture_intent_e intent, [[maybe_unused]] std::uint32_t process_id) {
+      // Intentionally empty: backends without per-process capture inherit this no-op.
+    }
+
+    /**
+     * @brief Copy the recorded capture sink.
+     *
+     * @return Recorded sink name, possibly empty when nothing was recorded.
+     */
+    [[nodiscard]] std::string snapshot_capture_sink_record() const {
+      return snapshot_recorded_sink();
+    }
+
+    /**
      * @brief Create a microphone capture stream for the requested layout.
      *
      * @param mapping Opus channel mapping table for the requested layout.
@@ -907,6 +998,22 @@ namespace platf {
      * @return Microphone capture object for the requested audio layout.
      */
     virtual std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous, [[maybe_unused]] bool host_audio_enabled) = 0;
+
+    /**
+     * @brief Create a microphone capture stream from a parameter bundle.
+     *
+     * Non-virtual convenience wrapper: forwards every field to the positional
+     * microphone() override, so backends keep overriding that form. New code
+     * calls this overload; derived classes that override the positional form
+     * hide it for direct calls, so callers must use a base-class reference or
+     * add a using-declaration.
+     *
+     * @param params Capture parameters forwarded to the positional override.
+     * @return Microphone capture object for the requested audio layout.
+     */
+    std::unique_ptr<mic_t> microphone(const microphone_params_t &params) {
+      return microphone(params.mapping, params.channels, params.sample_rate, params.frame_size, params.continuous_audio, params.host_audio_enabled);
+    }
 
     /**
      * @brief Check if the audio sink is available in the system.
@@ -926,6 +1033,52 @@ namespace platf {
      * @brief Destroy the audio control.
      */
     virtual ~audio_control_t() = default;
+
+  protected:
+    mutable std::mutex capture_state_mutex_;  ///< Guards `recorded_sink_` against concurrent sessions.
+    std::string recorded_sink_;  ///< Sink recorded for later consumption in microphone(), possibly empty.
+
+    /**
+     * @brief Record a capture sink for later consumption in microphone().
+     *
+     * Thread-safe: the store runs under `capture_state_mutex_`, so concurrent
+     * sessions cannot tear the recorded sink mid-write. Opt-in helper only:
+     * the `capture_sink()` virtual keeps its legacy delegation so backends
+     * without keep-default capture are unchanged.
+     *
+     * @param sink Audio sink name to capture.
+     */
+    void record_capture_sink(const std::string &sink) {
+      std::lock_guard lock {capture_state_mutex_};
+      recorded_sink_ = sink;
+    }
+
+    /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * Shared keep-default body for backends whose capture path only records
+     * the target for `microphone()`: logs the decision, stores the sink under
+     * `capture_state_mutex_` via `record_capture_sink()`, and reports success.
+     * Backends that only observe the sink (macOS) keep their own override.
+     *
+     * @param sink Audio sink name to capture.
+     * @return Always 0: recording a capture target cannot fail here.
+     */
+    int record_keep_default_capture_sink(const std::string &sink) {
+      BOOST_LOG(info) << "Keeping host default sink; capturing ["sv << sink << "] without swapping"sv;
+      record_capture_sink(sink);
+      return 0;
+    }
+
+    /**
+     * @brief Copy the recorded sink name under `capture_state_mutex_`.
+     *
+     * @return Recorded sink name, possibly empty when nothing was recorded.
+     */
+    [[nodiscard]] std::string snapshot_recorded_sink() const {
+      std::lock_guard lock {capture_state_mutex_};
+      return recorded_sink_;
+    }
   };
 
   /**
