@@ -418,6 +418,23 @@ namespace crypto {
   }
 
   /**
+   * @brief Compute the SHA-256 fingerprint of a PEM certificate.
+   */
+  std::string fingerprint256(const std::string_view &pem) {
+    const auto cert = x509(pem);
+    if (!cert) {
+      return {};
+    }
+
+    sha256_t digest;
+    if (unsigned int size = 0; X509_digest(cert.get(), EVP_sha256(), digest.data(), &size) != 1 || size != digest.size()) {
+      return {};
+    }
+
+    return util::hex_vec(digest, true);
+  }
+
+  /**
    * @brief Generate cryptographically secure random bytes.
    */
   std::string rand(std::size_t bytes) {

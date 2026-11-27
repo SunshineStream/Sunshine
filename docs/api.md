@@ -85,6 +85,9 @@ curl -u user:pass -H "X-CSRF-Token: your_token_here" \
 ## POST /api/password
 @copydoc confighttp::savePassword()
 
+## GET /api/pin
+@copydoc confighttp::getPendingPairings()
+
 ## POST /api/pin
 @copydoc confighttp::savePin()
 

@@ -172,6 +172,7 @@ namespace nvhttp {
     std::string id;  ///< Unguessable approval identifier.
     std::string name;  ///< Untrusted device name reported by the pairing client.
     std::string address;  ///< Network address from which the request originated.
+    std::string fingerprint;  ///< SHA-256 fingerprint of the client certificate, empty when it is invalid.
   };
 
   /**

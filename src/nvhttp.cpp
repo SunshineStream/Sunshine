@@ -693,6 +693,7 @@ namespace nvhttp {
         .id = sess->async_insert_pin.id,
         .name = sess->async_insert_pin.device_name,
         .address = sess->async_insert_pin.address,
+        .fingerprint = crypto::fingerprint256(sess->client.cert),
       });
     }
     return result;
@@ -1328,6 +1329,7 @@ namespace nvhttp {
       named_cert_node["name"] = named_cert.name;
       named_cert_node["uuid"] = named_cert.uuid;
       named_cert_node["enabled"] = named_cert.enabled;
+      named_cert_node["fingerprint"] = crypto::fingerprint256(named_cert.cert);
       named_cert_nodes.push_back(named_cert_node);
     }
 
