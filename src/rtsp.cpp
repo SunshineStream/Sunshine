@@ -861,6 +861,7 @@ namespace rtsp_stream {
    * @param session Launch session associated with the request.
    * @param seqn ANNOUNCE request sequence number.
    * @param selected_audio_codec Codec accepted during negotiation.
+   * @param high_quality_audio_selected Whether high-quality Dolby audio was selected by the host.
    */
   void respond_announce_success(tcp::socket &sock, launch_session_t &session, int seqn, audio::dolby_codec_e selected_audio_codec, bool high_quality_audio_selected) {
     OPTION_ITEM cseq_option {};
