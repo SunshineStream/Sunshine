@@ -1191,13 +1191,15 @@ namespace pipewire {
     /**
      * @brief Capture a display frame into the provided image object.
      *
+     * @tparam PullFreeImageCb Type of the image buffer callback.
      * @param pull_free_image_cb Callback that provides an available image buffer.
      * @param img_out Captured PipeWire image returned to the streaming pipeline.
      * @param timeout Maximum time to wait for the operation.
-     * @param show_cursor Show cursor.
+     * @param show_cursor Whether to include the cursor, currently ignored.
      * @return Capture status reported to the streaming pipeline.
      */
-    platf::capture_e snapshot(const pull_free_image_cb_t &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, bool show_cursor) {
+    template<typename PullFreeImageCb>
+    platf::capture_e snapshot(const PullFreeImageCb &pull_free_image_cb, std::shared_ptr<platf::img_t> &img_out, std::chrono::milliseconds timeout, [[maybe_unused]] bool show_cursor) {
       // FIXME: show_cursor is ignored
       auto deadline = std::chrono::steady_clock::now() + timeout;
       int retries = 0;
