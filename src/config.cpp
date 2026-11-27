@@ -822,6 +822,17 @@ namespace config {
     ENCRYPTION_MODE_OPPORTUNISTIC,  // wan_encryption_mode
     0,  // packetsize
     true,  // dscp_tagging
+
+    "fixed",  // bitrate_mode
+    100,  // abr_rtt_threshold_ms
+    2000,  // abr_hysteresis_ms
+    20,  // abr_margin_ms
+    1000,  // abr_stable_time_ms
+    0.7,  // abr_beta
+    15000,  // abr_cubic_recovery_ms
+    true,  // abr_fast_convergence
+    1000,  // abr_min_kbps
+    0,  // abr_max_kbps
   };
 
   /**
@@ -1868,6 +1879,21 @@ namespace config {
 #endif
 
     int_between_f(vars, "fec_percentage", stream.fec_percentage, {0, 100});
+
+    string_f(vars, "bitrate_mode", stream.bitrate_mode);
+    if (stream.bitrate_mode != "fixed" && stream.bitrate_mode != "adaptive") {
+      BOOST_LOG(warning) << "Unknown bitrate_mode ["sv << stream.bitrate_mode << "], using fixed"sv;
+      stream.bitrate_mode = "fixed";
+    }
+    int_between_f(vars, "abr_rtt_threshold_ms", stream.abr_rtt_threshold_ms, {1, 10000});
+    int_between_f(vars, "abr_hysteresis_ms", stream.abr_hysteresis_ms, {0, 60000});
+    int_between_f(vars, "abr_margin_ms", stream.abr_margin_ms, {0, 10000});
+    int_between_f(vars, "abr_stable_time_ms", stream.abr_stable_time_ms, {0, 60000});
+    double_between_f(vars, "abr_beta", stream.abr_beta, {0.1, 0.95});
+    int_between_f(vars, "abr_cubic_recovery_ms", stream.abr_cubic_recovery_ms, {1000, 120000});
+    bool_f(vars, "abr_fast_convergence", stream.abr_fast_convergence);
+    int_between_f(vars, "abr_min_kbps", stream.abr_min_kbps, {1, std::numeric_limits<int>::max()});
+    int_between_f(vars, "abr_max_kbps", stream.abr_max_kbps, {0, std::numeric_limits<int>::max()});
 
     map_int_int_f(vars, "keybindings"s, input.keybindings);
 

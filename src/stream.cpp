@@ -21,6 +21,7 @@
 #include "compat/moonlight.h"
 
 // local includes
+#include "bitrate_controller.h"
 #include "config.h"
 #include "display_device.h"
 #include "globals.h"
@@ -524,6 +525,9 @@ namespace stream {
 
       safe::mail_raw_t::event_t<bool> idr_events;  ///< Event requesting an instantaneous decoder refresh frame.
       safe::mail_raw_t::event_t<std::pair<int64_t, int64_t>> invalidate_ref_frames_events;  ///< Event carrying the reference-frame range to invalidate.
+      safe::mail_raw_t::event_t<int> bitrate_change_events;  ///< Event carrying a new target encoder bitrate, in kbps.
+
+      std::unique_ptr<bitrate::bitrate_controller_t> bitrate_controller;  ///< Adaptive bitrate controller; null when `bitrate_mode` is fixed.
 
       std::unique_ptr<platf::deinit_t> qos;  ///< Lifetime guard for video-socket QoS configuration.
     } video;  ///< Video worker thread state for the active stream.
@@ -554,6 +558,7 @@ namespace stream {
       std::string expected_peer_address;  ///< Expected address for legacy clients without `ML_FF_SESSION_ID_V1`.
 
       net::peer_t peer;  ///< Connected ENet peer for the control channel.
+      std::atomic<std::uint32_t> rtt_ms;  ///< Latest ENet round-trip time to the client, published by the control thread; 0 until measured.
       std::uint32_t seq;  ///< Sequence number for the next encrypted control message.
 
       platf::feedback_queue_t feedback_queue;  ///< Queue of controller feedback awaiting control-channel delivery.
@@ -1382,6 +1387,8 @@ namespace stream {
           if (!session->control.peer) {
             has_session_awaiting_peer = true;
           } else {
+            session->control.rtt_ms.store(session->control.peer->roundTripTime, std::memory_order_relaxed);
+
             auto &feedback_queue = session->control.feedback_queue;
             while (feedback_queue->peek()) {
               auto feedback_msg = feedback_queue->pop();
@@ -1601,6 +1608,32 @@ namespace stream {
     return matched;
   }
 #endif
+
+  /**
+   * @brief Feed the session's adaptive bitrate controller one RTT sample and forward any new target to the encoder.
+   *
+   * Called after each sent frame. Does nothing in fixed bitrate mode or before the first RTT measurement.
+   *
+   * @param session Session whose frame was just sent.
+   */
+  void update_adaptive_bitrate(session_t &session) {
+    if (!session.video.bitrate_controller) {
+      return;
+    }
+
+    const auto rtt_ms = session.control.rtt_ms.load(std::memory_order_relaxed);
+    if (rtt_ms == 0) {
+      return;
+    }
+
+    const auto new_target = session.video.bitrate_controller->on_sample(std::chrono::steady_clock::now(), rtt_ms);
+    if (!new_target.has_value()) {
+      return;
+    }
+
+    BOOST_LOG(debug) << "Adaptive bitrate: target "sv << *new_target << " kbps (RTT "sv << rtt_ms << " ms)"sv;
+    session.video.bitrate_change_events->raise(*new_target);
+  }
 
   /**
    * @brief Run the broadcast video sender thread.
@@ -1913,6 +1946,8 @@ namespace stream {
         });
 
         session->video.lowseq = lowseq;
+
+        update_adaptive_bitrate(*session);
       } catch (const std::exception &e) {
         BOOST_LOG(error) << "Broadcast video failed "sv << e.what();
         std::this_thread::sleep_for(100ms);
@@ -2257,6 +2292,37 @@ namespace stream {
     audio::capture(session->mail, session->config.audio, session);
   }
 
+  /**
+   * @brief Create the adaptive bitrate controller for a session.
+   *
+   * @param negotiated_kbps Bitrate requested by the client, in kbps.
+   * @return Controller configured from `config::stream`, or null when `bitrate_mode` is `fixed`.
+   */
+  std::unique_ptr<bitrate::bitrate_controller_t> make_bitrate_controller(int negotiated_kbps) {
+    if (config::stream.bitrate_mode != "adaptive") {
+      return nullptr;
+    }
+
+    bitrate::params_t params;
+    params.rtt_threshold_ms = config::stream.abr_rtt_threshold_ms;
+    params.hysteresis_ms = config::stream.abr_hysteresis_ms;
+    params.margin_ms = config::stream.abr_margin_ms;
+    params.stable_time_ms = config::stream.abr_stable_time_ms;
+    params.beta = config::stream.abr_beta;
+    params.cubic_recovery_ms = config::stream.abr_cubic_recovery_ms;
+    params.fast_convergence = config::stream.abr_fast_convergence;
+    params.min_kbps = config::stream.abr_min_kbps;
+    params.max_kbps = config::stream.abr_max_kbps;
+
+    // Start from the bitrate the encoder actually uses
+    const int initial_kbps = config::video.max_bitrate > 0 ? std::min(negotiated_kbps, config::video.max_bitrate) : negotiated_kbps;
+    auto controller = std::make_unique<bitrate::bitrate_controller_t>(initial_kbps, params);
+    BOOST_LOG(info) << "Adaptive bitrate enabled: "sv << controller->current_target_kbps() << " kbps max, beta "sv << params.beta
+                    << ", K "sv << params.cubic_recovery_ms << " ms, fast convergence "sv << (params.fast_convergence ? "on"sv : "off"sv)
+                    << ", RTT threshold "sv << params.rtt_threshold_ms << " ms"sv;
+    return controller;
+  }
+
   namespace session {
     std::atomic_uint running_sessions;  ///< Running sessions.
 
@@ -2400,6 +2466,7 @@ namespace stream {
       session->config = config;
 
       session->control.connect_data = launch_session.control_connect_data;
+      session->control.rtt_ms = 0;
       session->control.feedback_queue = mail->queue<platf::gamepad_feedback_msg_t>(mail::gamepad_feedback);
       session->control.hdr_queue = mail->event<video::hdr_info_t>(mail::hdr);
       session->control.legacy_input_enc_iv = launch_session.iv;
@@ -2410,6 +2477,8 @@ namespace stream {
 
       session->video.idr_events = mail->event<bool>(mail::idr);
       session->video.invalidate_ref_frames_events = mail->event<std::pair<int64_t, int64_t>>(mail::invalidate_ref_frames);
+      session->video.bitrate_change_events = mail->event<int>(mail::bitrate_change);
+      session->video.bitrate_controller = make_bitrate_controller(config.monitor.bitrate);
       session->video.lowseq = 0;
       session->video.ping_payload = launch_session.av_ping_payload;
       if (config.encryptionFlagsEnabled & SS_ENC_VIDEO) {

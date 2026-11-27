@@ -344,6 +344,23 @@ Try this.
 launchctl load -w /Library/LaunchAgents/org.freedesktop.dbus-session.plist
 ```
 
+### Stream stutters at low bitrates with VideoToolbox
+With the VideoToolbox encoder, a bitrate that is too low for the stream's resolution and content can make the encoder
+drop frames. Sunshine then recreates the encoder, so every frame is sent as a key frame and the stream stutters at
+reduced frame rate. The log shows repeated lines like:
+
+```
+Error: VideoToolbox dropped a frame
+Info: Creating encoder [hevc_vt]
+```
+
+This happens with a low fixed bitrate as well as with [adaptive bitrate](configuration.md#bitrate_mode). For example,
+on an Apple M5 streaming 1080p60 high-motion video, it happened below about 5 Mbps.
+
+* With a fixed bitrate, raise the bitrate in Moonlight or lower the resolution or frame rate.
+* With adaptive bitrate, set [abr_min_kbps](configuration.md#abr_min_kbps) above that level, e.g.
+  `abr_min_kbps = 6000` for 1080p60.
+
 ## Windows
 
 ### No gamepad detected

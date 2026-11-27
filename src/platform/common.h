@@ -716,6 +716,14 @@ namespace platf {
      * @return Encoded frame, or one with empty data on failure.
      */
     virtual vt_encoded_frame encode_frame(uint64_t frame_index, bool force_idr) = 0;
+
+    /**
+     * @brief Change the encoder's target bitrate during the session.
+     *
+     * @param bitrate_kbps New target bitrate, in kbps.
+     * @return True when the encoder accepted the change.
+     */
+    virtual bool set_bitrate(int bitrate_kbps) = 0;
   };
 
   /**

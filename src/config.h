@@ -277,6 +277,18 @@ namespace config {
     int packetsize;  ///< Maximum payload size for network packets.
 
     bool dscp_tagging;  ///< Allow DSCP tagging of audio and video traffic when requested by the client.
+
+    // Adaptive bitrate (MACCA). Read at session start.
+    std::string bitrate_mode;  ///< `fixed` keeps the negotiated bitrate; `adaptive` adjusts it from the client RTT.
+    int abr_rtt_threshold_ms;  ///< RTT above this value is treated as congestion.
+    int abr_hysteresis_ms;  ///< Continuous congested time before a decrease.
+    int abr_margin_ms;  ///< The RTT must be below the threshold minus this margin to count as clear.
+    int abr_stable_time_ms;  ///< Continuous clear time before each increase.
+    double abr_beta;  ///< Multiplicative decrease factor.
+    int abr_cubic_recovery_ms;  ///< Time the cubic recovery takes to return to the rate held before the last decrease.
+    bool abr_fast_convergence;  ///< Lower the recovery target when a decrease happens before recovery completes.
+    int abr_min_kbps;  ///< Bitrate floor, in kbps.
+    int abr_max_kbps;  ///< Bitrate ceiling, in kbps; 0 uses the negotiated bitrate.
   };
 
   /**
