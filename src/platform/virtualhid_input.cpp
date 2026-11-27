@@ -24,6 +24,9 @@
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
+#ifdef __APPLE__
+  #include "src/platform/macos/mouse_utils.h"
+#endif
 #include "virtualhid_input.h"
 
 using namespace std::literals;
@@ -898,6 +901,23 @@ namespace platf::virtualhid {
   }
 
   void move_mouse(input_context_t &context, int delta_x, int delta_y) {
+#if defined(__APPLE__) && !defined(SUNSHINE_TESTS)
+    // libvirtualhid updates the pointer twice per relative packet: it posts a kCGHIDEventTap
+    // event carrying an absolute location *and* kCGMouseEventDeltaX/Y, then warps the cursor to
+    // the clamped location. Those two updates disagree - the delta is fed through the system
+    // pointer-acceleration curve and is computed from the unclamped position - so the cursor is
+    // nudged forward and snapped back on every packet. Relative motion therefore reads as the
+    // pointer barely moving or jittering in place, while button and scroll input, which never
+    // warps, keep working. Emit a single CoreGraphics update instead, and only fall back to the
+    // virtual HID report when CoreGraphics cannot inject events at all.
+    //
+    // Excluded from the test build: these tests assert the submitted virtual HID report, and
+    // must not move the pointer of whoever is running the suite.
+    if (platf::macos::move_mouse_relative(delta_x, delta_y)) {
+      return;
+    }
+#endif  // __APPLE__ && !SUNSHINE_TESTS
+
     if (context.mouse) {
       log_failure("submit libvirtualhid mouse movement"sv, context.mouse->move_relative(delta_x, delta_y));
     }
