@@ -117,6 +117,7 @@ namespace rtsp_stream {
    * @param session Launch session.
    * @param sequence_number ANNOUNCE request sequence number.
    * @param selected_audio_codec Codec accepted during negotiation.
+   * @param high_quality_audio_selected Whether high-quality Dolby audio was selected by the host.
    */
   void respond_announce_success(boost::asio::ip::tcp::socket &sock, launch_session_t &session, int sequence_number, audio::dolby_codec_e selected_audio_codec, bool high_quality_audio_selected);
 }  // namespace rtsp_stream
