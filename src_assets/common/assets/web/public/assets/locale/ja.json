@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "HDRの高コントラスト回避策",
     "ds4_back_as_touchpad_click": "戻る/選択をタッチパッドにマップする",
     "ds4_back_as_touchpad_click_desc": "DS4エミュレーションを強制するときは、戻る/選択をタッチパッドにマップする",
+    "dscp_tagging": "DSCP タグ付け",
+    "dscp_tagging_desc": "クライアントから要求されたときに、オーディオおよびビデオパケットに DSCP 優先タグを付けます。 これを無効にすると、一部のルーターがタグ付けされたトラフィックを処理できないため、Wi-Fiでオーディオクラックや吃音が発生する場合に役立つ可能性があります。",
     "virtualhid_randomize_mac": "仮想コントローラMACをランダム化",
     "virtualhid_randomize_mac_desc": "コントローラインデックスに基づくものではなく、PlayStationスタイルの仮想コントローラにランダムなMACアドレスを使用します。 これにより、コントローラがクライアント上でスワップされたときにコントローラごとの設定が混在しないようになります。",
     "encoder": "特定のエンコーダーを強制する",

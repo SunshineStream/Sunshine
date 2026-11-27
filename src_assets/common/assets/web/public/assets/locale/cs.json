@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "Řešení pro HDR s vysokým kontrastem",
     "ds4_back_as_touchpad_click": "Namapovat Zpět/Vybrat na klepnutí touchpadu",
     "ds4_back_as_touchpad_click_desc": "Při použití emulace gamepadu ve stylu PlayStation přiřaďte tlačítka Zpět/Vybrat k kliknutí na touchpadu",
+    "dscp_tagging": "DSCP štítkování",
+    "dscp_tagging_desc": "Pokud o to klient požádá, označte audio a video pakety s prioritními značkami DSCP. Vypnutí tohoto nastavení může pomoci v případě, že zvukové praskliny nebo sestřikovače na Wi-Fi, protože některé routery pracují s štítkem špatně.",
     "virtualhid_randomize_mac": "Náhodné generování MAC adresy virtuálního řadiče",
     "virtualhid_randomize_mac_desc": "Pro virtuální ovladače ve stylu PlayStation používejte náhodnou adresu MAC namísto adresy založené na indexu ovladače. Tím se zabrání smíchání nastavení jednotlivých ovladačů při jejich výměně na straně klienta.",
     "encoder": "Vynutit specifický enkodér",

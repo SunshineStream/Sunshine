@@ -241,6 +241,8 @@
     "dd_wa_hdr_toggle_delay": "Hög kontrast för HDR",
     "ds4_back_as_touchpad_click": "Karta bakåt/välj att Touchpad Klicka",
     "ds4_back_as_touchpad_click_desc": "När DS4-emulering tvingas, kartlägg Tillbaka/välj att Touchpad Klicka",
+    "dscp_tagging": "DSCP taggning",
+    "dscp_tagging_desc": "Markera ljud- och videopaket med DSCP prioriterade taggar när klienten begär det. Inaktivera detta kan hjälpa om ljud sprickor eller stamningar på Wi-Fi, som vissa routrar hanterar taggad trafik dåligt.",
     "virtualhid_randomize_mac": "Slumpa virtuell styrenhet MAC",
     "virtualhid_randomize_mac_desc": "Använd en slumpmässig MAC-adress för virtuella handkontroller i PlayStation-stil istället för en som baseras på handkontrollens index. Detta undviker att blanda inställningar per styrenhet när styrenheter byts på kunden.",
     "encoder": "Tvinga en specifik kodare",
