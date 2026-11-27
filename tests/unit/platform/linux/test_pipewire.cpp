@@ -1,6 +1,6 @@
 /**
  * @file tests/unit/platform/linux/test_pipewire.cpp
- * @brief Test PipeWire stream lifecycle handling and capture display teardown.
+ * @brief Test PipeWire buffer negotiation, stream lifecycle handling, and capture display teardown.
  */
 #if defined(SUNSHINE_BUILD_KWIN) || defined(SUNSHINE_BUILD_PORTAL)
   // test includes
@@ -60,6 +60,148 @@ namespace {
     int connect(int fd, std::shared_ptr<pipewire::shared_state_t> state = std::make_shared<pipewire::shared_state_t>()) {
       return pipewire.init(fd, PW_ID_ANY, SPA_ID_INVALID, std::move(state));
     }
+  };
+
+  /**
+   * @brief Drive display startup and capture with synthetic formats and recording converter factories.
+   */
+  class negotiation_display_t: public test_display_t {
+  public:
+    /**
+     * @brief Set up a display with local import capabilities but no negotiated format.
+     * @param type Encoder memory type.
+     * @param dma_formats Number of DMA-BUF formats available locally.
+     * @param nvidia Whether the display GPU is NVIDIA.
+     */
+    negotiation_display_t(platf::mem_type_e type, int dma_formats, bool nvidia = false) {
+      mem_type = type;
+      n_dmabuf_infos = dma_formats;
+      display_is_nvidia = nvidia;
+      width = 640;
+      height = 480;
+      shared_state = std::make_shared<pipewire::shared_state_t>();
+      data.shared = shared_state;
+    }
+
+    /**
+     * @brief Deliver a valid raw format with or without its DMA-BUF modifier.
+     * @param dma Whether the compositor supplies a DMA-BUF modifier.
+     */
+    void negotiate(bool dma) {
+      std::array<uint8_t, 256> storage {};
+      spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
+      spa_pod_frame frame {};
+      const spa_rectangle size {640, 480};
+      const spa_fraction framerate {60, 1};  // Required by PipeWire 0.3's raw format parser.
+      spa_pod_builder_push_object(&builder, &frame, SPA_TYPE_OBJECT_Format, SPA_PARAM_Format);
+      spa_pod_builder_add(
+        &builder,
+        SPA_FORMAT_mediaType,
+        SPA_POD_Id(SPA_MEDIA_TYPE_video),
+        SPA_FORMAT_mediaSubtype,
+        SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+        SPA_FORMAT_VIDEO_format,
+        SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx),
+        SPA_FORMAT_VIDEO_size,
+        SPA_POD_Rectangle(&size),
+        SPA_FORMAT_VIDEO_framerate,
+        SPA_POD_Fraction(&framerate),
+        0
+      );
+      if (dma) {
+        spa_pod_builder_add(&builder, SPA_FORMAT_VIDEO_modifier, SPA_POD_Long(DRM_FORMAT_MOD_LINEAR), 0);
+      }
+      auto *format = static_cast<const spa_pod *>(spa_pod_builder_pop(&builder, &frame));
+      ASSERT_NE(format, nullptr);
+      pipewire::pipewire_t::apply_format(data, SPA_PARAM_Format, format, [](pw_stream *, const spa_pod **params, uint32_t n_params) {
+        EXPECT_GT(n_params, 0U);
+        EXPECT_NE(spa_pod_find_prop(params[0], nullptr, SPA_PARAM_BUFFERS_dataType), nullptr);
+        return 0;
+      });
+      EXPECT_EQ(shared_state->buffer_type.load(), dma ? SPA_DATA_DmaBuf : SPA_DATA_MemPtr);
+    }
+
+    /**
+     * @brief Complete the same negotiation wait used by initialization, with an immediate deadline.
+     */
+    void finish_startup() {
+      wait_for_negotiation(0ms);
+    }
+
+    /**
+     * @brief Wake the snapshot with a synthetic buffer and run the real frame-storage guard.
+     * @param type Buffer type for the frame.
+     * @param fd File descriptor for a synthetic DMA-BUF plane.
+     * @param size Number of bytes present in the frame.
+     * @return Status reported to the capture loop.
+     */
+    platf::capture_e capture_frame(uint32_t type, int fd = -1, uint32_t size = 16) {
+      spa_chunk chunk {};
+      chunk.size = size;
+      chunk.stride = 8;
+      spa_data plane {};
+      plane.chunk = &chunk;
+      plane.type = type;
+      plane.fd = fd;
+      spa_buffer buffer {};
+      buffer.n_datas = 1;
+      buffer.datas = &plane;
+      pw_buffer current {};
+      current.buffer = &buffer;
+      data.current_buffer = &current;
+      data.buffer_a.resize(16);
+      data.local_stride = 8;
+      pipewire.set_frame_ready(true);
+      std::shared_ptr<platf::img_t> img;
+      const auto status = snapshot(
+        [&](auto &out) {
+          out = alloc_img();
+          return true;
+        },
+        img,
+        100ms,
+        false
+      );
+      data.current_buffer = nullptr;
+      if (img) {
+        pipewire::pipewire_t::close_img_fds(static_cast<egl::img_descriptor_t *>(img.get()));
+      }
+      return status;
+    }
+
+  #ifdef SUNSHINE_BUILD_PORTAL
+    /**
+     * @brief Simulate a startup error and consume the real capture loop's recovery status.
+     * @return The capture loop's selected status.
+     */
+    std::optional<platf::capture_e> fail_startup() {
+      pipewire::pipewire_t::on_stream_state_changed(&data, PW_STREAM_STATE_PAUSED, PW_STREAM_STATE_ERROR, "no more input formats");
+      return dead_stream_status();
+    }
+
+    bool negotiate_maxframerate = true;  ///< Whether portal startup should still request maxFramerate.
+  #endif
+
+    std::optional<std::pair<platf::mem_type_e, bool>> selected_factory;  ///< Type and VRAM argument passed to the converter factory.
+
+  protected:
+    std::unique_ptr<platf::avcodec_encode_device_t> make_converter(platf::mem_type_e type, bool vram) override {
+      selected_factory.emplace(type, vram);
+      return std::make_unique<platf::avcodec_encode_device_t>();
+    }
+
+    platf::capture_e fill_capture_frame(platf::img_t *img, uint32_t expected_type) override {
+      return pipewire::pipewire_t::copy_frame(img, data, expected_type);
+    }
+
+  #ifdef SUNSHINE_BUILD_PORTAL
+    bool check_stream_dead(platf::capture_e &status) override {
+      return portal::check_stream_dead_for_testing(shared_state, negotiate_maxframerate, status);
+    }
+  #endif
+
+  private:
+    pipewire::stream_data_t data {};  ///< Data populated by the format callback and synthetic frame delivery.
   };
 
   /**
@@ -215,6 +357,172 @@ namespace {
   };
 }  // namespace
 
+TEST(PipeWireBufferTest, NegotiationDistinguishesPendingMemoryAndDmabuf) {
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(nullptr, DRM_FORMAT_XRGB8888), SPA_ID_INVALID);
+  pipewire::shared_state_t shared;
+  EXPECT_EQ(shared.buffer_type.load(), SPA_ID_INVALID);
+
+  std::array<uint8_t, 256> storage {};
+  spa_pod_builder builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
+  auto *memory = static_cast<spa_pod *>(spa_pod_builder_add_object(
+    &builder,
+    SPA_TYPE_OBJECT_Format,
+    SPA_PARAM_Format,
+    SPA_FORMAT_VIDEO_format,
+    SPA_POD_Id(SPA_VIDEO_FORMAT_BGRx)
+  ));
+  // A locally importable format is not evidence that the compositor supplied DMA-BUF.
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(memory, DRM_FORMAT_XRGB8888), SPA_DATA_MemPtr);
+
+  builder = SPA_POD_BUILDER_INIT(storage.data(), storage.size());
+  auto *dmabuf = static_cast<spa_pod *>(spa_pod_builder_add_object(
+    &builder,
+    SPA_TYPE_OBJECT_Format,
+    SPA_PARAM_Format,
+    SPA_FORMAT_VIDEO_modifier,
+    SPA_POD_Long(DRM_FORMAT_MOD_LINEAR)
+  ));
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(dmabuf, DRM_FORMAT_XRGB8888), SPA_DATA_DmaBuf);
+  EXPECT_EQ(pipewire::pipewire_t::negotiated_buffer_type(dmabuf, 0), SPA_DATA_MemPtr);
+}
+
+TEST(PipeWireBufferTest, StorageChangesAreRejectedBeforeCopyingFrame) {
+  pipewire::stream_data_t data {};
+  spa_chunk chunk {};
+  chunk.size = 16;
+  chunk.stride = 8;
+  spa_data plane {};
+  plane.chunk = &chunk;
+  plane.fd = -1;
+  spa_buffer buffer {};
+  buffer.n_datas = 1;
+  buffer.datas = &plane;
+  pw_buffer current {};
+  current.buffer = &buffer;
+  data.current_buffer = &current;
+  data.buffer_a.resize(16, 42);
+  data.local_stride = 8;
+  data.format.info.raw.format = SPA_VIDEO_FORMAT_BGRx;
+
+  for (auto type : {SPA_DATA_MemPtr, SPA_DATA_MemFd}) {
+    plane.type = type;
+    pipewire::img_descriptor_t img {};
+    img.sd.fds.fill(-1);
+    EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_DmaBuf), platf::capture_e::reinit);
+    EXPECT_EQ(img.data, nullptr);
+    EXPECT_EQ(img.sd.fds[0], -1);
+    EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::ok);
+    EXPECT_EQ(img.data, data.buffer_a.data());
+    EXPECT_EQ(img.row_pitch, 8);
+    EXPECT_EQ(img.pixel_pitch, 4);
+    EXPECT_FALSE(img.data_owned);
+  }
+
+  plane.type = SPA_DATA_DmaBuf;
+  pipewire::img_descriptor_t img {};
+  img.sd.fds.fill(-1);
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::reinit);
+  EXPECT_EQ(img.data, nullptr);
+  EXPECT_EQ(img.sd.fds[0], -1);
+
+  // A new display may use DMA-BUF again; no process-wide fallback is latched.
+  plane.fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  ASSERT_GE(plane.fd, 0);
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_DmaBuf), platf::capture_e::ok);
+  EXPECT_GE(img.sd.fds[0], 0);
+  EXPECT_NE(img.sd.fds[0], plane.fd);
+  pipewire::pipewire_t::close_img_fds(&img);
+  close(plane.fd);
+
+  plane.type = SPA_DATA_Invalid;
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::capture_error);
+  chunk.size = 0;
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::timeout);
+  buffer.n_datas = 0;
+  EXPECT_EQ(pipewire::pipewire_t::copy_frame(&img, data, SPA_DATA_MemPtr), platf::capture_e::timeout);
+}
+
+TEST_F(PipeWireDisplayTest, VaapiFactoryUsesNegotiatedStorageRatherThanLocalDmaFormats) {
+  for (bool dma : {false, true}) {
+    SCOPED_TRACE(dma);
+    negotiation_display_t display {platf::mem_type_e::vaapi, 1};
+    display.negotiate(dma);
+    display.finish_startup();
+    EXPECT_NE(display.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+    ASSERT_TRUE(display.selected_factory);
+    EXPECT_EQ(display.selected_factory->first, platf::mem_type_e::vaapi);
+    EXPECT_EQ(display.selected_factory->second, dma);
+  }
+}
+
+TEST_F(PipeWireDisplayTest, CudaFactoryUsesDmaBufOnlyForNegotiatedDmaBufOnNvidia) {
+  for (bool nvidia : {false, true}) {
+    for (bool dma : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "nvidia=" << nvidia << " dma=" << dma);
+      negotiation_display_t display {platf::mem_type_e::cuda, 1, nvidia};
+      display.negotiate(dma);
+      display.finish_startup();
+      EXPECT_NE(display.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+      ASSERT_TRUE(display.selected_factory);
+      EXPECT_EQ(display.selected_factory->first, platf::mem_type_e::cuda);
+      EXPECT_EQ(display.selected_factory->second, nvidia && dma);
+    }
+  }
+}
+
+TEST_F(PipeWireDisplayTest, PendingMemoryConverterRequestsReinitOnLateDmaBuf) {
+  negotiation_display_t display {platf::mem_type_e::vaapi, 1};
+  display.finish_startup();
+  EXPECT_NE(display.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+  ASSERT_TRUE(display.selected_factory);
+  EXPECT_FALSE(display.selected_factory->second);
+  display.negotiate(true);
+  EXPECT_EQ(display.capture_frame(SPA_DATA_DmaBuf), platf::capture_e::reinit);
+  EXPECT_EQ(display.capture_frame(SPA_DATA_Invalid), platf::capture_e::capture_error);
+  EXPECT_EQ(display.capture_frame(SPA_DATA_MemPtr, -1, 0), platf::capture_e::timeout);
+}
+
+  #ifdef SUNSHINE_BUILD_VULKAN
+TEST_F(PipeWireDisplayTest, PendingVulkanProbeAcceptsLateDmaBufButRejectsRealMemoryFrames) {
+  negotiation_display_t display {platf::mem_type_e::vulkan, 1};
+  display.finish_startup();
+  ASSERT_NE(display.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+  ASSERT_TRUE(display.selected_factory);
+  EXPECT_TRUE(display.selected_factory->second);
+  display.negotiate(true);
+
+  const auto fd = open("/dev/null", O_RDONLY | O_CLOEXEC);
+  ASSERT_GE(fd, 0);
+  EXPECT_EQ(display.capture_frame(SPA_DATA_DmaBuf, fd), platf::capture_e::ok);
+  close(fd);
+  display.negotiate(false);
+  EXPECT_EQ(display.capture_frame(SPA_DATA_MemPtr), platf::capture_e::reinit);
+}
+
+TEST_F(PipeWireDisplayTest, VulkanFactoryRejectsConfirmedMemoryAndPendingWithoutDmaFormats) {
+  negotiation_display_t memory {platf::mem_type_e::vulkan, 1};
+  memory.negotiate(false);
+  memory.finish_startup();
+  EXPECT_EQ(memory.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+  EXPECT_FALSE(memory.selected_factory);
+
+  negotiation_display_t unavailable {platf::mem_type_e::vulkan, 0};
+  unavailable.finish_startup();
+  EXPECT_EQ(unavailable.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+  EXPECT_FALSE(unavailable.selected_factory);
+}
+
+    #ifdef SUNSHINE_BUILD_PORTAL
+TEST_F(PipeWireDisplayTest, PendingVulkanProbeKeepsPortalStartupRetryReachable) {
+  negotiation_display_t display {platf::mem_type_e::vulkan, 1};
+  display.finish_startup();
+  ASSERT_NE(display.make_avcodec_encode_device(platf::pix_fmt_e {}), nullptr);
+  EXPECT_EQ(display.fail_startup(), platf::capture_e::reinit);
+  EXPECT_FALSE(display.negotiate_maxframerate);
+}
+    #endif
+  #endif
+
 TEST(PipeWireStreamStateTest, RecordsStartupUntilTheStreamIsReplaced) {
   pipewire::stream_data_t data {};
   data.shared = std::make_shared<pipewire::shared_state_t>();
@@ -302,9 +610,11 @@ TEST_F(PipeWireDisplayTest, NewConnectionResetsStartupHistory) {
   ASSERT_EQ(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets.data()), 0);
   auto state = std::make_shared<pipewire::shared_state_t>();
   state->has_streamed.store(true);
+  state->buffer_type.store(SPA_DATA_DmaBuf);
   auto display = std::make_shared<test_display_t>();
   display->connect(sockets[0], state);
   EXPECT_FALSE(state->has_streamed.load());
+  EXPECT_EQ(state->buffer_type.load(), SPA_ID_INVALID);
   display.reset();
   close(sockets[1]);
 }
