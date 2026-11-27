@@ -94,10 +94,10 @@ namespace pipewire {
    * @brief PipeWire stream handle, format, and shared state pointer.
    */
   struct stream_data_t {
-    struct pw_stream *stream;  ///< PipeWire stream handle used for screencast frames.
+    struct pw_stream *stream = nullptr;  ///< PipeWire stream handle used for screencast frames.
     struct spa_hook stream_listener;  ///< Hook registering callbacks on the PipeWire stream.
-    struct spa_video_info format;  ///< Negotiated PipeWire video format.
-    struct pw_buffer *current_buffer;  ///< PipeWire buffer currently exposed to the capture thread.
+    struct spa_video_info format {};  ///< Negotiated PipeWire video format.
+    struct pw_buffer *current_buffer = nullptr;  ///< PipeWire buffer currently exposed to the capture thread.
     uint64_t drm_format;  ///< DRM format.
     std::shared_ptr<shared_state_t> shared;  ///< State shared between PipeWire callbacks and the capture backend.
     std::mutex frame_mutex;  ///< Synchronizes access to the current PipeWire frame.
@@ -752,8 +752,8 @@ namespace pipewire {
 
   private:
     struct pw_thread_loop *loop;
-    struct pw_context *context;
-    struct pw_core *core;
+    struct pw_context *context = nullptr;  ///< PipeWire context, if initialized.
+    struct pw_core *core = nullptr;  ///< PipeWire core, if connected.
     struct spa_hook core_listener;
     struct stream_data_t stream_data;
     uint32_t node;
@@ -938,6 +938,19 @@ namespace pipewire {
     static void on_param_changed(void *user_data, uint32_t id, const struct spa_pod *param) {  // NOSONAR(cpp:S5008): PipeWire event callbacks require a void pointer for user data.
       const auto d = static_cast<struct stream_data_t *>(user_data);
 
+      apply_format(*d, id, param, pw_stream_update_params);
+    }
+
+  public:
+    /**
+     * @brief Apply a negotiated format and publish its storage after acknowledging the parameters.
+     * @param data PipeWire stream and callback state.
+     * @param id PipeWire parameter identifier.
+     * @param param Negotiated SPA format, or null when withdrawn.
+     * @param update_params Function used to acknowledge the negotiated parameters.
+     */
+    static void apply_format(stream_data_t &data, uint32_t id, const spa_pod *param, decltype(&pw_stream_update_params) update_params) {
+      auto *d = &data;
       d->current_buffer = nullptr;
 
       if (id != SPA_PARAM_Format) {
@@ -1025,13 +1038,14 @@ namespace pipewire {
       params[n_params] = damage_param;
       n_params++;
 
-      pw_stream_update_params(d->stream, params.data(), n_params);
+      update_params(d->stream, params.data(), n_params);
       if (d->shared) {
         // Publish last: dimensions alone do not mean buffer negotiation is complete.
         d->shared->buffer_type.store(buffer_type);
       }
     }
 
+  private:
     constexpr static const struct pw_stream_events stream_events = {
       .version = PW_VERSION_STREAM_EVENTS,
       .state_changed = on_stream_state_changed,
@@ -1169,42 +1183,7 @@ namespace pipewire {
         return -1;
       }
 
-      // Wait for pipewire negotiation to finish so we have the proper negotiated dimensions
-      int timeout_ms = 1500;
-      int negotiated_w = 0;
-      int negotiated_h = 0;
-      while (timeout_ms > 0) {
-        buffer_type = shared_state->buffer_type.load();
-        negotiated_w = shared_state->negotiated_width.load();
-        negotiated_h = shared_state->negotiated_height.load();
-        if (negotiated_w > 0 && negotiated_h > 0 && buffer_type != SPA_ID_INVALID) {
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        timeout_ms -= 10;
-      }
-      if (buffer_type == SPA_ID_INVALID) {
-        // Keep capture alive so portal startup-error handling can retry negotiation.
-        // Never assume DMA-BUF before negotiation; copy_frame will request reinit
-        // if a late frame requires a different converter.
-        BOOST_LOG(warning) << "[pipewire] Buffer negotiation pending; using memory conversion until capture restarts"sv;
-        buffer_type = SPA_DATA_MemPtr;
-      }
-      // Set width and height to the values negotiated by pipewire
-      if (negotiated_w > 0 && negotiated_h > 0 && (negotiated_w != width || negotiated_h != height)) {
-        width = negotiated_w;
-        height = negotiated_h;
-        BOOST_LOG(info) << "[pipewire] Using negotiated Resolution: "sv << width << "x" << height;
-
-        // Reset and update display parameters for negotiated resolution
-        env_width = 0;
-        env_height = 0;
-        logical_height = 0;
-        logical_width = 0;
-        env_logical_height = 0;
-        env_logical_width = 0;
-        verify_and_update_display_parameters();
-      }
+      wait_for_negotiation(1500ms);
 
       return 0;
     }
@@ -1234,7 +1213,7 @@ namespace pipewire {
 
         auto *img_egl = static_cast<egl::img_descriptor_t *>(img_out.get());
         img_egl->reset();
-        const auto status = pipewire.fill_img(img_egl, buffer_type);
+        const auto status = fill_capture_frame(img_egl, capture_buffer_type());
         if (status == platf::capture_e::reinit || status == platf::capture_e::capture_error) {
           return status;
         }
@@ -1307,15 +1286,8 @@ namespace pipewire {
       bool pacing_required = pipewire.is_pacing_required(target_framerate, delay);
 
       while (true) {
-        // Check if PipeWire signaled a dead stream
-        if (shared_state->stream_dead.exchange(false)) {
-          // Additional custom error-handling for subclasses on stream dead event
-          if (platf::capture_e status; check_stream_dead(status)) {
-            return status;
-          }
-          // Re-init the capture if the stream is dead for any other reason
-          BOOST_LOG(warning) << "[pipewire] PipeWire stream disconnected. Forcing session reset."sv;
-          return reinit;
+        if (const auto status = dead_stream_status()) {
+          return *status;
         }
 
         // Use unpaced event driven capture when possible
@@ -1364,35 +1336,14 @@ namespace pipewire {
      * @return Constructed AVCodec encode device object.
      */
     std::unique_ptr<platf::avcodec_encode_device_t> make_avcodec_encode_device(platf::pix_fmt_e pix_fmt) override {
-#ifdef SUNSHINE_BUILD_VAAPI
-      if (mem_type == platf::mem_type_e::vaapi) {
-        return va::make_avcodec_encode_device(width, height, buffer_type == SPA_DATA_DmaBuf);
-      }
-#endif
-
+      const bool dmabuf = capture_buffer_type() == SPA_DATA_DmaBuf;
 #ifdef SUNSHINE_BUILD_VULKAN
-      if (mem_type == platf::mem_type_e::vulkan) {
-        if (buffer_type != SPA_DATA_DmaBuf) {
-          return nullptr;
-        }
-        return vk::make_avcodec_encode_device_vram(width, height, 0, 0);
+      if (mem_type == platf::mem_type_e::vulkan && !dmabuf) {
+        return nullptr;
       }
 #endif
 
-#ifdef SUNSHINE_BUILD_CUDA
-      if (mem_type == platf::mem_type_e::cuda) {
-        if (display_is_nvidia && buffer_type == SPA_DATA_DmaBuf) {
-          // Display GPU is NVIDIA - can use DMA-BUF directly
-          return cuda::make_avcodec_gl_encode_device(width, height, 0, 0);
-        } else {
-          // Use memory buffers for hybrid GPUs and compositor memory fallback.
-          // DMA-BUFs from Intel GPU cannot be imported into CUDA.
-          return cuda::make_avcodec_encode_device(width, height, false);
-        }
-      }
-#endif
-
-      return std::make_unique<platf::avcodec_encode_device_t>();
+      return make_converter(mem_type, dmabuf);
     }
 
     /**
@@ -1601,20 +1552,129 @@ namespace pipewire {
       return 0;
     }
 
-    platf::mem_type_e mem_type;
     wl::display_t wl_display;
     std::array<struct dmabuf_format_info_t, MAX_DMABUF_FORMATS> dmabuf_infos;
-    int n_dmabuf_infos;
-    uint32_t buffer_type = SPA_ID_INVALID;  ///< Storage selected at initialization; capture restarts if frames change storage.
-    bool display_is_nvidia = false;  // Track if display GPU is NVIDIA
+    uint32_t buffer_type = SPA_ID_INVALID;  ///< Negotiated storage at startup; remains unknown when the wait expires.
     std::chrono::nanoseconds delay;
     std::optional<std::uint64_t> last_pts {};
     std::optional<std::uint64_t> last_seq {};
     std::uint64_t sequence {};
     AVRational target_framerate;
 
+    /**
+     * @brief Return the storage expected by this display's converter.
+     * @return Negotiated storage, or the provisional storage while negotiation is pending.
+     */
+    uint32_t capture_buffer_type() const {
+      if (mem_type == platf::mem_type_e::cuda && !display_is_nvidia) {
+        return SPA_DATA_MemPtr;
+      }
+      if (buffer_type != SPA_ID_INVALID) {
+        return buffer_type;
+      }
+      // Keep Vulkan's dummy-frame probe and portal retry reachable. Snapshot
+      // still rejects a real memory frame before it can reach the VRAM converter.
+      if (mem_type == platf::mem_type_e::vulkan && n_dmabuf_infos > 0) {
+        return SPA_DATA_DmaBuf;
+      }
+      return SPA_DATA_MemPtr;
+    }
+
   protected:
-    // Allow subclasses to access for pipewire requirements setup and stream dead checks
+    /**
+     * @brief Wait for format negotiation, without substituting a format if it is still pending.
+     * @param timeout Maximum time to wait for dimensions and a buffer type.
+     */
+    void wait_for_negotiation(std::chrono::milliseconds timeout) {
+      const auto deadline = std::chrono::steady_clock::now() + timeout;
+      int negotiated_w;
+      int negotiated_h;
+      while (true) {
+        buffer_type = shared_state->buffer_type.load();
+        negotiated_w = shared_state->negotiated_width.load();
+        negotiated_h = shared_state->negotiated_height.load();
+        if ((negotiated_w > 0 && negotiated_h > 0 && buffer_type != SPA_ID_INVALID) || shared_state->stream_dead.load() || std::chrono::steady_clock::now() >= deadline) {
+          break;
+        }
+        std::this_thread::sleep_for(10ms);
+      }
+      if (buffer_type == SPA_ID_INVALID) {
+        BOOST_LOG(warning) << "[pipewire] Buffer negotiation still pending; using provisional converter selection"sv;
+      }
+
+      // Set width and height to the values negotiated by pipewire
+      if (negotiated_w > 0 && negotiated_h > 0 && (negotiated_w != width || negotiated_h != height)) {
+        width = negotiated_w;
+        height = negotiated_h;
+        BOOST_LOG(info) << "[pipewire] Using negotiated Resolution: "sv << width << "x" << height;
+
+        // Reset and update display parameters for negotiated resolution
+        env_width = 0;
+        env_height = 0;
+        logical_height = 0;
+        logical_width = 0;
+        env_logical_height = 0;
+        env_logical_width = 0;
+        verify_and_update_display_parameters();
+      }
+    }
+
+    /**
+     * @brief Consume a dead-stream notification and run the backend's recovery hook.
+     * @return No status for a live stream; a capture status for a dead stream.
+     */
+    std::optional<platf::capture_e> dead_stream_status() {
+      if (!shared_state->stream_dead.exchange(false)) {
+        return std::nullopt;
+      }
+      if (platf::capture_e status; check_stream_dead(status)) {
+        return status;
+      }
+      BOOST_LOG(warning) << "[pipewire] PipeWire stream disconnected. Forcing session reset."sv;
+      return platf::capture_e::reinit;
+    }
+
+    /**
+     * @brief Copy the available frame using the storage expected by the converter.
+     * @param img Destination image.
+     * @param expected_type Storage expected by the selected converter.
+     * @return Status of the copy, including reinit on a storage change.
+     */
+    virtual platf::capture_e fill_capture_frame(platf::img_t *img, uint32_t expected_type) {
+      return pipewire.fill_img(img, expected_type);
+    }
+
+    /**
+     * @brief Construct the platform converter for the selected encoder and buffer path.
+     * @param type Encoder memory type.
+     * @param vram Whether to use a DMA-BUF converter rather than the memory path.
+     * @return The encode device that will consume captured frames.
+     */
+    virtual std::unique_ptr<platf::avcodec_encode_device_t> make_converter(platf::mem_type_e type, bool vram) {
+#ifdef SUNSHINE_BUILD_VAAPI
+      if (type == platf::mem_type_e::vaapi) {
+        return va::make_avcodec_encode_device(width, height, vram);
+      }
+#endif
+#ifdef SUNSHINE_BUILD_VULKAN
+      if (type == platf::mem_type_e::vulkan) {
+        return vk::make_avcodec_encode_device_vram(width, height, 0, 0);
+      }
+#endif
+#ifdef SUNSHINE_BUILD_CUDA
+      if (type == platf::mem_type_e::cuda) {
+        if (vram) {
+          return cuda::make_avcodec_gl_encode_device(width, height, 0, 0);
+        }
+        return cuda::make_avcodec_encode_device(width, height, false);
+      }
+#endif
+      return std::make_unique<platf::avcodec_encode_device_t>();
+    }
+
+    platf::mem_type_e mem_type = platf::mem_type_e::system;  ///< Requested encoder memory type.
+    int n_dmabuf_infos = 0;  ///< Number of locally importable DMA-BUF formats advertised at startup.
+    bool display_is_nvidia = false;  ///< Whether CUDA can import DMA-BUFs from the display GPU.
     pipewire_t pipewire;  ///< Pipewire.
     std::shared_ptr<shared_state_t> shared_state;  ///< Shared state.
   };
