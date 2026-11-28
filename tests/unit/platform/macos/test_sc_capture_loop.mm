@@ -275,4 +275,13 @@ TEST(SCCaptureLoop, StopDelegateMarksStreamFailedUnlessStopping) {
     [capture release];
   }
 }
+
+TEST(SCCaptureLoop, PrivacyIndicatorWindowIsRecognized) {
+  EXPECT_TRUE(SCIsPrivacyIndicatorWindow(@"StatusIndicator", nil));
+  EXPECT_TRUE(SCIsPrivacyIndicatorWindow(@"StatusIndicator", @""));
+  // An app's own window that happens to use the title is still captured.
+  EXPECT_FALSE(SCIsPrivacyIndicatorWindow(@"StatusIndicator", @"com.example.app"));
+  EXPECT_FALSE(SCIsPrivacyIndicatorWindow(@"Menubar", nil));
+  EXPECT_FALSE(SCIsPrivacyIndicatorWindow(nil, nil));
+}
 #endif

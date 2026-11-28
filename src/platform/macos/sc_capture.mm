@@ -39,6 +39,25 @@ static SCShareableContent *copyShareableContent(void) {
   return shareableContent;
 }
 
+BOOL SCIsPrivacyIndicatorWindow(NSString *title, NSString *bundle_identifier) {
+  return [title isEqualToString:@"StatusIndicator"] && bundle_identifier.length == 0;
+}
+
+/**
+ * @brief Collect the privacy indicator windows to exclude from capture.
+ * @param content Shareable content to search, or nil.
+ * @return Autoreleased array of windows; empty when there are none.
+ */
+static NSArray<SCWindow *> *privacyIndicatorWindows(SCShareableContent *content) {
+  NSMutableArray<SCWindow *> *windows = [NSMutableArray array];
+  for (SCWindow *window in content.windows) {
+    if (SCIsPrivacyIndicatorWindow(window.title, window.owningApplication.bundleIdentifier)) {
+      [windows addObject:window];
+    }
+  }
+  return windows;
+}
+
 static BOOL isUsableImageSampleBuffer(CMSampleBufferRef sampleBuffer) {
   return sampleBuffer && CMSampleBufferIsValid(sampleBuffer) && CMSampleBufferGetImageBuffer(sampleBuffer);
 }
@@ -255,7 +274,10 @@ API_AVAILABLE(macos(14.0))
       return nil;
     }
 
-    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
+    // Fresh content, so indicator windows created since the last lookup are excluded too.
+    SCShareableContent *content = copyShareableContent();
+    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:privacyIndicatorWindows(content)];
+    [content release];
     self.contentFilter = filter;
     [filter release];
 
@@ -308,6 +330,40 @@ API_AVAILABLE(macos(14.0))
   [stream release];
 
   BOOST_LOG(info) << "SCCapture stream configured: "sv << self.frameWidth << 'x' << self.frameHeight << " @ "sv << self.frameRate << " fps"sv;
+
+  // Starting the capture is what makes macOS show the privacy indicator, so its windows may only
+  // exist now. Look again shortly after and drop them from the filter.
+  const CGDirectDisplayID displayID = self.displayID;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    SCStream *current = nil;
+    @synchronized(self) {
+      if (self.stopping || self.stream != stream) {
+        return;
+      }
+      current = [self.stream retain];
+    }
+    SCShareableContent *content = copyShareableContent();
+    SCDisplay *display = nil;
+    for (SCDisplay *candidate in content.displays) {
+      if (candidate.displayID == displayID) {
+        display = candidate;
+        break;
+      }
+    }
+    NSArray<SCWindow *> *excluded = privacyIndicatorWindows(content);
+    if (display && excluded.count > 0) {
+      SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:excluded];
+      [current updateContentFilter:filter
+                 completionHandler:^(NSError *update_error) {
+                   if (update_error) {
+                     BOOST_LOG(warning) << "SCCapture could not exclude the privacy indicator: "sv << error_description(update_error);
+                   }
+                 }];
+      [filter release];
+    }
+    [content release];
+    [current release];
+  });
 
   return capture_signal;
 }
