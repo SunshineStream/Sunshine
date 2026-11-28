@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <bitset>
+#include <cmath>
 #include <deque>
 #include <list>
 #include <thread>
@@ -900,6 +901,15 @@ namespace video {
         {"rc"s, NV_ENC_PARAMS_RC_CBR},
         {"multipass"s, &config::video.nv_legacy.multipass},
         {"spatial-aq"s, &config::video.nv_legacy.spatial_aq},
+        // FFmpeg's av1_nvenc ignores AVCodecContext::slices, so the client's slice count is mapped to tiles here
+        // (power-of-two counts, biased toward rows, same as the direct NVENC encoder). Software AV1 decoders
+        // such as dav1d only parallelize a low-latency stream across tiles.
+        {"tile-rows"s, std::function<const std::string(const config_t &)>([](const config_t &cfg) {
+           return cfg.slicesPerFrame > 1 ? std::to_string((int) std::pow(2, std::ceil(std::log2(cfg.slicesPerFrame) / 2))) : "-1"s;
+         })},
+        {"tile-columns"s, std::function<const std::string(const config_t &)>([](const config_t &cfg) {
+           return cfg.slicesPerFrame > 1 ? std::to_string((int) std::pow(2, std::floor(std::log2(cfg.slicesPerFrame) / 2))) : "-1"s;
+         })},
       },
       {},  // SDR-specific options
       {},  // HDR-specific options
