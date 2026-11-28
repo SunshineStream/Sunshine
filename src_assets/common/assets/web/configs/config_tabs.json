@@ -23,6 +23,7 @@
       "touchpad_as_ds4": "enabled",
       "virtualhid_randomize_mac": "enabled",
       "back_button_timeout": -1,
+      "guide_button_combo": "",
       "keyboard": "enabled",
       "key_repeat_delay": 500,
       "key_repeat_frequency": 24.9,

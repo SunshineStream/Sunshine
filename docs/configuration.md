@@ -554,6 +554,32 @@ consent prompt for directory ACLs, so the Web UI shows setup steps for correctin
     </tr>
 </table>
 
+### guide_button_combo
+
+<table>
+    <tr>
+        <td>Description</td>
+        <td colspan="2">
+            Replace a missing Home/Guide button with a simultaneous combination of at least two buttons.
+            Choose from `a`, `b`, `x`, `y`, `l1`, `l2`, `r1`, and `r2`, separated by `+`.
+            Sunshine holds Guide while every selected button is pressed and releases it when any is released.
+            Selected buttons are hidden from the host during the combination; other controls remain available.
+            L2 and R2 count as pressed at half travel. Leave this option unset to disable the combination.
+            The Moonlight client must forward the chosen buttons to Sunshine.
+        </td>
+    </tr>
+    <tr>
+        <td>Default</td>
+        <td colspan="2">Unset (disabled)</td>
+    </tr>
+    <tr>
+        <td>Example</td>
+        <td colspan="2">@code{}
+            guide_button_combo = x+y+l1+r1
+            @endcode</td>
+    </tr>
+</table>
+
 ### keyboard
 
 <table>

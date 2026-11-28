@@ -73,6 +73,28 @@ const config = ref(props.config)
 const keybindingPairs = ref(parseKeybindings(config.value.keybindings))
 
 const vigembusGamepads = new Set(['auto', 'x360', 'ds4'])
+const guideButtons = [
+  { value: 'a', label: 'A' },
+  { value: 'b', label: 'B' },
+  { value: 'x', label: 'X' },
+  { value: 'y', label: 'Y' },
+  { value: 'l1', label: 'L1' },
+  { value: 'l2', label: 'L2' },
+  { value: 'r1', label: 'R1' },
+  { value: 'r2', label: 'R2' },
+]
+const guideButtonSelection = computed({
+  get: () => {
+    const selected = new Set(String(config.value.guide_button_combo ?? '').split('+'))
+    return guideButtons.filter(button => selected.has(button.value)).map(button => button.value)
+  },
+  set: values => {
+    config.value.guide_button_combo = guideButtons
+      .filter(button => values.includes(button.value))
+      .map(button => button.value)
+      .join('+')
+  },
+})
 const vigembusOnly = computed(() => props.platform === 'windows' && config.value.gamepad_driver === 'vigembus')
 const gamepadDriverSelection = computed({
   get: () => props.platform === 'macos' && !config.value.gamepad_driver ? 'virtualhid' : config.value.gamepad_driver,
@@ -216,6 +238,22 @@ watch(
              v-model="config.back_button_timeout" />
       <div class="form-text">{{ $t('config.back_button_timeout_desc') }}</div>
     </div>
+
+    <fieldset class="mb-3" v-if="config.controller === 'enabled' && config.gamepad_driver !== 'none'">
+      <legend class="form-label fs-6">{{ $t('config.guide_button_combo') }}</legend>
+      <div class="d-flex flex-wrap gap-3">
+        <div v-for="button in guideButtons" :key="button.value" class="form-check">
+          <input :id="`guide-button-${button.value}`" v-model="guideButtonSelection"
+                 class="form-check-input" type="checkbox" :value="button.value"
+                 aria-describedby="guide_button_combo_desc" />
+          <label class="form-check-label" :for="`guide-button-${button.value}`">{{ button.label }}</label>
+        </div>
+      </div>
+      <div id="guide_button_combo_desc" class="form-text">{{ $t('config.guide_button_combo_desc') }}</div>
+      <div v-if="guideButtonSelection.length === 1" class="text-warning small">
+        {{ $t('config.guide_button_combo_need_two') }}
+      </div>
+    </fieldset>
 
     <!-- Enable Keyboard Input -->
     <hr>

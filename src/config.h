@@ -7,6 +7,7 @@
 // standard includes
 #include <bitset>
 #include <chrono>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -43,6 +44,8 @@ namespace config {
   inline constexpr std::string_view GAMEPAD_DRIVER_VIRTUALHID = "virtualhid";  ///< Use Virtual HID Broker for gamepads on Windows or macOS.
   inline constexpr std::string_view GAMEPAD_DRIVER_VIGEMBUS = "vigembus";  ///< Allow only ViGEmBus for Windows gamepads.
   inline constexpr std::string_view GAMEPAD_DRIVER_NONE = "none";  ///< Disable virtual gamepads on Windows and macOS.
+  inline constexpr std::uint32_t GUIDE_COMBO_L2 = 1u << 24;  ///< Internal bit representing a pressed left trigger in a Guide combination.
+  inline constexpr std::uint32_t GUIDE_COMBO_R2 = 1u << 25;  ///< Internal bit representing a pressed right trigger in a Guide combination.
 
   // track modified config options
   inline config_map_t modified_config_settings;  ///< Configuration keys changed during the current parse or UI update.
@@ -304,6 +307,7 @@ namespace config {
     std::unordered_map<int, int> keybindings;  ///< Client keycode to platform keycode bindings.
 
     std::chrono::milliseconds back_button_timeout;  ///< Hold duration that turns a controller Back button into a special action.
+    std::uint32_t guide_button_combo;  ///< Button mask that substitutes a held Guide button, or zero when disabled.
     std::chrono::milliseconds key_repeat_delay;  ///< Delay before repeating a held keyboard key.
     std::chrono::duration<double> key_repeat_period;  ///< Interval between repeated keyboard key events.
 
@@ -443,6 +447,14 @@ namespace config {
    * @return Parsed configuration key-value entries.
    */
   config_map_t parse_config(const std::string_view &file_content);
+
+  /**
+   * @brief Parse a plus-separated Guide button combination from configuration.
+   *
+   * @param value Button names chosen from a, b, x, y, l1, l2, r1, and r2.
+   * @return Button mask, or no value when the combination is invalid.
+   */
+  std::optional<std::uint32_t> parse_guide_button_combo(std::string_view value);
 
   /**
    * @brief Persist a configuration option when the active file does not already define it.

@@ -8,6 +8,7 @@
 
 // standard includes
 #include <array>
+#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <string>
@@ -16,6 +17,7 @@
 // local includes
 #include <src/config.h>
 #include <src/file_handler.h>
+#include <src/platform/common.h>
 #include <src/utility.h>
 
 using namespace std::literals;
@@ -61,6 +63,17 @@ TEST(ConfigParsingTest, DuplicateKeysPreserveFirstValueAfterIgnoredEmptyEntry) {
 
 TEST(ConfigDefaultsTest, UsesAutomaticGamepadSelection) {
   EXPECT_EQ(config::input.gamepad, "auto");
+  EXPECT_EQ(config::input.guide_button_combo, 0);
+}
+
+TEST(ConfigParsingTest, ValidatesGuideButtonCombinations) {
+  EXPECT_EQ(config::parse_guide_button_combo(""), 0);
+  EXPECT_EQ(config::parse_guide_button_combo("x+y+l1+r1"), platf::X | platf::Y | platf::LEFT_BUTTON | platf::RIGHT_BUTTON);
+  EXPECT_EQ(config::parse_guide_button_combo("a+b"), platf::A | platf::B);
+  EXPECT_EQ(config::parse_guide_button_combo("a+l2+r2"), platf::A | config::GUIDE_COMBO_L2 | config::GUIDE_COMBO_R2);
+  for (const auto invalid : {"x", "x+x", "x+home", "x+y+", "+x+y", "x++y"}) {
+    EXPECT_FALSE(config::parse_guide_button_combo(invalid).has_value()) << invalid;
+  }
 }
 
 TEST(ConfigDefaultsTest, TreatsFp16SdrCapturesAsLinear) {
@@ -121,6 +134,7 @@ namespace {
       original_config_file_ = config::sunshine.config_file;
       original_gamepad_driver_ = config::input.gamepad_driver;
       original_gamepad_ = config::input.gamepad;
+      original_guide_button_combo_ = config::input.guide_button_combo;
       original_apps_file_ = config::stream.file_apps;
       config_file_ = std::filesystem::temp_directory_path() / "sunshine_test_config_persistence.conf";  // NOSONAR(cpp:S5443): safe for tests
       std::filesystem::remove(config_file_);
@@ -135,6 +149,7 @@ namespace {
       config::sunshine.config_file = std::move(original_config_file_);
       config::input.gamepad_driver = std::move(original_gamepad_driver_);
       config::input.gamepad = std::move(original_gamepad_);
+      config::input.guide_button_combo = original_guide_button_combo_;
       config::stream.file_apps = std::move(original_apps_file_);
       std::filesystem::remove(config_file_.parent_path() / "sunshine_test_config_apps.json");
       std::filesystem::remove(config_file_);
@@ -154,6 +169,7 @@ namespace {
     std::string original_config_file_;  ///< Active configuration path restored after each test.
     std::string original_gamepad_driver_;  ///< Gamepad driver preference restored after each test.
     std::string original_gamepad_;  ///< Gamepad profile restored after each test.
+    std::uint32_t original_guide_button_combo_ {};  ///< Guide combination restored after each test.
     std::string original_apps_file_;  ///< Applications file path restored after each test.
   };
 
@@ -206,6 +222,18 @@ TEST_F(ConfigPersistenceTest, AcceptsAllGamepadProfilesAcrossRepeatedConfigurati
     config::apply_config_for_test(std::string {"gamepad = "} + std::string {profile} + "\n");
     EXPECT_EQ(config::input.gamepad, profile);
   }
+}
+
+TEST_F(ConfigPersistenceTest, AppliesAndRejectsGuideButtonCombinations) {
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  config::apply_config_for_test("guide_button_combo = x+y+l1+r1\n");
+  EXPECT_EQ(config::input.guide_button_combo, platf::X | platf::Y | platf::LEFT_BUTTON | platf::RIGHT_BUTTON);
+
+  config::apply_config_for_test("guide_button_combo = x\n");
+  EXPECT_EQ(config::input.guide_button_combo, 0);
 }
 
 TEST_F(ConfigPersistenceTest, ParsesFp16SdrGammaEncodedOption) {
