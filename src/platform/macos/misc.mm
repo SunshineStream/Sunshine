@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <future>
 #include <memory>
+#include <mutex>
 
 // platform includes
 #include <AppKit/AppKit.h>
@@ -28,6 +29,7 @@
 #include <ifaddrs.h>
 #include <mach-o/dyld.h>
 #include <net/if_dl.h>
+#include <objc/runtime.h>
 #include <pwd.h>
 #include <sys/qos.h>
 #include <UserNotifications/UserNotifications.h>
@@ -903,6 +905,57 @@ namespace platf {
 
   std::string resolve_render_device() {
     return {};
+  }
+
+  void install_event_compatibility_fixes();
+}  // namespace platf
+
+@interface NSEvent (SunshineSafeClickCount)
+- (NSInteger)sunshine_safeClickCount;
+@end
+
+@implementation NSEvent (SunshineSafeClickCount)
+
+/**
+ * @brief Provide safe click count for AppKit events.
+ *
+ * @return Click count for mouse events, or 1 for non-mouse events.
+ */
+- (NSInteger)sunshine_safeClickCount {
+  const NSEventType event_type = [self type];
+  switch (event_type) {
+    case NSEventTypeLeftMouseDown:
+    case NSEventTypeLeftMouseUp:
+    case NSEventTypeRightMouseDown:
+    case NSEventTypeRightMouseUp:
+    case NSEventTypeOtherMouseDown:
+    case NSEventTypeOtherMouseUp:
+      @try {
+        return [self sunshine_safeClickCount];
+      } @catch (NSException *) {
+        return 1;
+      }
+    default:
+      return 1;
+  }
+}
+
+@end
+
+namespace platf {
+  void install_event_compatibility_fixes() {
+    static std::once_flag flag;
+    std::call_once(flag, []() {
+      Class event_class = [NSEvent class];
+      SEL original_selector = @selector(clickCount);
+      SEL swizzled_selector = @selector(sunshine_safeClickCount);
+      Method original_method = class_getInstanceMethod(event_class, original_selector);
+      Method swizzled_method = class_getInstanceMethod(event_class, swizzled_selector);
+      if (original_method && swizzled_method) {
+        method_exchangeImplementations(original_method, swizzled_method);
+        BOOST_LOG(info) << "Installed macOS AppKit event compatibility fixes"sv;
+      }
+    });
   }
 }  // namespace platf
 
