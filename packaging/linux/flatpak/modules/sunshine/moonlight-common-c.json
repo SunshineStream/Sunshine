@@ -8,7 +8,7 @@
       "ref": "master"
     },
     "url": "https://github.com/moonlight-stream/moonlight-common-c.git",
-    "commit": "b4ee1cea3d19e13c0b37c26585e6b1ee174effcb",
+    "commit": "b618ef257573b49d779ed8bf47ff1f46deca7154",
     "dest": "flatpak-cpm/moonlight-common-c"
   }
 ]
