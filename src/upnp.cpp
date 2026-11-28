@@ -4,6 +4,11 @@
  */
 // standard includes
 #include <array>
+#include <bit>
+#include <filesystem>
+#include <fstream>
+#include <set>
+#include <sstream>
 #include <stddef.h>  // workaround for type_t error in miniupnpc 2.3.3, see https://github.com/miniupnp/miniupnp/commit/e263ab6f56c382e10fed31347ec68095d691a0e8
 
 // lib includes
@@ -20,6 +25,7 @@
 #include "rtsp.h"
 #include "stream.h"
 #include "upnp.h"
+#include "upnp_mapping.h"
 #include "utility.h"
 
 using namespace std::literals;
@@ -38,6 +44,52 @@ namespace upnp {
 
     std::string description;  ///< Human-readable UPnP lease description advertised to the gateway.
   };
+
+  /**
+   * @brief A discovered IGD and the data needed to manage its port mappings.
+   */
+  struct igd_t {
+    std::string host;  ///< Address of the IGD, taken from its description URL.
+    urls_t urls;  ///< Control URLs of the IGD.
+    IGDdatas data {};  ///< Service data of the IGD.
+  };
+
+  /**
+   * @brief Describe the discovered IGDs other than the one already in the list.
+   * @param device Device list from upnpDiscover().
+   * @param igds List holding the IGD chosen by UPNP_GetValidIGD(); the other IGDs are appended to it.
+   */
+  static void add_other_igds(const device_t &device, std::vector<igd_t> &igds) {
+    std::set<std::string, std::less<>> seen {igds.front().urls->rootdescURL};
+    for (auto dev = device.get(); dev != nullptr; dev = dev->pNext) {
+      if (!seen.emplace(dev->descURL).second) {
+        continue;
+      }
+
+      igd_t igd;
+      std::array<char, INET6_ADDRESS_STRLEN> lan_addr {};
+      if (UPNP_GetIGDFromUrl(dev->descURL, &igd.urls.el, &igd.data, lan_addr.data(), (int) lan_addr.size()) != 1 || igd.urls->controlURL == nullptr || igd.urls->controlURL[0] == 0 || igd.data.first.servicetype[0] == 0) {
+        continue;
+      }
+
+      igd.host = url_host(dev->descURL);
+      igds.emplace_back(std::move(igd));
+    }
+  }
+
+  /**
+   * @brief Get the external address an IGD reports.
+   * @param igd The IGD to ask.
+   * @return The external address, or an empty string if the IGD doesn't report one.
+   */
+  static std::string external_address(const igd_t &igd) {
+    std::array<char, INET6_ADDRESS_STRLEN> addr {};
+    if (UPNP_GetExternalIPAddress(igd.urls->controlURL, igd.data.first.servicetype, addr.data()) != UPNPCOMMAND_SUCCESS) {
+      return {};
+    }
+
+    return addr.data();
+  }
 
   static std::string_view status_string(igd_status_e status) {
     using enum igd_status_e;
@@ -85,6 +137,148 @@ namespace upnp {
         return true;
       default:
         return false;
+    }
+  }
+
+  /**
+   * @brief Check whether a value is a private (LAN) IPv4 address.
+   * @param address The value to check.
+   * @return `true` if `address` is an IPv4 address in a private, shared or link-local range.
+   */
+  static bool is_private_ipv4(std::string_view address) {
+    boost::system::error_code ec;
+    const auto addr = boost::asio::ip::make_address_v4(std::string {address}, ec);
+    return !ec && net::from_address(addr.to_string()) == net::LAN;
+  }
+
+  int shared_prefix_length(std::string_view a, std::string_view b) {
+    boost::system::error_code ec_a;
+    boost::system::error_code ec_b;
+    const auto addr_a = boost::asio::ip::make_address_v4(std::string {a}, ec_a);
+    const auto addr_b = boost::asio::ip::make_address_v4(std::string {b}, ec_b);
+    if (ec_a || ec_b) {
+      return -1;
+    }
+
+    return std::countl_zero(addr_a.to_uint() ^ addr_b.to_uint());
+  }
+
+  std::string url_host(std::string_view url) {
+    if (const auto scheme = url.find("://"sv); scheme != std::string_view::npos) {
+      url.remove_prefix(scheme + 3);
+    }
+
+    if (url.starts_with('[')) {
+      return std::string {url.substr(1, url.find(']') - 1)};
+    }
+
+    return std::string {url.substr(0, url.find_first_of(":/"sv))};
+  }
+
+  std::size_t select_inner_igd(const std::vector<std::string> &igd_hosts, std::string_view lan_addr) {
+    std::size_t best = 0;
+    int best_bits = -1;
+    for (std::size_t i = 0; i < igd_hosts.size(); ++i) {
+      if (const auto bits = shared_prefix_length(igd_hosts[i], lan_addr); bits > best_bits) {
+        best = i;
+        best_bits = bits;
+      }
+    }
+
+    return best;
+  }
+
+  std::optional<std::size_t> select_outer_igd(const std::vector<std::string> &igd_hosts, std::size_t inner, std::string_view inner_external_addr) {
+    // A public external address means the inner gateway is the edge router: there is nothing in front of it to map.
+    if (!is_private_ipv4(inner_external_addr)) {
+      return std::nullopt;
+    }
+
+    // The outer router sits in the same network as the inner gateway's external address.
+    constexpr int min_shared_bits = 16;
+    std::optional<std::size_t> best;
+    int best_bits = min_shared_bits - 1;
+    for (std::size_t i = 0; i < igd_hosts.size(); ++i) {
+      if (i == inner) {
+        continue;
+      }
+
+      if (const auto bits = shared_prefix_length(igd_hosts[i], inner_external_addr); bits > best_bits) {
+        best = i;
+        best_bits = bits;
+      }
+    }
+
+    return best;
+  }
+
+  /**
+   * @brief Gateway calls through MiniUPnPc.
+   */
+  struct miniupnpc_gateway_t {
+    /**
+     * @brief Look up the rule on the requested gateway port.
+     * @param rule Rule whose gateway, service, port and protocol are looked up.
+     * @return The gateway's current rule.
+     */
+    mapping_entry_t lookup(const owned_mapping_t &rule) const {
+      std::array<char, 16> client {};
+      std::array<char, 6> port {};
+      std::array<char, 80> description {};
+      std::array<char, 4> enabled {};
+      std::array<char, 16> lease {};
+      const auto result = UPNP_GetSpecificPortMappingEntry(rule.control_url.c_str(), rule.service.c_str(), rule.external_port.c_str(), rule.protocol.c_str(), nullptr, client.data(), port.data(), description.data(), enabled.data(), lease.data());
+      return {result, client.data(), port.data(), description.data(), enabled.data(), lease.data()};
+    }
+
+    /**
+     * @brief Add or renew a rule.
+     * @param rule Rule to add.
+     * @param lease Requested lease in seconds, `0` for a rule without expiry.
+     * @return MiniUPnPc result.
+     */
+    int add(const owned_mapping_t &rule, const std::string &lease) const {
+      return UPNP_AddPortMapping(rule.control_url.c_str(), rule.service.c_str(), rule.external_port.c_str(), rule.internal_port.c_str(), rule.target.c_str(), rule.description.c_str(), rule.protocol.c_str(), nullptr, lease.c_str());
+    }
+
+    /**
+     * @brief Remove a rule.
+     * @param rule Rule to remove.
+     * @return MiniUPnPc result.
+     */
+    int remove(const owned_mapping_t &rule) const {
+      return UPNP_DeletePortMapping(rule.control_url.c_str(), rule.service.c_str(), rule.external_port.c_str(), rule.protocol.c_str(), nullptr);
+    }
+  };
+
+  static_assert(mapping_gateway<miniupnpc_gateway_t>);
+
+  /**
+   * @brief Log a mapping attempt that left the port closed.
+   * @param rule Requested rule.
+   * @param outcome Mapping outcome.
+   * @param error Last gateway result.
+   */
+  static void report_mapping(const owned_mapping_t &rule, map_outcome_e outcome, int error) {
+    switch (outcome) {
+      case map_outcome_e::conflict:
+        BOOST_LOG(warning) << "UPnP port "sv << rule.external_port << " already forwards elsewhere; leaving it unchanged"sv;
+        break;
+      case map_outcome_e::disabled:
+        BOOST_LOG(warning) << "UPnP port "sv << rule.external_port << " has a disabled manual mapping; leaving it unchanged"sv;
+        break;
+      case map_outcome_e::unknown:
+        BOOST_LOG(warning) << "UPnP mapping ownership could not be checked: "sv << error;
+        break;
+      case map_outcome_e::failed:
+        BOOST_LOG(warning) << "Failed to map "sv << rule.protocol << ' ' << rule.external_port << ": "sv << error;
+        break;
+      case map_outcome_e::mapped:
+      case map_outcome_e::reused:
+      case map_outcome_e::unrecorded:
+      case map_outcome_e::cancelled:
+        // Open ports need no message; recording failures are logged where they happen.
+        break;
     }
   }
 
@@ -195,137 +389,178 @@ namespace upnp {
     }
 
     /**
-     * @brief Maps a port via UPnP.
-     * @param data IGDdatas from UPNP_GetValidIGD()
-     * @param urls urls_t from UPNP_GetValidIGD()
-     * @param lan_addr Local IP address to map to
-     * @param mapping Information about port to map
-     * @return `true` on success.
+     * @brief Append recovery intent before creating a permanent rule, or completion after removing it.
+     * @param mapping Rule to record.
+     * @param added Whether this records creation intent.
+     * @return Whether the complete event reached the file stream successfully.
      */
-    bool map_upnp_port(const IGDdatas &data, const urls_t &urls, const std::string &lan_addr, const mapping_t &mapping) {
-      std::array<char, 16> intClient;
-      std::array<char, 6> intPort;
-      std::array<char, 80> desc;
-      std::array<char, 4> enabled;
-      std::array<char, 16> leaseDuration;
-      bool indefinite = false;
-
-      // First check if this port is already mapped successfully
-      BOOST_LOG(debug) << "Checking for existing UPnP port mapping for "sv << mapping.port.wan;
-      auto err = UPNP_GetSpecificPortMappingEntry(
-        urls->controlURL,
-        data.first.servicetype,
-        // In params
-        mapping.port.wan.c_str(),
-        mapping.port.proto.c_str(),
-        nullptr,
-        // Out params
-        intClient.data(),
-        intPort.data(),
-        desc.data(),
-        enabled.data(),
-        leaseDuration.data()
-      );
-      if (err == 714) {  // NoSuchEntryInArray
-        BOOST_LOG(debug) << "Mapping entry not found for "sv << mapping.port.wan;
-      } else if (err == UPNPCOMMAND_SUCCESS) {
-        // Some routers change the description, so we can't check that here
-        if (std::string_view {intClient.data()} == lan_addr) {
-          if (std::atoi(leaseDuration.data()) == 0) {
-            BOOST_LOG(debug) << "Static mapping entry found for "sv << mapping.port.wan;
-
-            // It's a static mapping, so we're done here
-            return true;
-          } else {
-            BOOST_LOG(debug) << "Mapping entry found for "sv << mapping.port.wan << " ("sv << leaseDuration.data() << " seconds remaining)"sv;
-          }
-        } else {
-          BOOST_LOG(warning) << "UPnP conflict detected with: "sv << intClient.data();
-
-          // Some UPnP IGDs won't let unauthenticated clients delete other conflicting port mappings
-          // for security reasons, but we will give it a try anyway.
-          err = UPNP_DeletePortMapping(
-            urls->controlURL,
-            data.first.servicetype,
-            mapping.port.wan.c_str(),
-            mapping.port.proto.c_str(),
-            nullptr
-          );
-          if (err) {
-            BOOST_LOG(error) << "Unable to delete conflicting UPnP port mapping: "sv << err;
-            return false;
-          }
-        }
-      } else {
-        BOOST_LOG(error) << "UPNP_GetSpecificPortMappingEntry() failed: "sv << err;
-
-        // If we get a strange error from the router, we'll assume it's some old broken IGDv1
-        // device and only use indefinite lease durations to hopefully avoid confusing it.
-        if (err != 606) {  // Unauthorized
-          indefinite = true;
-        }
-      }
-
-      // Add/update the port mapping
-      auto mapping_period = std::to_string(indefinite ? 0 : PORT_MAPPING_LIFETIME.count());
-      err = UPNP_AddPortMapping(
-        urls->controlURL,
-        data.first.servicetype,
-        mapping.port.wan.c_str(),
-        mapping.port.lan.c_str(),
-        lan_addr.data(),
-        mapping.description.c_str(),
-        mapping.port.proto.c_str(),
-        nullptr,
-        mapping_period.c_str()
-      );
-
-      if (err != UPNPCOMMAND_SUCCESS && !indefinite) {
-        // This may be an old/broken IGD that doesn't like non-static mappings.
-        BOOST_LOG(debug) << "Trying static mapping after failure: "sv << err;
-        err = UPNP_AddPortMapping(
-          urls->controlURL,
-          data.first.servicetype,
-          mapping.port.wan.c_str(),
-          mapping.port.lan.c_str(),
-          lan_addr.data(),
-          mapping.description.c_str(),
-          mapping.port.proto.c_str(),
-          nullptr,
-          "0"
-        );
-      }
-
-      if (err) {
-        BOOST_LOG(error) << "Failed to map "sv << mapping.port.proto << ' ' << mapping.port.lan << ": "sv << err;
+    bool journal_mapping(const owned_mapping_t &mapping, bool added) {
+      const auto event = mapping_journal_event(mapping, added);
+      if (event.empty()) {
+        BOOST_LOG(warning) << "Invalid UPnP recovery identity; refusing an unrecorded permanent mapping"sv;
         return false;
       }
-
-      BOOST_LOG(debug) << "Successfully mapped "sv << mapping.port.proto << ' ' << mapping.port.lan;
+      std::ofstream out {journal_path(), std::ios::app};
+      out << event;
+      out.flush();
+      out.close();
+      if (!out) {
+        BOOST_LOG(warning) << "Could not update UPnP recovery journal; refusing an unrecorded permanent mapping"sv;
+        return false;
+      }
       return true;
     }
 
     /**
-     * @brief Unmaps all ports.
-     * @param urls urls_t from UPNP_GetValidIGD()
-     * @param data IGDdatas from UPNP_GetValidIGD()
+     * @brief Remember a rule independently of discovery and persist permanent-rule intent before adding it.
+     * @param mapping Rule owned by Sunshine.
+     * @return Whether the rule can safely be managed.
      */
-    void unmap_all_upnp_ports(const urls_t &urls, const IGDdatas &data) {
-      for (auto it = std::begin(mappings); it != std::end(mappings); ++it) {
-        auto status = UPNP_DeletePortMapping(
-          urls->controlURL,
-          data.first.servicetype,
-          it->port.wan.c_str(),
-          it->port.proto.c_str(),
-          nullptr
-        );
-
-        if (status && status != 714) {  // NoSuchEntryInArray
-          BOOST_LOG(warning) << "Failed to unmap "sv << it->port.proto << ' ' << it->port.lan << ": "sv << status;
-        } else {
-          BOOST_LOG(debug) << "Successfully unmapped "sv << it->port.proto << ' ' << it->port.lan;
-        }
+    bool remember_mapping(owned_mapping_t mapping) {
+      auto found = std::find(owned_mappings.begin(), owned_mappings.end(), mapping);
+      if (mapping.permanent && (found == owned_mappings.end() || !found->permanent) && !journal_mapping(mapping, true)) {
+        return false;
       }
+      if (found == owned_mappings.end()) {
+        owned_mappings.push_back(std::move(mapping));
+      } else {
+        found->generation = generation;
+        found->permanent = found->permanent || mapping.permanent;
+      }
+      return true;
+    }
+
+    /**
+     * @brief Remove only recorded rules whose current destination, port and description still match.
+     * @param stale_only Whether to retain rules wanted by the current discovery pass.
+     */
+    void unmap_owned_ports(bool stale_only = false) {
+      const miniupnpc_gateway_t gateway {};
+      std::erase_if(owned_mappings, [this, stale_only, &gateway](const owned_mapping_t &owned) {
+        if (stale_only && owned.generation == generation) {
+          return false;
+        }
+        const auto entry = gateway.lookup(owned);
+        const auto state = classify_mapping(entry.result, entry.client, entry.port, entry.description, owned);
+        if (state == mapping_state_e::unknown) {
+          BOOST_LOG(warning) << "Could not check UPnP rule for cleanup: "sv << owned.control_url << ' ' << owned.external_port;
+          return false;
+        }
+        if (state == mapping_state_e::ours) {
+          const auto removed = gateway.remove(owned);
+          if (removed != UPNPCOMMAND_SUCCESS && removed != 714) {
+            BOOST_LOG(warning) << "Failed to remove UPnP rule: "sv << removed;
+            return false;
+          }
+        }
+        // Missing or replaced rules are forgotten without deleting the replacement.
+        return !owned.permanent || journal_mapping(owned, false);
+      });
+      if (std::none_of(owned_mappings.begin(), owned_mappings.end(), [](const auto &mapping) {
+            return mapping.permanent;
+          })) {
+        std::error_code ec;
+        std::filesystem::remove(journal_path(), ec);
+      }
+    }
+
+    /**
+     * @brief Maps every port on an IGD, stopping early on shutdown.
+     * @param igd The IGD to map the ports on.
+     * @param addr Address the ports are forwarded to.
+     * @return Whether every requested mapping succeeded before shutdown.
+     */
+    bool map_all_upnp_ports(const igd_t &igd, const std::string &addr) {
+      std::vector<owned_mapping_t> rules;
+      for (const auto &mapping : mappings) {
+        owned_mapping_t rule {igd.urls->controlURL, igd.data.first.servicetype, addr, mapping.port.wan, mapping.port.lan, mapping.port.proto, mapping.description, false, generation};
+        // A failed refresh must not forget a rule that was successfully added earlier.
+        for (auto &owned : owned_mappings) {
+          if (owned == rule) {
+            owned.generation = generation;
+          }
+        }
+        rules.push_back(std::move(rule));
+      }
+
+      auto shutdown_event = mail::man->event<bool>(mail::shutdown);
+      const miniupnpc_gateway_t gateway {};
+      return map_ports(
+        gateway,
+        rules,
+        std::to_string(PORT_MAPPING_LIFETIME.count()),
+        [this](const owned_mapping_t &rule) {
+          return remember_mapping(rule);
+        },
+        [&shutdown_event]() {
+          return shutdown_event->peek();
+        },
+        report_mapping
+      );
+    }
+
+    /**
+     * @brief Find the IGD of the network this host is attached to.
+     * @details Behind two routers, the IGD chosen by UPNP_GetValidIGD() may be the outer one, which can't reach
+     * this host. The other IGDs that answered discovery are described and the closest one is selected.
+     * @param device Device list from upnpDiscover().
+     * @param igds List holding the IGD chosen by UPNP_GetValidIGD(); the other IGDs are appended to it.
+     * @param igd_hosts Receives the address of each IGD in `igds`.
+     * @param lan_addr This host's local address.
+     * @return Index of the selected IGD in `igds`.
+     */
+    static std::size_t find_gateway(const device_t &device, std::vector<igd_t> &igds, std::vector<std::string> &igd_hosts, const std::string &lan_addr) {
+      igds.front().host = url_host(igds.front().urls->rootdescURL);
+      add_other_igds(device, igds);
+      for (const auto &igd : igds) {
+        igd_hosts.push_back(igd.host);
+      }
+
+      const auto inner = select_inner_igd(igd_hosts, lan_addr);
+      if (inner != 0) {
+        BOOST_LOG(debug) << "Using the IGD on this host's network instead: "sv << igds[inner].urls->rootdescURL;
+      }
+
+      return inner;
+    }
+
+    /**
+     * @brief Behind double NAT, map the ports on the IGD in front of the gateway.
+     * @details If the gateway's external address is private, the same ports are mapped on the IGD in front of it,
+     * forwarded to the gateway's external address. That IGD is kept to remove the mappings on shutdown.
+     * @param igds The discovered IGDs.
+     * @param igd_hosts Address of each IGD in `igds`.
+     * @param inner Index of the gateway in `igds`.
+     * @param first_pass Whether this is the first mapping pass since the mappings were last completed.
+     */
+    void map_outer_upnp_ports(std::vector<igd_t> &igds, const std::vector<std::string> &igd_hosts, std::size_t inner, bool first_pass) {
+      const auto external_addr = external_address(igds[inner]);
+      const auto outer = select_outer_igd(igd_hosts, inner, external_addr);
+      if (!outer.has_value()) {
+        // A missing reply is not proof that a working outer mapping is obsolete.
+        for (auto &owned : owned_mappings) {
+          if (external_addr.empty() || (is_private_ipv4(external_addr) && owned.target == external_addr)) {
+            owned.generation = generation;
+          }
+        }
+        if (is_private_ipv4(external_addr) && !warned_no_outer_igd) {
+          BOOST_LOG(warning) << "The IGD's external address "sv << external_addr
+                             << " is private and no UPnP IGD answered in front of it: ports must be forwarded on the outer router"sv;
+          warned_no_outer_igd = true;
+        }
+        return;
+      }
+
+      auto &outer_igd = igds[*outer];
+      const bool complete = map_all_upnp_ports(outer_igd, external_addr);
+      if (complete && (first_pass || mapped_outer_host != outer_igd.host)) {
+        BOOST_LOG(info) << "Completed UPnP port mappings to "sv << external_addr << " via "sv << outer_igd.urls->rootdescURL;
+      }
+
+      if (complete) {
+        mapped_outer_host = outer_igd.host;
+      }
+      warned_no_outer_igd = false;
     }
 
     /**
@@ -334,9 +569,25 @@ namespace upnp {
     void upnp_thread_proc() {
       platf::set_thread_name("upnp");
       auto shutdown_event = mail::man->event<bool>(mail::shutdown);
+      std::ifstream journal {journal_path()};
+      std::error_code journal_error;
+      const bool journal_exists = std::filesystem::exists(journal_path(), journal_error);
+      if (journal_error || (journal_exists && !journal.is_open())) {
+        BOOST_LOG(error) << "Could not read UPnP recovery journal; leaving it intact and skipping new mappings"sv;
+        return;
+      }
+      const std::string contents {(std::istreambuf_iterator<char>(journal)), std::istreambuf_iterator<char>()};
+      if (journal.bad()) {
+        BOOST_LOG(error) << "Could not finish reading UPnP recovery journal; leaving it intact"sv;
+        return;
+      }
+      journal.close();
+      owned_mappings = read_mapping_journal(contents);
+      unmap_owned_ports();
+      if (!config::sunshine.flags[config::flag::UPNP]) {
+        return;
+      }
       bool mapped = false;
-      IGDdatas data;
-      urls_t mapped_urls;
       auto address_family = net::get_effective_address_family(net::af_from_enum_string(config::sunshine.address_family));
 
       // Refresh UPnP rules every few minutes. They can be lost if the router reboots,
@@ -356,8 +607,8 @@ namespace upnp {
 
         std::array<char, INET6_ADDRESS_STRLEN> lan_addr;
 
-        urls_t urls;
-        auto status = upnp::UPNP_GetValidIGDStatus(device, &urls, &data, lan_addr);
+        std::vector<igd_t> igds(1);
+        auto status = upnp::UPNP_GetValidIGDStatus(device, &igds.front().urls, &igds.front().data, lan_addr);
         if (!is_valid_igd(status)) {
           BOOST_LOG(error) << status_string(status);
           mapped = false;
@@ -366,15 +617,19 @@ namespace upnp {
 
         std::string lan_addr_str {lan_addr.data()};
 
-        BOOST_LOG(debug) << "Found valid IGD device: "sv << urls->rootdescURL;
+        BOOST_LOG(debug) << "Found valid IGD device: "sv << igds.front().urls->rootdescURL;
 
-        for (auto it = std::begin(mappings); it != std::end(mappings) && !shutdown_event->peek(); ++it) {
-          map_upnp_port(data, urls, lan_addr_str, *it);
+        std::vector<std::string> igd_hosts;
+        const auto inner = find_gateway(device, igds, igd_hosts, lan_addr_str);
+        ++generation;
+        const bool complete = map_all_upnp_ports(igds[inner], lan_addr_str);
+
+        if (!mapped && complete) {
+          BOOST_LOG(info) << "Completed UPnP port mappings to "sv << lan_addr_str << " via "sv << igds[inner].urls->rootdescURL;
         }
 
-        if (!mapped) {
-          BOOST_LOG(info) << "Completed UPnP port mappings to "sv << lan_addr_str << " via "sv << urls->rootdescURL;
-        }
+        map_outer_upnp_ports(igds, igd_hosts, inner, !mapped);
+        unmap_owned_ports(true);
 
         // If we are listening on IPv6 and the IGD has an IPv6 firewall enabled, try to create IPv6 firewall pinholes
         if (address_family == net::af_e::BOTH) {
@@ -384,18 +639,26 @@ namespace upnp {
           }
         }
 
-        mapped = true;
-        mapped_urls = std::move(urls);
+        mapped = complete;
       } while (!shutdown_event->view(REFRESH_INTERVAL));
 
-      if (mapped) {
-        // Unmap ports upon termination
-        BOOST_LOG(info) << "Unmapping UPNP ports..."sv;
-        unmap_all_upnp_ports(mapped_urls, data);
-      }
+      // Discovery failures and gateway changes never discard ownership records.
+      unmap_owned_ports();
     }
 
-    std::vector<mapping_t> mappings;  ///< Port mappings Sunshine should keep registered with the gateway.
+    /**
+     * @brief Locate the append-only recovery journal used even when UPnP is disabled at the next start.
+     * @return File containing outstanding permanent-rule intents.
+     */
+    static std::filesystem::path journal_path() {
+      return platf::appdata() / "upnp_mappings.journal";
+    }
+
+    std::vector<mapping_t> mappings;  ///< Ports requested by Sunshine.
+    std::vector<owned_mapping_t> owned_mappings;  ///< Rules retained independently of discovery results.
+    std::string mapped_outer_host;  ///< Last outer gateway logged as mapped.
+    std::size_t generation = 0;  ///< Current successful discovery pass.
+    bool warned_no_outer_igd = false;  ///< Whether the missing outer IGD has already been reported.
     std::jthread upnp_thread;  ///< Worker thread that refreshes mappings until shutdown.
   };
 
@@ -403,7 +666,8 @@ namespace upnp {
    * @brief Start UPnP port mapping and return its shutdown guard.
    */
   std::unique_ptr<platf::deinit_t> start() {
-    if (!config::sunshine.flags[config::flag::UPNP]) {
+    std::error_code ec;
+    if (!config::sunshine.flags[config::flag::UPNP] && !std::filesystem::exists(platf::appdata() / "upnp_mappings.journal", ec)) {
       return nullptr;
     }
 

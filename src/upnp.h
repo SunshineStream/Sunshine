@@ -4,6 +4,13 @@
  */
 #pragma once
 
+// standard includes
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
 // lib includes
 #include <miniupnpc/miniupnpc.h>
 
@@ -71,6 +78,45 @@ namespace upnp {
    * @retval igd_status_e::unknown_device An UPnP device has been found but was not recognized as an IGD.
    */
   igd_status_e UPNP_GetValidIGDStatus(device_t &device, urls_t *urls, IGDdatas *data, std::array<char, INET6_ADDRESS_STRLEN> &lan_addr);
+
+  /**
+   * @brief Count the leading bits two IPv4 addresses have in common.
+   * @param a First IPv4 address in dotted notation.
+   * @param b Second IPv4 address in dotted notation.
+   * @return Number of shared leading bits (0 to 32), or -1 if either value is not an IPv4 address.
+   */
+  [[nodiscard]] int shared_prefix_length(std::string_view a, std::string_view b);
+
+  /**
+   * @brief Extract the host from a URL such as `http://192.168.1.1:1900/rootDesc.xml`.
+   * @param url The URL to parse.
+   * @return The host part of the URL, without port or brackets.
+   */
+  [[nodiscard]] std::string url_host(std::string_view url);
+
+  /**
+   * @brief Select the IGD of the network Sunshine is attached to.
+   * @details Behind two routers, the outer router often answers discovery too, and UPNP_GetValidIGD() prefers it
+   * because it has a public address. That router can't reach Sunshine's address, so a mapping there opens nothing.
+   * The gateway Sunshine is attached to is the one whose address shares the most leading bits with Sunshine's own
+   * address. On a tie, the earlier entry wins, so the first entry (the IGD chosen by UPNP_GetValidIGD()) is kept
+   * unless another IGD is strictly closer.
+   * @param igd_hosts Addresses of the discovered IGDs.
+   * @param lan_addr Sunshine's local address.
+   * @return Index of the selected IGD in `igd_hosts`, or 0 if the list is empty.
+   */
+  [[nodiscard]] std::size_t select_inner_igd(const std::vector<std::string> &igd_hosts, std::string_view lan_addr);
+
+  /**
+   * @brief Select the IGD in front of the inner gateway when Sunshine is behind two routers (double NAT).
+   * @details The outer router is only looked for when the inner gateway's external address is private. It is the
+   * other IGD whose address shares the most leading bits (at least 16) with that external address.
+   * @param igd_hosts Addresses of the discovered IGDs.
+   * @param inner Index of the inner gateway in `igd_hosts`.
+   * @param inner_external_addr External address reported by the inner gateway.
+   * @return Index of the outer IGD in `igd_hosts`, or `std::nullopt` if there is none.
+   */
+  [[nodiscard]] std::optional<std::size_t> select_outer_igd(const std::vector<std::string> &igd_hosts, std::size_t inner, std::string_view inner_external_addr);
 
   /**
    * @brief Start UPnP port mapping and return its shutdown guard.
