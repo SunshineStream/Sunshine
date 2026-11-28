@@ -1133,11 +1133,13 @@ namespace vk {
       begin_ci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
       VK_CHECK(vkBeginCommandBuffer(cmd_buf, &begin_ci));
 
-      // Transition source image to SHADER_READ_ONLY
+      // Acquire the imported buffer from the exporting device. Its contents are valid,
+      // so the old layout must describe what the producer left behind (GENERAL), never
+      // UNDEFINED, which would allow the driver to discard them.
       VkImageMemoryBarrier src_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
       src_barrier.srcAccessMask = 0;
       src_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-      src_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+      src_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
       src_barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
       src_barrier.image = src.image;
       src_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
@@ -1186,6 +1188,19 @@ namespace vk {
       uint32_t gx = (frame->width + 15) / 16;
       uint32_t gy = (frame->height + 15) / 16;
       vkCmdDispatch(cmd_buf, gx, gy, 1);
+
+      // Release the buffer back to the exporting device in the layout it owns, so the
+      // producer can reuse it. The next frame acquires it from GENERAL again.
+      VkImageMemoryBarrier release_barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+      release_barrier.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+      release_barrier.dstAccessMask = 0;
+      release_barrier.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      release_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+      release_barrier.image = src.image;
+      release_barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+      release_barrier.srcQueueFamilyIndex = vk_dev.compute_qf;
+      release_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_EXTERNAL;
+      vkCmdPipelineBarrier(cmd_buf, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &release_barrier);
 
       VK_CHECK(vkEndCommandBuffer(cmd_buf));
 
