@@ -17,6 +17,7 @@
 #include <cerrno>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -1178,6 +1179,16 @@ namespace platf {
 
   static std::bitset<source::MAX_FLAGS> sources;
 
+  /**
+   * @brief Replacement for the KMS display check in choose_kms_capture_if_none(), set by tests.
+   *
+   * @return Reference to the replacement, empty outside of tests.
+   */
+  static std::function<bool()> &kms_verifier_for_testing() {
+    static std::function<bool()> verifier;
+    return verifier;
+  }
+
 #ifdef SUNSHINE_BUILD_CUDA
   std::vector<std::string> nvfbc_display_names();
   std::shared_ptr<display_t> nvfbc_display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config);
@@ -1321,9 +1332,75 @@ namespace platf {
 #endif
 
   /**
+   * @brief Whether KMS may still be chosen when no capture method was found at startup.
+   *
+   * KMS is the method whose availability depends on a display being lit at the moment it is checked. The others
+   * depend on the session's environment or on a portal permission, which are settled at startup.
+   *
+   * @return `true` when KMS capture is built and the configured capture method is KMS or automatic.
+   */
+  static bool kms_retry_allowed() {
+#ifdef SUNSHINE_BUILD_DRM
+    return config::video.capture.empty() || config::video.capture == "kms";
+#else
+    return false;
+#endif
+  }
+
+  /**
+   * @brief Log why no capture method was found at startup and whether initialization can go on.
+   *
+   * With KMS, no capture method only means that no display is lit yet (every screen blanked by power saving at
+   * startup). display_names() and display() check KMS again before each probe, so a display lit later is used;
+   * giving up here left the process without capture until it was restarted.
+   *
+   * @return `true` when KMS is checked again before each stream; `false` when initialization must fail.
+   */
+  static bool continue_without_capture_method() {
+    if (!kms_retry_allowed()) {
+      BOOST_LOG(error) << "Unable to initialize capture method"sv;
+      log_missing_graphical_session_hint();
+      return false;
+    }
+    BOOST_LOG(warning) << "No display lit to capture yet: checking KMS again before each stream"sv;
+    log_missing_graphical_session_hint();
+    return true;
+  }
+
+  bool choose_kms_capture_if_none() {
+    if (sources.any()) {
+      return true;
+    }
+#ifdef SUNSHINE_BUILD_DRM
+    if (kms_retry_allowed() && (kms_verifier_for_testing() ? kms_verifier_for_testing()() : verify_kms())) {
+      BOOST_LOG(info) << "A display is lit now: screencasting with KMS"sv;
+      sources[source::KMS] = true;
+    }
+#endif
+    return sources.any();
+  }
+
+  void set_kms_verifier_for_testing(std::function<bool()> verifier) {
+    kms_verifier_for_testing() = std::move(verifier);
+  }
+
+  void reset_capture_sources_for_testing() {
+    sources.reset();
+  }
+
+  bool kms_capture_chosen_for_testing() {
+#ifdef SUNSHINE_BUILD_DRM
+    return sources[source::KMS];
+#else
+    return false;
+#endif
+  }
+
+  /**
    * @brief List display names accepted by the selected capture backend.
    */
-  std::vector<std::string> display_names(mem_type_e hwdevice_type) {
+  std::vector<std::string> display_names([[maybe_unused]] mem_type_e hwdevice_type) {
+    choose_kms_capture_if_none();
 #ifdef SUNSHINE_BUILD_CUDA
     // display using NvFBC only supports mem_type_e::cuda
     if (sources[source::NVFBC] && hwdevice_type == mem_type_e::cuda) {
@@ -1377,6 +1454,11 @@ namespace platf {
   }
 
   std::shared_ptr<display_t> display(mem_type_e hwdevice_type, const std::string &display_name, const video::config_t &config) {
+    if (!choose_kms_capture_if_none()) {
+      // Nothing to capture yet: return before the privilege drop below, which KMS still needs once a display is lit.
+      return nullptr;
+    }
+
     // Please ensure that KMS followed by CUDA remains at the top so that we can
     // drop DRM worker privileges once neither backend requires it.
 
@@ -1512,9 +1594,7 @@ namespace platf {
     }
 #endif
 
-    if (sources.none()) {
-      BOOST_LOG(error) << "Unable to initialize capture method"sv;
-      log_missing_graphical_session_hint();
+    if (sources.none() && !continue_without_capture_method()) {
       return nullptr;
     }
 

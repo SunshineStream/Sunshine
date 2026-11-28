@@ -18,6 +18,7 @@
   // local includes
   #include "src/config.h"
   #include "src/logging.h"
+  #include "src/platform/common.h"
   #include "src/platform/linux/misc.h"
   #include "src/utility.h"
 
@@ -85,6 +86,37 @@ namespace {
       logging::log_flush();
     }
   };
+
+  #ifdef SUNSHINE_BUILD_DRM
+  /**
+   * @brief Capture method choice with KMS selected and the KMS display check replaced.
+   *
+   * Restores the configured capture method, the real KMS check, and an unchosen capture method afterward.
+   */
+  class CaptureSources: public testing::Test {
+  protected:
+    /**
+     * @brief Select KMS capture and start with no capture method chosen.
+     */
+    void SetUp() override {
+      saved_capture_ = config::video.capture;
+      config::video.capture = "kms";
+      platf::reset_capture_sources_for_testing();
+    }
+
+    /**
+     * @brief Restore the real KMS check, the configured capture method, and an unchosen capture method.
+     */
+    void TearDown() override {
+      platf::set_kms_verifier_for_testing({});
+      platf::reset_capture_sources_for_testing();
+      config::video.capture = saved_capture_;
+    }
+
+  private:
+    std::string saved_capture_;  ///< Capture method configured before the test.
+  };
+  #endif
 }  // namespace
 
 TEST_F(ProcessEnvironmentSecurity, RemovesModuleLoaders) {
@@ -138,5 +170,57 @@ TEST(LinuxCaptureSessionHint, LogsOnlyWithoutSessionVariablesAndWithoutKms) {
   ASSERT_EQ(setenv("DISPLAY", ":1", 1), 0);
   EXPECT_FALSE(platf::log_missing_graphical_session_hint());
 }
+
+  #ifdef SUNSHINE_BUILD_DRM
+// No display lit when the capture method is chosen at startup (every screen blanked by power saving): once a display
+// is lit, KMS is chosen instead of keeping no capture method for the life of the process.
+TEST_F(CaptureSources, ChoosesKmsOnceADisplayIsLit) {
+  platf::set_kms_verifier_for_testing([] {
+    return false;
+  });
+  EXPECT_FALSE(platf::choose_kms_capture_if_none());
+  EXPECT_FALSE(platf::kms_capture_chosen_for_testing());
+
+  platf::set_kms_verifier_for_testing([] {
+    return true;
+  });
+  EXPECT_TRUE(platf::choose_kms_capture_if_none());
+  EXPECT_TRUE(platf::kms_capture_chosen_for_testing());
+}
+
+// Listing displays before a probe is what chooses KMS when nothing is chosen yet.
+TEST_F(CaptureSources, DisplayNamesChoosesKmsWhenNoneIsChosen) {
+  platf::set_kms_verifier_for_testing([] {
+    return true;
+  });
+  platf::display_names(platf::mem_type_e::unknown);
+  EXPECT_TRUE(platf::kms_capture_chosen_for_testing());
+}
+
+// Once chosen, the capture method is kept: the displays aren't checked again.
+TEST_F(CaptureSources, KeepsTheChoiceOnceMade) {
+  int checks = 0;
+  platf::set_kms_verifier_for_testing([&checks] {
+    ++checks;
+    return true;
+  });
+  EXPECT_TRUE(platf::choose_kms_capture_if_none());
+  EXPECT_TRUE(platf::choose_kms_capture_if_none());
+  EXPECT_EQ(checks, 1);
+}
+
+// Another capture method configured: KMS is never chosen later, and the KMS check isn't even run.
+TEST_F(CaptureSources, OnlyKmsOrAutomaticIsCheckedAgain) {
+  config::video.capture = "x11";
+  int checks = 0;
+  platf::set_kms_verifier_for_testing([&checks] {
+    ++checks;
+    return true;
+  });
+  EXPECT_FALSE(platf::choose_kms_capture_if_none());
+  EXPECT_FALSE(platf::kms_capture_chosen_for_testing());
+  EXPECT_EQ(checks, 0);
+}
+  #endif
 
 #endif  // __linux__

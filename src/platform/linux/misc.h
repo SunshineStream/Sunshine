@@ -8,6 +8,7 @@
 #include <chrono>
 #include <fcntl.h>
 #include <filesystem>
+#include <functional>
 #include <thread>
 #include <unistd.h>
 #include <vector>
@@ -143,6 +144,36 @@ namespace platf {
    * @return `true` when the hint was logged; `false` when a session variable is set or KMS capture is configured.
    */
   bool log_missing_graphical_session_hint();
+
+  /**
+   * @brief Choose KMS capture if no capture method is chosen and a display is lit now.
+   *
+   * The capture method is chosen at startup, and KMS lists only lit displays: with every screen blanked then (power
+   * saving), none is chosen. This is called before each probe (display_names(), display()) to choose KMS once a
+   * display is lit. Only KMS is checked again, and only when the configured capture method is KMS or automatic.
+   *
+   * @return `true` when a capture method is chosen.
+   */
+  bool choose_kms_capture_if_none();
+
+  /**
+   * @brief Replace the KMS display check used by choose_kms_capture_if_none(), for tests.
+   *
+   * @param verifier Returns whether KMS has a display to capture; an empty function restores the real check.
+   */
+  void set_kms_verifier_for_testing(std::function<bool()> verifier);
+
+  /**
+   * @brief Forget the chosen capture method, for tests.
+   */
+  void reset_capture_sources_for_testing();
+
+  /**
+   * @brief Report whether KMS is the chosen capture method, for tests.
+   *
+   * @return `true` when KMS capture is chosen.
+   */
+  bool kms_capture_chosen_for_testing();
 
   /**
    * @brief Open a DRM card node and drop implicit DRM master, if any.
