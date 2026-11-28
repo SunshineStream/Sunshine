@@ -109,6 +109,13 @@ const config = ref(props.config)
       <div class="form-text">{{ $t('config.capture_desc') }}</div>
     </div>
 
+    <Checkbox class="mb-3"
+              id="capture_cursor"
+              locale-prefix="config"
+              v-model="config.capture_cursor"
+              default="true"
+    ></Checkbox>
+
     <!-- FP16 SDR Gamma Encoded -->
     <Checkbox v-if="platform === 'windows'"
               class="mb-3"

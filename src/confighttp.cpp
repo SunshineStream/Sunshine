@@ -1220,6 +1220,7 @@ namespace confighttp {
                                      "elevated",
                                      "auto-detach",
                                      "wait-all",
+                                     "capture-cursor",
                                      "exit-timeout",
                                      "cmd",
                                      "output",
@@ -1246,6 +1247,7 @@ namespace confighttp {
    *   "elevated": false,
    *   "auto-detach": true,
    *   "wait-all": true,
+   *   "capture-cursor": false,
    *   "exit-timeout": 5,
    *   "prep-cmd": [
    *     {
