@@ -1084,11 +1084,17 @@ namespace platf {
       return {};
     }
 
+    const auto adapter_name = utf_utils::from_utf8(config::video.adapter_name);
+
     dxgi::adapter_t::pointer adapter_p;
     for (int x = 0; factory->EnumAdapters1(x, &adapter_p) != DXGI_ERROR_NOT_FOUND; ++x) {
       dxgi::adapter_t adapter {adapter_p};
       DXGI_ADAPTER_DESC1 adapter_desc;
       adapter->GetDesc1(&adapter_desc);
+
+      if (!adapter_name.empty() && adapter_desc.Description != adapter_name) {
+        continue;
+      }
 
       BOOST_LOG(debug)
         << std::endl
