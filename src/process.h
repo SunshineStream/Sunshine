@@ -78,6 +78,7 @@ namespace proc {
     bool elevated;  ///< Whether the process should be launched elevated.
     bool auto_detach;  ///< Whether the process should detach automatically.
     bool wait_all;  ///< Whether Sunshine waits for all child processes.
+    std::optional<bool> capture_cursor;  ///< Per-app cursor-capture override; unset uses the global default.
     std::chrono::seconds exit_timeout;  ///< Exit timeout.
   };
 

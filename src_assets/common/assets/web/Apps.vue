@@ -295,6 +295,16 @@
                       v-model="editForm['wait-all']"
                       default="true"
             ></Checkbox>
+            <div class="mb-3">
+              <label for="captureCursor" class="form-label">{{ $t('apps.capture_cursor') }}</label>
+              <select id="captureCursor" class="form-select" aria-describedby="captureCursorHelp"
+                      v-model="editForm['capture-cursor']">
+                <option :value="null">{{ $t('apps.capture_cursor_default') }}</option>
+                <option :value="true">{{ $t('apps.capture_cursor_on') }}</option>
+                <option :value="false">{{ $t('apps.capture_cursor_off') }}</option>
+              </select>
+              <div id="captureCursorHelp" class="form-text">{{ $t('apps.capture_cursor_desc') }}</div>
+            </div>
             <!-- exit timeout -->
             <div class="mb-3">
               <label for="exitTimeout" class="form-label">{{ $t('apps.exit_timeout') }}</label>
@@ -801,6 +811,7 @@
           elevated: false,
           "auto-detach": true,
           "wait-all": true,
+          "capture-cursor": null,
           "exit-timeout": 5,
           "prep-cmd": [],
           detached: [],
@@ -824,6 +835,7 @@
           elevated: false,
           "auto-detach": true,
           "wait-all": true,
+          "capture-cursor": null,
           "exit-timeout": 5,
           cmd: "",
           output: "",
@@ -1040,12 +1052,17 @@
           return;
         }
 
+        const payload = { ...this.editForm };
+        if (payload["capture-cursor"] === null) {
+          delete payload["capture-cursor"];
+        }
+
         apiFetch("./api/apps", {
           method: "POST",
           headers: {
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify(this.editForm),
+          body: JSON.stringify(payload),
         }).then((r) => {
           if (r.status === 200) document.location.reload();
         });

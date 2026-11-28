@@ -35,6 +35,7 @@ describe('optional application fields', () => {
     elevated: false,
     'auto-detach': true,
     'wait-all': true,
+    'capture-cursor': null,
     'exit-timeout': 5,
     cmd: '',
     output: '',
@@ -58,7 +59,10 @@ describe('optional application fields', () => {
     expect(() => Apps.methods.addDetached.call(ctx)).not.toThrow()
     expect(() => Apps.methods.save.call(ctx)).not.toThrow()
     expect(apiFetch).toHaveBeenCalledOnce()
-    expect(Object.values(JSON.parse(apiFetch.mock.calls[0][1].body))).not.toContain(null)
+    const payload = JSON.parse(apiFetch.mock.calls[0][1].body)
+    expect(Object.values(payload)).not.toContain(null)
+    expect(payload).not.toHaveProperty('capture-cursor')
+    expect(ctx.editForm['capture-cursor']).toBeNull()
   })
 
   it('preserves false, zero, and configured optional values', () => {
@@ -69,6 +73,7 @@ describe('optional application fields', () => {
       detached: ['background'],
       'auto-detach': false,
       'wait-all': false,
+      'capture-cursor': false,
       'exit-timeout': 0,
       cmd: 'launch --argument',
       output: '/logs/app.log',

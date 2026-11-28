@@ -27,6 +27,7 @@
 #endif
 
 // local includes
+#include <src/globals.h>
 #include <src/process.h>
 #include <src/utility.h>
 
@@ -196,6 +197,55 @@ TEST(ProcessTest, UrlCommandsDoNotResolveAnExecutableWorkingDirectory) {
   EXPECT_TRUE(proc::find_working_directory("https://example.com", env).empty());
   EXPECT_TRUE(proc::find_working_directory("steam://run/123", env).empty());
   EXPECT_TRUE(proc::find_working_directory("custom+scheme://host/path", env).empty());
+}
+
+TEST(ProcessTest, ParsesAndAppliesAppCursorCapture) {
+  const bool original_cursor = display_cursor;
+  const bool original_default = config::video.capture_cursor;
+  const auto path = fs::path {SUNSHINE_TEST_BIN_DIR} / "sunshine_process_cursor_apps.json";
+  const auto cleanup = util::fail_guard([&path, original_cursor, original_default]() {
+    fs::remove(path);
+    display_cursor = original_cursor;
+    config::video.capture_cursor = original_default;
+  });
+  {
+    std::ofstream file(path);
+    file << R"({"env":{},"apps":[{"name":"Desktop"},{"name":"Steam","capture-cursor":false},{"name":"Other","capture-cursor":true}]})";
+  }
+
+  auto parsed = proc::parse(path.string());
+  ASSERT_TRUE(parsed.has_value());
+  const auto terminate_parsed = util::fail_guard([&parsed]() {
+    parsed->terminate();
+  });
+
+  const auto &apps = parsed->get_apps();
+  ASSERT_EQ(apps.size(), 3);
+  EXPECT_FALSE(apps[0].capture_cursor.has_value());
+  EXPECT_EQ(apps[1].capture_cursor, false);
+  EXPECT_EQ(apps[2].capture_cursor, true);
+
+  config::video.capture_cursor = true;
+  display_cursor = false;
+  parsed->terminate();
+  EXPECT_FALSE(display_cursor);
+
+  const auto launch_session = std::make_shared<rtsp_stream::launch_session_t>();
+  ASSERT_EQ(parsed->execute(std::stoi(apps[0].id), launch_session), 0);
+  EXPECT_TRUE(display_cursor);
+
+  ASSERT_EQ(parsed->execute(std::stoi(apps[1].id), launch_session), 0);
+  EXPECT_FALSE(display_cursor);
+
+  parsed->terminate();
+  EXPECT_TRUE(display_cursor);
+
+  config::video.capture_cursor = false;
+  ASSERT_EQ(parsed->execute(std::stoi(apps[2].id), launch_session), 0);
+  EXPECT_TRUE(display_cursor);
+
+  parsed->terminate();
+  EXPECT_FALSE(display_cursor);
 }
 
 #ifndef _WIN32

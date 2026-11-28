@@ -154,6 +154,26 @@ describe('legacy codec configuration', () => {
   })
 })
 
+describe('cursor capture configuration', () => {
+  it('defaults capture_cursor to enabled and toggles between enabled and disabled', async () => {
+    const config = structuredClone(configTabs.find(tab => tab.id === 'advanced').options)
+    const wrapper = mount(Advanced, {
+      props: { platform: 'linux', config },
+      global: { ...globalOptions, stubs: { ...globalOptions.stubs, Checkbox: false } },
+    })
+    const input = wrapper.get('#capture_cursor')
+
+    expect(config.capture_cursor).toBe('enabled')
+    expect(input.element.checked).toBe(true)
+
+    await input.setValue(false)
+    expect(config.capture_cursor).toBe('disabled')
+
+    await input.setValue(true)
+    expect(config.capture_cursor).toBe('enabled')
+  })
+})
+
 describe('FEC configuration', () => {
   it.each([0, 1, 20, 99, 100])('accepts %i percent and updates the configuration', async percentage => {
     const config = { fec_percentage: 20 }

@@ -106,6 +106,7 @@
       "mpeg2_mode": 0,
       "h263p_mode": 0,
       "capture": "",
+      "capture_cursor": "enabled",
       "fp16_sdr_gamma_encoded": "disabled",
       "encoder": ""
     }

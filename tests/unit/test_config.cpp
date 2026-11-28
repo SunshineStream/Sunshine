@@ -16,6 +16,7 @@
 // local includes
 #include <src/config.h>
 #include <src/file_handler.h>
+#include <src/globals.h>
 #include <src/utility.h>
 
 using namespace std::literals;
@@ -261,6 +262,32 @@ TEST_F(ConfigPersistenceTest, ParsesBooleanOptionsCaseInsensitively) {
     config::apply_config_for_test(std::string {"fp16_sdr_gamma_encoded = "} + std::string {setting} + "\n");
     EXPECT_EQ(config::video.fp16_sdr_gamma_encoded, expected) << setting;
   }
+}
+
+TEST_F(ConfigPersistenceTest, AppliesCaptureCursorDefaultAndOverrides) {
+  const bool original_cursor = display_cursor;
+  const bool original_default = config::video.capture_cursor;
+  const auto restore_cursor = util::fail_guard([original_cursor, original_default]() {
+    display_cursor = original_cursor;
+    config::video.capture_cursor = original_default;
+  });
+  const auto apps_file = config_file().parent_path() / "sunshine_test_config_apps.json";
+  ASSERT_EQ(file_handler::write_file(apps_file.string().c_str(), "{}"), 0);
+  config::stream.file_apps = apps_file.string();
+
+  config::video.capture_cursor = true;
+  display_cursor = false;
+  config::apply_config_for_test("");
+  EXPECT_TRUE(display_cursor);
+  EXPECT_TRUE(config::video.capture_cursor);
+
+  config::apply_config_for_test("capture_cursor = disabled\n");
+  EXPECT_FALSE(display_cursor);
+  EXPECT_FALSE(config::video.capture_cursor);
+
+  config::apply_config_for_test("capture_cursor = enabled\n");
+  EXPECT_TRUE(display_cursor);
+  EXPECT_TRUE(config::video.capture_cursor);
 }
 
 TEST_F(ConfigPersistenceTest, ParsesHexIntegersWiderThanAnInt) {

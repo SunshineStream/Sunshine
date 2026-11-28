@@ -29,6 +29,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "display_device.h"
+#include "globals.h"
 #include "input.h"
 #include "logging.h"
 #include "platform/common.h"
@@ -227,6 +228,7 @@ namespace proc {
 
     _app_id = app_id;
     _app = *iter;
+    display_cursor = _app.capture_cursor.value_or(config::video.capture_cursor);
     _app_prep_begin = std::begin(_app.prep_cmds);
     _app_prep_it = _app_prep_begin;
 
@@ -417,6 +419,9 @@ namespace proc {
     }
 
     _app_id = -1;
+    if (has_run) {
+      display_cursor = config::video.capture_cursor;
+    }
   }
 
   const std::vector<ctx_t> &proc_t::get_apps() const {
@@ -760,6 +765,7 @@ namespace proc {
         auto elevated = app_node.get_optional<bool>("elevated"s);
         auto auto_detach = app_node.get_optional<bool>("auto-detach"s);
         auto wait_all = app_node.get_optional<bool>("wait-all"s);
+        auto capture_cursor = app_node.get_optional<bool>("capture-cursor"s);
         auto exit_timeout = app_node.get_optional<int>("exit-timeout"s);
 
         std::vector<proc::cmd_t> prep_cmds;
@@ -829,6 +835,9 @@ namespace proc {
         ctx.elevated = elevated.value_or(false);
         ctx.auto_detach = auto_detach.value_or(true);
         ctx.wait_all = wait_all.value_or(true);
+        if (capture_cursor) {
+          ctx.capture_cursor = *capture_cursor;
+        }
         ctx.exit_timeout = std::chrono::seconds {exit_timeout.value_or(5)};
 
         auto possible_ids = calculate_app_id(name, ctx.image_path, i++);
