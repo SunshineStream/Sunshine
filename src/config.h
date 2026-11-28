@@ -323,6 +323,7 @@ namespace config {
 
     bool high_resolution_scrolling;  ///< Enable high-resolution mouse-wheel events.
     bool native_pen_touch;  ///< Enable native pen and touch injection.
+    bool remote_text_context;  ///< Report editable focus to clients that negotiate it on Windows.
   };
 
   namespace flag {

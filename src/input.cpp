@@ -32,6 +32,9 @@ extern "C" {
 #include "config.h"
 #include "globals.h"
 #include "input.h"
+#ifdef _WIN32
+  #include "src/platform/windows/text_context.h"
+#endif
 #include "logging.h"
 #include "platform/common.h"
 #include "platform/virtualhid_input.h"
@@ -327,7 +330,12 @@ namespace input {
     safe::mail_raw_t::event_t<input::touch_port_t> touch_port_event;  ///< Touch port event.
     platf::feedback_queue_t feedback_queue;  ///< Queue used to deliver controller feedback to the platform backend.
 
-    std::list<std::vector<uint8_t>> input_queue;  ///< Validated input packets waiting for processing.
+    struct queued_packet_t {
+      std::vector<uint8_t> data;
+      std::uint64_t focus_session;  ///< Connection that negotiated focus, or zero for ordinary input.
+    };
+
+    std::list<queued_packet_t> input_queue;  ///< Validated input packets waiting for processing.
     std::mutex input_queue_lock;  ///< Input queue lock.
     bool input_task_scheduled {};  ///< Whether one worker task owns packet dispatch for this stream; guarded by input_queue_lock.
 
@@ -949,13 +957,31 @@ namespace input {
     platf::abs_mouse(platf_input, platform_touch_port(touch_port), x_out + touch_port.offset_x, y_out + touch_port.offset_y);
   }
 
+#ifdef _WIN32
+  /** @brief Capture-local pixels are measured from the signed global display origin. */
+  text_context::rect_t capture_bounds(const input::touch_port_t &port) {
+    return {port.capture_left, port.capture_top, port.capture_left + port.capture_width, port.capture_top + port.capture_height};
+  }
+
+  /** @brief Read the Windows cursor only for a negotiated connection. */
+  void record_mouse(std::shared_ptr<input_t> &input, std::uint64_t sid, text_context::action_e action) {
+    if (action == text_context::action_e::cancel) {
+      text_context::windows::pointer(sid, text_context::mouse_pointer, action, 0, 0, {});
+      return;
+    }
+    refresh_touch_port(input);
+    const auto cursor = platf::get_mouse_loc(platf_input);
+    text_context::windows::pointer(sid, text_context::mouse_pointer, cursor ? action : text_context::action_e::cancel, cursor ? static_cast<int>(cursor->x) : 0, cursor ? static_cast<int>(cursor->y) : 0, capture_bounds(input->touch_port));
+  }
+#endif
+
   /**
    * @brief Called to pass a mouse button message to the platform backend.
    *
    * @param input The input context pointer.
    * @param packet The mouse button packet.
    */
-  void passthrough(std::shared_ptr<input_t> &input, PNV_MOUSE_BUTTON_PACKET packet) {
+  void passthrough(std::shared_ptr<input_t> &input, PNV_MOUSE_BUTTON_PACKET packet, [[maybe_unused]] std::uint64_t sid) {
     if (!config::input.mouse) {
       return;
     }
@@ -970,6 +996,12 @@ namespace input {
 
       mouse_press[button] = !release;
     }
+#ifdef _WIN32
+    if (sid && (button == BUTTON_LEFT || button == BUTTON_RIGHT)) {
+      record_mouse(input, sid, button == BUTTON_RIGHT ? text_context::action_e::cancel : release ? text_context::action_e::up :
+                                                                                                   text_context::action_e::down);
+    }
+#endif
     /**
      * When Moonlight sends mouse input through absolute coordinates,
      * it's possible that BUTTON_RIGHT is pressed down immediately after releasing BUTTON_LEFT.
@@ -1534,7 +1566,7 @@ namespace input {
    * @param input The input context pointer.
    * @param packet The touch packet.
    */
-  void passthrough(std::shared_ptr<input_t> &input, PSS_TOUCH_PACKET packet) {
+  void passthrough(std::shared_ptr<input_t> &input, PSS_TOUCH_PACKET packet, [[maybe_unused]] std::uint64_t sid) {
     const auto pointer_data = prepare_absolute_pointer_data(input, packet);
     if (!pointer_data) {
       return;
@@ -1552,6 +1584,35 @@ namespace input {
     };
 
     platf::touch_update(input->client_context.get(), pointer_data->touch_port, touch);
+#ifdef _WIN32
+    if (sid && config::input.native_pen_touch) {
+      using text_context::action_e;
+      action_e action;
+      switch (touch.eventType) {
+        case LI_TOUCH_EVENT_DOWN:
+          action = action_e::down;
+          break;
+        case LI_TOUCH_EVENT_UP:
+          action = action_e::up;
+          break;
+        case LI_TOUCH_EVENT_MOVE:
+          action = action_e::move;
+          break;
+        case LI_TOUCH_EVENT_CANCEL:
+          action = action_e::cancel;
+          break;
+        case LI_TOUCH_EVENT_CANCEL_ALL:
+          action = action_e::cancel_touches;
+          break;
+        default:
+          return;
+      }
+      const auto &port = input->touch_port;
+      const auto x = port.capture_left + static_cast<int>(std::clamp(touch.x, 0.f, 1.f) * std::max(0, port.capture_width - 1));
+      const auto y = port.capture_top + static_cast<int>(std::clamp(touch.y, 0.f, 1.f) * std::max(0, port.capture_height - 1));
+      text_context::windows::pointer(sid, touch.pointerId, action, x, y, capture_bounds(port));
+    }
+#endif
   }
 
   /**
@@ -2181,7 +2242,7 @@ namespace input {
    */
   bool passthrough_next_message(std::shared_ptr<input_t> &input) {
     // 'entry' backs the 'payload' pointer, so they must remain in scope together
-    std::vector<uint8_t> entry;
+    input_t::queued_packet_t entry;
     PNV_INPUT_HEADER payload;
 
     // Lock the input queue while batching, but release it before sending
@@ -2197,15 +2258,23 @@ namespace input {
       }
 
       // Pop off the first entry, which we will send
-      entry = input->input_queue.front();
-      payload = (PNV_INPUT_HEADER) entry.data();
+      entry = std::move(input->input_queue.front());
+      payload = (PNV_INPUT_HEADER) entry.data.data();
       input->input_queue.pop_front();
 
       // Try to batch with remaining items on the queue
       auto i = input->input_queue.begin();
       while (i != input->input_queue.end()) {
-        auto batchable_entry = *i;
-        auto batchable_payload = (PNV_INPUT_HEADER) batchable_entry.data();
+        if (entry.focus_session != i->focus_session) {
+          break;
+        }
+        const auto magic = util::endian::little(payload->magic);
+        // Intermediate drag points must survive batching, even when the pointer returns to its origin.
+        const bool mouse_drag = mouse_press[BUTTON_LEFT] && (magic == MOUSE_MOVE_ABS_MAGIC || magic == MOUSE_MOVE_REL_MAGIC_GEN5);
+        if (entry.focus_session && (magic == SS_TOUCH_MAGIC || mouse_drag)) {
+          break;
+        }
+        auto batchable_payload = (PNV_INPUT_HEADER) i->data.data();
 
         auto batch_result = batch(payload, batchable_payload);
         if (batch_result == batch_result_e::terminate_batch) {
@@ -2234,19 +2303,39 @@ namespace input {
     switch (util::endian::little(payload->magic)) {
       case MOUSE_MOVE_REL_MAGIC_GEN5:
         passthrough(input, (PNV_REL_MOUSE_MOVE_PACKET) payload);
+#ifdef _WIN32
+        if (entry.focus_session && mouse_press[BUTTON_LEFT]) {
+          record_mouse(input, entry.focus_session, text_context::action_e::move);
+        }
+#endif
         break;
       case MOUSE_MOVE_ABS_MAGIC:
         passthrough(input, (PNV_ABS_MOUSE_MOVE_PACKET) payload);
+#ifdef _WIN32
+        if (entry.focus_session && mouse_press[BUTTON_LEFT]) {
+          record_mouse(input, entry.focus_session, text_context::action_e::move);
+        }
+#endif
         break;
       case MOUSE_BUTTON_DOWN_EVENT_MAGIC_GEN5:
       case MOUSE_BUTTON_UP_EVENT_MAGIC_GEN5:
-        passthrough(input, (PNV_MOUSE_BUTTON_PACKET) payload);
+        passthrough(input, (PNV_MOUSE_BUTTON_PACKET) payload, entry.focus_session);
         break;
       case SCROLL_MAGIC_GEN5:
         passthrough(input, (PNV_SCROLL_PACKET) payload);
+#ifdef _WIN32
+        if (entry.focus_session) {
+          record_mouse(input, entry.focus_session, text_context::action_e::cancel);
+        }
+#endif
         break;
       case SS_HSCROLL_MAGIC:
         passthrough(input, (PSS_HSCROLL_PACKET) payload);
+#ifdef _WIN32
+        if (entry.focus_session) {
+          record_mouse(input, entry.focus_session, text_context::action_e::cancel);
+        }
+#endif
         break;
       case KEY_DOWN_EVENT_MAGIC:
       case KEY_UP_EVENT_MAGIC:
@@ -2259,7 +2348,7 @@ namespace input {
         passthrough(input, (PNV_MULTI_CONTROLLER_PACKET) payload);
         break;
       case SS_TOUCH_MAGIC:
-        passthrough(input, (PSS_TOUCH_PACKET) payload);
+        passthrough(input, (PSS_TOUCH_PACKET) payload, entry.focus_session);
         break;
       case SS_PEN_MAGIC:
         passthrough(input, (PSS_PEN_PACKET) payload);
@@ -2309,7 +2398,7 @@ namespace input {
    * @param input The input context pointer.
    * @param input_data The input message.
    */
-  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data) {
+  void passthrough(std::shared_ptr<input_t> &input, std::vector<std::uint8_t> &&input_data, std::uint64_t focus_session) {
     NV_INPUT_HEADER header {};
     if (!validate_input_packet(input_data, &header)) {
       if (input_data.size() >= sizeof(header)) {
@@ -2327,7 +2416,7 @@ namespace input {
     bool schedule_task = false;
     {
       std::lock_guard lock {input->input_queue_lock};
-      input->input_queue.push_back(std::move(input_data));
+      input->input_queue.push_back({std::move(input_data), focus_session});
       if (!input->input_task_scheduled) {
         input->input_task_scheduled = true;
         schedule_task = true;

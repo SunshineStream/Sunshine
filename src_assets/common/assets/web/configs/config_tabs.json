@@ -30,6 +30,7 @@
       "key_rightalt_to_key_win": "disabled",
       "mouse": "enabled",
       "high_resolution_scrolling": "enabled",
+      "remote_text_context": "enabled",
       "native_pen_touch": "enabled",
       "keybindings": "[0x10,0xA0,0x11,0xA2,0x12,0xA4]"
     }

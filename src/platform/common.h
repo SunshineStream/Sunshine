@@ -850,6 +850,8 @@ namespace platf {
     int offset_x {0};  ///< Horizontal capture offset in physical pixels.
     int offset_y {0};  ///< Vertical capture offset in physical pixels.
     int env_offset_x {0};  ///< Horizontal origin of the full capture environment in native desktop coordinates.
+    int capture_left {};  ///< Signed global screen X origin of the Windows capture output.
+    int capture_top {};  ///< Signed global screen Y origin of the Windows capture output.
     int env_offset_y {0};  ///< Vertical origin of the full capture environment in native desktop coordinates.
     int env_width {0};  ///< Width of the full capture environment in physical pixels.
     int env_height {0};  ///< Height of the full capture environment in physical pixels.
