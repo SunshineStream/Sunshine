@@ -8,7 +8,7 @@
       "ref": "master"
     },
     "url": "https://github.com/LizardByte/libvirtualhid.git",
-    "commit": "dd8153df338c6fb399ea4a048fa97b4c536f12a0",
+    "commit": "82270d4c4b06baa785d9c73522608f980fe78d41",
     "dest": "flatpak-cpm/libvirtualhid",
     "disable-submodules": true
   }

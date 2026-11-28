@@ -72,7 +72,7 @@ CPMDeclarePackage(libdisplaydevice
 # libvirtualhid
 # renovate: datasource=git-refs depName=LizardByte/libvirtualhid
 # ref=master
-set(LIBVIRTUALHID_COMMIT dd8153df338c6fb399ea4a048fa97b4c536f12a0)
+set(LIBVIRTUALHID_COMMIT 82270d4c4b06baa785d9c73522608f980fe78d41)
 CPMDeclarePackage(libvirtualhid
         NAME libvirtualhid
         GIT_REPOSITORY https://github.com/LizardByte/libvirtualhid.git
