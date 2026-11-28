@@ -784,6 +784,9 @@ namespace stream {
           break;
         case ENET_EVENT_TYPE_CONNECT:
           BOOST_LOG(info) << "CLIENT CONNECTED"sv;
+          // Without this the peer keeps ENet's default timeout (5 s minimum), so a short network outage
+          // drops the client even though the session itself tolerates ping_timeout.
+          enet_peer_timeout(event.peer, 0, (enet_uint32) config::stream.ping_timeout.count(), (enet_uint32) config::stream.ping_timeout.count());
           break;
         case ENET_EVENT_TYPE_DISCONNECT:
           BOOST_LOG(info) << "CLIENT DISCONNECTED"sv;
