@@ -245,7 +245,10 @@ namespace platf {
    * @brief Synchronize thread desktop.
    */
   HDESK syncThreadDesktop() {
-    auto hDesk = OpenInputDesktop(DF_ALLOWOTHERACCOUNTHOOK, FALSE, GENERIC_ALL);
+    // Windows can't close the desktop a thread uses, so its handle is kept until the thread moves on
+    thread_local desktop_t attached_desktop;
+
+    desktop_t hDesk {OpenInputDesktop(DF_ALLOWOTHERACCOUNTHOOK, FALSE, GENERIC_ALL)};
     if (!hDesk) {
       auto err = GetLastError();
       BOOST_LOG(error) << "Failed to Open Input Desktop [0x"sv << util::hex(err).to_string_view() << ']';
@@ -253,14 +256,29 @@ namespace platf {
       return nullptr;
     }
 
-    if (!SetThreadDesktop(hDesk)) {
+    if (!SetThreadDesktop(hDesk.get())) {
       auto err = GetLastError();
       BOOST_LOG(error) << "Failed to sync desktop to thread [0x"sv << util::hex(err).to_string_view() << ']';
+
+      return nullptr;
     }
 
-    CloseDesktop(hDesk);
+    attached_desktop = std::move(hDesk);
+    return attached_desktop.get();
+  }
 
-    return hDesk;
+  input_desktop_guard_t::input_desktop_guard_t() {
+    if (input_desktop && !SetThreadDesktop(input_desktop.get())) {
+      input_desktop.reset();
+    }
+  }
+
+  input_desktop_guard_t::~input_desktop_guard_t() {
+    if (input_desktop && !SetThreadDesktop(previous_desktop)) {
+      // The thread is still on the input desktop, so its handle has to stay open
+      BOOST_LOG(warning) << "Failed to restore the thread desktop [0x"sv << util::hex(GetLastError()).to_string_view() << ']';
+      input_desktop.release();
+    }
   }
 
   /**

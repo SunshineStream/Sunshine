@@ -9,10 +9,14 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 // platform includes
 #include <Windows.h>
 #include <winnt.h>
+
+// local includes
+#include "src/utility.h"
 
 namespace platf {
   /**
@@ -22,6 +26,11 @@ namespace platf {
    * @param status Native status code returned by the platform API.
    */
   void print_status(const std::string_view &prefix, HRESULT status);
+  /**
+   * @brief Owning handle of a desktop.
+   */
+  using desktop_t = util::safe_ptr_v2<std::remove_pointer_t<HDESK>, BOOL, &CloseDesktop>;
+
   /**
    * @brief Synchronize thread desktop.
    *
@@ -37,6 +46,19 @@ namespace platf {
    * @return Command line suitable for CreateProcessW().
    */
   std::wstring make_url_launch_command(const std::wstring &command_processor, const std::wstring &url);
+
+  /**
+   * @brief Attach the calling thread to the input desktop until destroyed.
+   */
+  class input_desktop_guard_t {
+  public:
+    input_desktop_guard_t();
+    ~input_desktop_guard_t();
+
+  private:
+    HDESK previous_desktop {GetThreadDesktop(GetCurrentThreadId())};
+    desktop_t input_desktop {OpenInputDesktop(DF_ALLOWOTHERACCOUNTHOOK, FALSE, GENERIC_ALL)};
+  };
 
   /**
    * @brief Read the current Windows high-resolution performance counter.

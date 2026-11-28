@@ -30,6 +30,8 @@
 
 // platform-specific includes
 #ifdef _WIN32
+  #include "platform/windows/misc.h"
+
   #include <display_device/windows/settings_manager.h>
   #include <display_device/windows/win_api_layer.h>
   #include <display_device/windows/win_display_device.h>
@@ -45,6 +47,12 @@
 namespace display_device {
   namespace {
     constexpr std::chrono::milliseconds DEFAULT_RETRY_INTERVAL {5000};
+
+#ifdef _WIN32
+    using input_desktop_guard_t = platf::input_desktop_guard_t;
+#else
+    struct [[maybe_unused]] input_desktop_guard_t {};
+#endif
 
     /**
      * @brief Persistence wrapper that remembers whether a settings record is still stored.
@@ -861,6 +869,7 @@ namespace display_device {
 
       const auto persistence_watch {DD_DATA.persistence_watch};
       DD_DATA.sm_instance->schedule([try_once = (option == revert_option_e::try_once), tried_out_devices = StringSet {}, persistence_watch](auto &settings_iface, auto &stop_token) mutable {
+        const input_desktop_guard_t input_desktop;
         try_revert_settings(try_once, tried_out_devices, persistence_watch, settings_iface, stop_token);
       },
                                     scheduler_option);
@@ -880,6 +889,7 @@ namespace display_device {
       DD_DATA.sm_instance = std::make_unique<RetryScheduler<SettingsManagerInterface>>(std::move(settings_manager));
 
       const auto available_devices {DD_DATA.sm_instance->execute([](auto &settings_iface) {
+        const input_desktop_guard_t input_desktop;
         return settings_iface.enumAvailableDevices();
       })};
       BOOST_LOG(info) << "Currently available display devices:\n"
@@ -937,6 +947,7 @@ namespace display_device {
     }
 
     const auto mapped_name {DD_DATA.sm_instance->execute([&output_name](auto &settings_iface) {
+      const input_desktop_guard_t input_desktop;
       return settings_iface.getDisplayName(output_name);
     })};
 
@@ -978,6 +989,7 @@ namespace display_device {
                     << toJson(config);
 
     DD_DATA.sm_instance->schedule([config](auto &settings_iface, auto &stop_token) {
+      const input_desktop_guard_t input_desktop;
       using enum SettingsManagerInterface::ApplyResult;
 
       // We only want to keep retrying in case of a transient errors.
@@ -1026,6 +1038,7 @@ namespace display_device {
     }
 
     return DD_DATA.sm_instance->execute([](auto &settings_iface) {
+      const input_desktop_guard_t input_desktop;
       return settings_iface.enumAvailableDevices();
     });
   }
