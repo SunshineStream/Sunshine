@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,6 +30,40 @@
  * @brief Contains all the functions and variables related to the nvhttp (GameStream) server.
  */
 namespace nvhttp {
+
+  /**
+   * @brief Run a probe until it succeeds, trying again for a while after it fails.
+   *
+   * Used before a stream starts, with the encoder probe: a display that was off (power saving) when the request
+   * arrived may still be lighting up, woken by something reacting to that same request.
+   *
+   * @param probe Returns `0` once it succeeds.
+   * @param wait How long after the first attempt to keep trying.
+   * @param interval Pause between attempts.
+   * @param now Current time.
+   * @param sleep Pauses for a duration.
+   * @return `0` once the probe succeeds, `-1` if it still fails when the wait is over.
+   */
+  int probe_until_ready(
+    const std::function<int()> &probe,
+    std::chrono::milliseconds wait,
+    std::chrono::milliseconds interval,
+    const std::function<std::chrono::steady_clock::time_point()> &now,
+    const std::function<void(std::chrono::milliseconds)> &sleep
+  );
+
+  /**
+   * @brief Run an encoder probe, and once more if a display appeared while it ran.
+   *
+   * With every display off, the encoders tried first fail for want of a display. If one lights up
+   * partway through, a later encoder passes, usually the software one, so the result can't be
+   * trusted: the probe runs again with the display there.
+   *
+   * @param probe The probe. Returns `0` when an encoder works.
+   * @param has_display Whether any display can be captured now.
+   * @return The result of the last run of the probe.
+   */
+  int probe_again_if_display_appeared(const std::function<int()> &probe, const std::function<bool()> &has_display);
 
   /**
    * @brief The protocol version.

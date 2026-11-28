@@ -11,8 +11,10 @@
 #include <chrono>
 #include <filesystem>
 #include <format>
+#include <functional>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <utility>
 
 // lib includes
@@ -44,6 +46,53 @@
 using namespace std::literals;
 
 namespace nvhttp {
+
+  int probe_until_ready(
+    const std::function<int()> &probe,
+    std::chrono::milliseconds wait,
+    std::chrono::milliseconds interval,
+    const std::function<std::chrono::steady_clock::time_point()> &now,
+    const std::function<void(std::chrono::milliseconds)> &sleep
+  ) {
+    const auto deadline = now() + wait;
+    while (probe()) {
+      if (now() >= deadline) {
+        return -1;
+      }
+      BOOST_LOG(info) << "No working encoder yet (a display waking up?): trying again"sv;
+      sleep(interval);
+    }
+    return 0;
+  }
+
+  int probe_again_if_display_appeared(const std::function<int()> &probe, const std::function<bool()> &has_display) {
+    const bool display_before = has_display();
+    const int result = probe();
+    if (display_before || !has_display()) {
+      return result;
+    }
+    BOOST_LOG(info) << "A display appeared while probing: probing the encoders again"sv;
+    return probe();
+  }
+
+  /**
+   * @brief Probe the encoders for a stream about to start, giving displays up to 10 seconds to light up.
+   *
+   * A launch request can find every display off (power saving), and whatever wakes them (the host
+   * reacting to the request) needs a moment; refusing at once made the first request always fail.
+   * A display lighting up during a probe gets the encoders probed once more.
+   * @return 0 once an encoder works, nonzero if none does within the wait.
+   */
+  static int probe_encoders_for_stream() {
+    const auto probe = [] {
+      return probe_until_ready(video::probe_encoders, 10s, 500ms, std::chrono::steady_clock::now, [](std::chrono::milliseconds duration) {
+        std::this_thread::sleep_for(duration);
+      });
+    };
+    return probe_again_if_display_appeared(probe, [] {
+      return !platf::display_names(platf::mem_type_e::system).empty();
+    });
+  }
 
   static constexpr std::string_view EMPTY_PROPERTY_TREE_ERROR_MSG = "Property tree is empty. Probably, control flow got interrupted by an unexpected C++ exception. This is a bug in Sunshine. Moonlight-qt will report Malformed XML (missing root element)."sv;
 
@@ -1438,7 +1487,7 @@ namespace nvhttp {
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
-      if (video::probe_encoders()) {
+      if (probe_encoders_for_stream()) {
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
         tree.put("root.gamesession", 0);
@@ -1550,7 +1599,7 @@ namespace nvhttp {
       // encoder matches the active GPU (which could have changed
       // due to hotplugging, driver crash, primary monitor change,
       // or any number of other factors).
-      if (video::probe_encoders()) {
+      if (probe_encoders_for_stream()) {
         tree.put("root.resume", 0);
         tree.put("root.<xmlattr>.status_code", 503);
         tree.put("root.<xmlattr>.status_message", "Failed to initialize video capture/encoding. Is a display connected and turned on?");
