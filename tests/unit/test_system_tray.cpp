@@ -13,6 +13,7 @@
 #endif
 
 // standard includes
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -213,8 +214,24 @@ namespace {
     EXPECT_STREQ(tray_data.tooltip, tooltip);
     EXPECT_STREQ(tray_data.notification_title, notification_title);
     EXPECT_STREQ(tray_data.notification_text, notification_text);
+  #ifdef __APPLE__
+    EXPECT_EQ(tray_icon_is_template(), 1);
+  #endif
     if (notification_icon_index.has_value()) {
+  #ifdef __APPLE__
+      constexpr std::array colored_icon_names {
+        "logo-sunshine.svg",
+        "sunshine-locked.svg",
+        "sunshine-playing.svg",
+        "sunshine-pausing.svg",
+      };
+      ASSERT_NE(tray_data.notification_icon, nullptr);
+      const std::filesystem::path notification_icon {tray_data.notification_icon};
+      EXPECT_EQ(notification_icon.filename(), colored_icon_names[*notification_icon_index]);
+      EXPECT_TRUE(std::filesystem::is_regular_file(notification_icon));
+  #else
       EXPECT_STREQ(tray_data.notification_icon, tray_data.allIconPaths[*notification_icon_index]);
+  #endif
     } else {
       EXPECT_EQ(tray_data.notification_icon, nullptr);
     }
@@ -350,6 +367,20 @@ TEST_F(SystemTrayTest, LeftClickUsesNativeMacOSMenu) {
 
   EXPECT_STREQ(tray_data.menu[0].text, "Open Sunshine");
   EXPECT_FALSE(system_tray::tray_initialized_for_testing());
+}
+
+/**
+ * @brief Verify macOS menu bar paths and the independently packaged monochrome lock.
+ */
+TEST_F(SystemTrayTest, UsesMonochromeMacOSMenuBarArtwork) {
+  const auto &tray_data = system_tray::tray_data_for_testing();
+  ASSERT_EQ(tray_data.iconPathCount, 5);
+  EXPECT_EQ(std::filesystem::path {tray_data.allIconPaths[0]}.filename(), "macos-tray-sunshine.svg");
+  EXPECT_EQ(std::filesystem::path {tray_data.allIconPaths[1]}.filename(), "sunshine-locked.svg");
+  EXPECT_EQ(std::filesystem::path {tray_data.allIconPaths[2]}.filename(), "macos-tray-playing.svg");
+  EXPECT_EQ(std::filesystem::path {tray_data.allIconPaths[3]}.filename(), "macos-tray-pausing.svg");
+  const auto lock_asset = std::filesystem::path {SUNSHINE_ASSETS_DIR} / "web" / "images" / "macos-tray-locked.svg";
+  EXPECT_TRUE(std::filesystem::is_regular_file(lock_asset)) << lock_asset;
 }
   #endif
 

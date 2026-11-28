@@ -42,6 +42,17 @@ const emitTrayIconsPlugin = {
             source: fs.readFileSync(resolve(projectRoot, 'sunshine.svg')),
         });
 
+        if (process.platform === 'darwin') {
+            for (const name of ['sunshine', 'playing', 'pausing', 'locked']) {
+                const fileName = `macos-tray-${name}.svg`;
+                this.emitFile({
+                    type: 'asset',
+                    fileName: `images/${fileName}`,
+                    source: fs.readFileSync(resolve(projectRoot, 'src_assets/macos/tray', fileName)),
+                });
+            }
+        }
+
         const virtualHidIcon = process.env.SUNSHINE_LIBVIRTUALHID_ICON;
         if ((process.platform === 'win32' || process.platform === 'darwin') && virtualHidIcon) {
             this.emitFile({
