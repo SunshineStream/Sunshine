@@ -34,6 +34,18 @@ namespace cuda {
   }
 
   /**
+   * @brief Quantize an NV12 luma sample from the normalized color matrix.
+   *
+   * The matrix already applies the selected full or limited range.
+   *
+   * @param y Normalized luma.
+   * @return The rounded and clamped 8-bit luma code value.
+   */
+  SUNSHINE_CUDA_HOST_DEVICE inline std::uint8_t nv12_luma_sample(float y) {
+    return clamp_to_uint8(y * 255.0f + 0.5f);
+  }
+
+  /**
    * @brief Compute the NV12 chroma sample of a 2x2 pixel block.
    *
    * The kernel scales chroma by 256. At full range, the chroma of a pure primary is slightly

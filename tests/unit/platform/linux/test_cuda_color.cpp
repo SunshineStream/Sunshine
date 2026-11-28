@@ -1,6 +1,6 @@
 /**
  * @file tests/unit/platform/linux/test_cuda_color.cpp
- * @brief Tests for the 8-bit chroma samples written by the CUDA NV12 conversion.
+ * @brief Tests for the 8-bit luma and chroma samples written by the CUDA NV12 conversion.
  */
 
 #ifdef __linux__
@@ -164,6 +164,19 @@ TEST(CudaColorTest, ClampsSamplesToTheUint8Range) {
 }
 
 /**
+ * @brief Normalized NV12 luma rounds to the nearest 8-bit code value without wrapping.
+ */
+TEST(CudaColorTest, Nv12LumaRoundsAndClamps) {
+  EXPECT_EQ(cuda::nv12_luma_sample(-0.1f), 0);
+  EXPECT_EQ(cuda::nv12_luma_sample(0.0f), 0);
+  EXPECT_EQ(cuda::nv12_luma_sample(63.75f / 255.0f), 64);
+  EXPECT_EQ(cuda::nv12_luma_sample(64.25f / 255.0f), 64);
+  EXPECT_EQ(cuda::nv12_luma_sample(0.5f), 128);
+  EXPECT_EQ(cuda::nv12_luma_sample(1.0f), 255);
+  EXPECT_EQ(cuda::nv12_luma_sample(1.1f), 255);
+}
+
+/**
  * @brief Full-range pure red keeps the maximum V and pure blue the maximum U.
  *
  * Their scaled chroma is above 255, which wrapped to 0 and showed red as green and blue as dark green.
@@ -260,6 +273,35 @@ namespace {
     return frame;
   }
 }  // namespace
+
+/**
+ * @brief The NV12 kernel preserves neutral luma across both full and limited range.
+ *
+ * This runs the kernel on the GPU, so it is skipped on hosts without a CUDA device.
+ */
+TEST(CudaNv12KernelTest, PreservesNeutralLumaInBothRanges) {
+  if (!cuda::test::has_device()) {
+    GTEST_SKIP() << "No CUDA device";
+  }
+
+  constexpr int width = 16;
+  constexpr int height = 8;
+  constexpr std::array<std::uint8_t, 4> levels {0, 64, 128, 255};
+  constexpr std::array<std::uint8_t, 4> limited_codes {16, 71, 126, 235};
+  for (auto colorspace : nv12_colorspaces) {
+    for (std::size_t i = 0; i < levels.size(); ++i) {
+      const rgb8_t gray {levels[i], levels[i], levels[i]};
+      SCOPED_TRACE(describe(colorspace, gray));
+      const auto planes = cuda::test::convert_to_nv12(solid_bgra_frame(gray, width, height), width, height, colorspace);
+      ASSERT_TRUE(planes.has_value());
+      ASSERT_EQ(planes->y.size(), static_cast<std::size_t>(width) * height);
+      const auto expected = colorspace.full_range ? levels[i] : limited_codes[i];
+      for (std::size_t pixel = 0; pixel < planes->y.size(); ++pixel) {
+        ASSERT_EQ(planes->y[pixel], expected) << "Y at pixel " << pixel;
+      }
+    }
+  }
+}
 
 /**
  * @brief The NV12 kernel writes the test card's colors with the chroma their colorspace defines.
