@@ -20,6 +20,11 @@
   #import <src/platform/macos/av_audio.h>
   #include <src/platform/macos/misc.h>
 
+namespace platf::tests {
+  bool keep_default_supported();
+  int capture_sink_status(const std::string &sink);
+}  // namespace platf::tests
+
 namespace {
   bool permission_probe_unmuted = false;  ///< Whether the test tap leaves host audio audible.
   int permission_probe_result = 0;  ///< Simulated Core Audio tap setup result.
@@ -546,6 +551,14 @@ TEST_P(ProcessSystemAudioIOProcTest, ProcessAudioInput) {
   @catch (NSException *exception) {
     FAIL() << "Caught NSException: " << ([exception.reason UTF8String] ?: "unknown reason");
   }
+}
+
+/**
+ * @brief macOS capture never touches the default output, with or without keep-default.
+ */
+TEST(MacosAudioControlTest, KeepDefaultModeCapturesWithoutSwapping) {
+  EXPECT_TRUE(platf::tests::keep_default_supported());
+  EXPECT_EQ(platf::tests::capture_sink_status("any-sink"), 0);
 }
 
 #endif  // __APPLE__

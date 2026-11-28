@@ -6,24 +6,41 @@
 
 // standard includes
 #include <array>
+#include <atomic>
+#include <cstdint>
+#include <cstring>
 #include <format>
 #include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 // platform includes
 #include <Audioclient.h>
 #include <avrt.h>
 #include <mmdeviceapi.h>
 #include <newdev.h>
+#include <objbase.h>
 #include <roapi.h>
 #include <synchapi.h>
+#if __has_include(<audioclientactivationparams.h>)
+  #include <audioclientactivationparams.h>
+  #define SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS 1
+#endif
 
 // local includes
 #include "src/config.h"
 #include "src/logging.h"
 #include "src/platform/common.h"
 #include "utf_utils.h"
+#ifdef SUNSHINE_TESTS
+  #include "audio_tests.h"
+#endif
 
 // Must be the last included file
 // clang-format off
@@ -349,6 +366,569 @@ namespace platf::audio {
   };
 
   /**
+   * @brief Whether per-process loopback capture should be attempted.
+   *
+   * The configured-sink pin needs no separate check here: the shared guard
+   * maps a non-empty sink to pinned_sink intent and records PID 0 for every
+   * non-host-and-client case, so a nonzero PID with host-and-client intent
+   * already implies no pin. See audio::should_capture_process_tree().
+   *
+   * @param process_id Revalidated application PID, or 0 for endpoint capture.
+   * @param intent Capture intent recorded for the next microphone() call.
+   * @return True only for host-and-client intent with a known PID.
+   */
+  [[nodiscard]] constexpr bool use_process_loopback(std::uint32_t process_id, audio_capture_intent_e intent) noexcept {
+    using enum audio_capture_intent_e;
+    return intent == host_and_client && process_id != 0;
+  }
+
+  // Process identities use the shared platf::process_identity_t: the PID and
+  // creation marker arrive as one handed-off bundle from the owned child
+  // handle, so this backend stores the baseline verbatim instead of querying
+  // it by PID (see platf::process_identity_t).
+
+  /**
+   * @brief Whether a current process identity is the recorded capture target.
+   *
+   * This is the pure comparison seam for PID-reuse hardening: it performs no
+   * OS calls, so tests can exercise it with synthetic identities.
+   *
+   * @param recorded Identity recorded when the capture target was set.
+   * @param current Identity queried immediately before activation.
+   * @return True only when both identities name the same nonzero PID with the same nonzero creation time.
+   */
+  [[nodiscard]] constexpr bool process_identity_matches(const process_identity_t &recorded, const process_identity_t &current) noexcept {
+    return recorded.process_id != 0 && current.process_id == recorded.process_id && recorded.creation_time != 0 && current.creation_time == recorded.creation_time;
+  }
+
+  /**
+   * @brief Whether the recorded capture target still refers to a live process.
+   *
+   * @param recorded Identity recorded when the capture target was set.
+   * @param current Identity queried immediately before activation, or empty when the process exited or could not be opened.
+   * @return True only when a current identity is available and matches the recorded identity.
+   */
+  [[nodiscard]] constexpr bool capture_target_is_live(const process_identity_t &recorded, const std::optional<process_identity_t> &current) noexcept {
+    return current.has_value() && process_identity_matches(recorded, *current);
+  }
+
+  /**
+   * @brief Resolve the PID that may be used for process-loopback activation.
+   *
+   * @param recorded Identity recorded when the capture target was set.
+   * @param current Identity queried immediately before activation, or empty when the process exited or could not be opened.
+   * @return The recorded PID when the target is still the same live process, or 0 to select endpoint capture.
+   */
+  [[nodiscard]] constexpr std::uint32_t effective_capture_process_id(const process_identity_t &recorded, const std::optional<process_identity_t> &current) noexcept {
+    return capture_target_is_live(recorded, current) ? recorded.process_id : 0;
+  }
+
+  /**
+   * @brief Whether an activated process-loopback client still captures the validated target.
+   *
+   * The PID is revalidated immediately after activation because it may have
+   * exited or been reused while ActivateAudioInterfaceAsync was resolving it.
+   * This is the pure discard-decision seam: it performs no OS calls, so tests
+   * can exercise it with synthetic PID pairs.
+   *
+   * @param activated_process_id PID the completed activation was started for.
+   * @param revalidated_process_id PID revalidation still accepts, or 0 when the target exited or was reused.
+   * @return True only when revalidation still accepts the activated PID.
+   */
+  [[nodiscard]] constexpr bool activated_process_target_is_current(std::uint32_t activated_process_id, std::uint32_t revalidated_process_id) noexcept {
+    return activated_process_id != 0 && revalidated_process_id == activated_process_id;
+  }
+
+  /**
+   * @brief Query the current identity of a process.
+   *
+   * The process handle is held only for the duration of this call. Failure to
+   * open the process (including access denied), failure to read its times, or
+   * a process that has already exited all fail closed by returning no identity.
+   *
+   * @param process_id Operating-system PID to query, or 0 for no process.
+   * @return Current process identity, or empty when it cannot be verified as live.
+   */
+  std::optional<process_identity_t> query_process_identity(std::uint32_t process_id) {
+    if (process_id == 0) {
+      return std::nullopt;
+    }
+    handle_t process;
+    process.reset(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, process_id));
+    if (!process) {
+      const auto last_error = GetLastError();
+      BOOST_LOG(debug) << "Cannot open process ["sv << process_id << "] to verify its capture identity: [0x"sv << util::hex(last_error).to_string_view() << ']';
+      return std::nullopt;
+    }
+    DWORD exit_code {};
+    // A live handle alone proves nothing: an exited process keeps a valid handle
+    // whose exit code is its real (non-STILL_ACTIVE) status, so both the call
+    // succeeding and the code itself are required to treat the PID as live.
+    if (!GetExitCodeProcess(process.get(), &exit_code) || exit_code != STILL_ACTIVE) {
+      BOOST_LOG(debug) << "Process ["sv << process_id << "] is no longer running; it will not be used for process loopback capture"sv;
+      return std::nullopt;
+    }
+    FILETIME creation_time {};
+    FILETIME exit_time {};
+    FILETIME kernel_time {};
+    FILETIME user_time {};
+    if (!GetProcessTimes(process.get(), &creation_time, &exit_time, &kernel_time, &user_time)) {
+      const auto last_error = GetLastError();
+      BOOST_LOG(debug) << "Cannot read creation time for process ["sv << process_id << "]: [0x"sv << util::hex(last_error).to_string_view() << ']';
+      return std::nullopt;
+    }
+    const auto combined_creation_time = (static_cast<std::uint64_t>(creation_time.dwHighDateTime) << 32) | static_cast<std::uint64_t>(creation_time.dwLowDateTime);
+    if (combined_creation_time == 0) {
+      return std::nullopt;
+    }
+    return process_identity_t {process_id, combined_creation_time};
+  }
+
+  /**
+   * @brief Activator that creates and initializes a process-loopback audio client.
+   */
+  using process_loopback_activator_t = std::function<audio_client_t(std::uint32_t, const format_t &)>;
+
+  /**
+   * @brief Activation step that returns an activated, not yet initialized, process-loopback audio client for a PID.
+   *
+   * This is the injectable seam around `activate_process_loopback_audio_client()`: production passes the real
+   * WASAPI activation, while tests pass a fake so the wrapper in `make_process_loopback_audio_client()` can be
+   * exercised without audio hardware.
+   */
+  using process_loopback_activation_t = std::function<audio_client_t(std::uint32_t)>;
+
+  constexpr DWORD process_loopback_activation_timeout_ms {10000};  ///< Deadline for asynchronous process-loopback activation.
+
+#ifdef SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS
+  /**
+   * @brief Build activation parameters for process-loopback capture.
+   *
+   * @param process_id Launched application PID to capture.
+   * @return Activation parameters including the target process tree.
+   */
+  [[nodiscard]] AUDIOCLIENT_ACTIVATION_PARAMS make_process_loopback_activation_params(std::uint32_t process_id) noexcept {
+    AUDIOCLIENT_ACTIVATION_PARAMS params {};
+    params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK;
+    params.ProcessLoopbackParams.TargetProcessId = process_id;
+    params.ProcessLoopbackParams.ProcessLoopbackMode = PROCESS_LOOPBACK_MODE_INCLUDE_TARGET_PROCESS_TREE;
+    return params;
+  }
+
+  /**
+   * @brief Fill a PROPVARIANT with a heap-owned copy of loopback activation parameters.
+   *
+   * ActivateAudioInterfaceAsync reads the VT_BLOB payload asynchronously, so
+   * the bytes must outlive the call. The copy is heap-allocated with
+   * CoTaskMemAlloc, which makes PropVariantClear() always safe: it frees the
+   * heap copy and can never free a stack address.
+   *
+   * @param prop PROPVARIANT to fill; it must be PropVariantInit'd and empty.
+   * @param params Activation parameters to copy into the heap blob.
+   * @return S_OK when the blob was installed, E_OUTOFMEMORY when the copy cannot be allocated.
+   */
+  HRESULT init_process_loopback_activation_blob(PROPVARIANT &prop, const AUDIOCLIENT_ACTIVATION_PARAMS &params) {
+    prop.vt = VT_BLOB;
+    prop.blob.cbSize = sizeof(params);
+    prop.blob.pBlobData = static_cast<BYTE *>(CoTaskMemAlloc(sizeof(params)));
+    if (!prop.blob.pBlobData) {
+      prop.vt = VT_EMPTY;
+      prop.blob.cbSize = 0;
+      return E_OUTOFMEMORY;
+    }
+    std::memcpy(prop.blob.pBlobData, &params, sizeof(params));
+    return S_OK;
+  }
+#endif
+
+  /**
+   * @brief How initialize_audio_client() reacts when GetMixFormat fails.
+   */
+  enum class mix_format_failure_e {
+    fail,  ///< Return no client.
+    tolerate,  ///< Keep the created format and continue.
+  };
+
+  /**
+   * @brief Initialize an activated audio client for shared loopback capture.
+   *
+   * @param audio_client Activated WASAPI audio client.
+   * @param format Requested capture format.
+   * @param mix_format_failure Whether GetMixFormat failure keeps the created format.
+   * @return Initialized audio client, or nullptr on failure.
+   */
+  audio_client_t initialize_audio_client(audio_client_t audio_client, const format_t &format, mix_format_failure_e mix_format_failure) {
+    using enum mix_format_failure_e;
+    if (!audio_client) {
+      return nullptr;
+    }
+    WAVEFORMATEXTENSIBLE capture_waveformat =
+      create_waveformat(sample_format_e::f32, format.channel_count, format.capture_waveformat_channel_mask);
+    {
+      wave_format_t mixer_waveformat;
+      auto status = audio_client->GetMixFormat(&mixer_waveformat);
+      if (FAILED(status)) {
+        if (mix_format_failure == fail) {
+          BOOST_LOG(error) << "Couldn't get mix format for audio device: [0x"sv << util::hex(status).to_string_view() << ']';
+          return nullptr;
+        }
+        BOOST_LOG(warning) << "Couldn't get mix format for process loopback client: [0x"sv << util::hex(status).to_string_view() << ']';
+      } else {
+        if (mixer_waveformat->nChannels == format.channel_count && mixer_waveformat->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mixer_waveformat->cbSize >= 22) {
+          auto waveformatext_pointer = reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(mixer_waveformat.get());
+          capture_waveformat.dwChannelMask = waveformatext_pointer->dwChannelMask;
+        }
+        BOOST_LOG(info) << "Audio mixer format is "sv << mixer_waveformat->wBitsPerSample << "-bit, "sv
+                        << mixer_waveformat->nSamplesPerSec << " Hz, "sv
+                        << ((mixer_waveformat->nSamplesPerSec != 48000) ? "will be resampled to 48000 by Windows"sv : "no resampling needed"sv);
+      }
+    }
+    auto status = audio_client->Initialize(
+      AUDCLNT_SHAREMODE_SHARED,
+      AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
+        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,
+      0,
+      0,
+      (LPWAVEFORMATEX) &capture_waveformat,
+      nullptr
+    );
+    if (status) {
+      BOOST_LOG(error) << "Couldn't initialize audio client for ["sv << format.name << "]: [0x"sv << util::hex(status).to_string_view() << ']';
+      return nullptr;
+    }
+    BOOST_LOG(info) << "Audio capture format is "sv << logging::bracket(waveformat_to_pretty_string(capture_waveformat));
+    return audio_client;
+  }
+
+#if defined(SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS) && defined(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)
+  /**
+   * @brief Completion handler for asynchronous WASAPI process-loopback activation.
+   *
+   * The callback fills in the result fields and then signals the completion event.
+   * The waiter reads the fields only after a signaled wait; on timeout it must not
+   * touch them at all, because the callback may still be running or arrive later.
+   * A signaled wait also makes the callback's writes visible to the waiter: the
+   * wait/signal functions act as memory barriers.
+   * https://learn.microsoft.com/en-us/windows/win32/sync/synchronization-and-multiprocessor-issues
+   */
+  class process_loopback_completion_handler_t final: public IActivateAudioInterfaceCompletionHandler, public IAgileObject {
+  public:
+    /**
+     * @brief Construct the handler and its completion event.
+     */
+    process_loopback_completion_handler_t() {
+      event_handle = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    }
+
+    /**
+     * @brief Destroy the handler and close its completion event.
+     */
+    ~process_loopback_completion_handler_t() {
+      if (event_handle) {
+        CloseHandle(event_handle);
+      }
+    }
+
+    /**
+     * @brief Query a supported COM interface.
+     * @param riid Requested interface identifier.
+     * @param ppvInterface Receives the interface pointer.
+     * @return S_OK when supported, E_NOINTERFACE otherwise.
+     */
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, VOID **ppvInterface) override {  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+      if (!ppvInterface) {
+        return E_POINTER;
+      }
+      if (riid == IID_IUnknown || riid == __uuidof(IActivateAudioInterfaceCompletionHandler)) {
+        *ppvInterface = static_cast<IActivateAudioInterfaceCompletionHandler *>(this);
+      } else if (riid == __uuidof(IAgileObject)) {
+        *ppvInterface = static_cast<IAgileObject *>(this);
+      } else {
+        *ppvInterface = nullptr;
+        return E_NOINTERFACE;
+      }
+      AddRef();
+      return S_OK;
+    }
+
+    /**
+     * @brief Increment the reference count.
+     * @return New reference count.
+     */
+    ULONG STDMETHODCALLTYPE AddRef() override {
+      return ++ref_count;
+    }
+
+    /**
+     * @brief Decrement the reference count, deleting when it reaches zero.
+     * @return New reference count.
+     */
+    ULONG STDMETHODCALLTYPE Release() override {
+      auto count = --ref_count;
+      if (count == 0) {
+        delete this;
+      }
+      return count;
+    }
+
+    /**
+     * @brief Record asynchronous activation completion and signal the waiter.
+     * @param activate_operation Completed activation operation.
+     * @return S_OK after recording the result.
+     */
+    HRESULT STDMETHODCALLTYPE ActivateCompleted(IActivateAudioInterfaceAsyncOperation *activate_operation) override {
+      if (!activate_operation) {
+        activate_result = E_POINTER;
+        activation_hresult = E_POINTER;
+        query_interface_result = E_POINTER;
+        if (event_handle) {
+          SetEvent(event_handle);
+        }
+        return S_OK;
+      }
+      IUnknown *unknown = nullptr;
+      activate_result = activate_operation->GetActivateResult(&activation_hresult, &unknown);
+      if (SUCCEEDED(activate_result) && SUCCEEDED(activation_hresult) && unknown) {
+        IAudioClient *raw_client = nullptr;
+        query_interface_result = unknown->QueryInterface(IID_IAudioClient, (void **) &raw_client);  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+        if (SUCCEEDED(query_interface_result) && raw_client) {
+          activated_client.reset(raw_client);
+        } else {
+          if (raw_client) {
+            raw_client->Release();
+          }
+          BOOST_LOG(warning) << "Process loopback QueryInterface(IAudioClient) failed: [0x"sv << util::hex(query_interface_result).to_string_view() << ']';
+        }
+      }
+      if (unknown) {
+        unknown->Release();
+      }
+      if (event_handle) {
+        SetEvent(event_handle);
+      }
+      return S_OK;
+    }
+
+    HANDLE event_handle = nullptr;  ///< Event signaled when activation completes.
+    HRESULT activate_result = E_PENDING;  ///< Result of GetActivateResult.
+    HRESULT activation_hresult = E_PENDING;  ///< Activation HRESULT reported by the operation.
+    HRESULT query_interface_result = E_PENDING;  ///< Result of QueryInterface for IAudioClient, or E_PENDING when not attempted.
+    audio_client_t activated_client;  ///< Activated audio client, when activation succeeds.
+
+  private:
+    std::atomic<ULONG> ref_count {1};  ///< COM reference count.
+  };
+
+  /**
+   * @brief Wait for loopback activation completion and collect its result.
+   *
+   * Consumes the caller's handler reference on every path. When the wait reports
+   * anything but WAIT_OBJECT_0 the completion fields are never touched, because the
+   * callback may still be running or arrive later; a signaled wait means the callback
+   * has finished writing them. A late callback stays alive through the reference
+   * Windows itself holds until the operation completes; the handler must not be
+   * freed before the callback runs.
+   * https://learn.microsoft.com/en-us/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-activateaudiointerfaceasync
+   *
+   * The handler must be non-null with a live caller reference; the caller must not
+   * touch it after return, even on timeout, because the late callback is covered by
+   * the operation's own reference.
+   *
+   * When `wait_timed_out` is provided and the wait expires, the caller
+   * reference is NOT consumed: `*wait_timed_out` is set and ownership of
+   * that reference returns to the caller, which must keep the handler (and
+   * any activation blob the pending operation may still read) alive until
+   * the completion event fires, then release it.
+   *
+   * @param handler Completion handler passed to ActivateAudioInterfaceAsync; its caller reference is consumed unless the wait times out with `wait_timed_out` provided.
+   * @param process_id Launched application PID being captured, used for diagnostics.
+   * @param timeout_ms Wait deadline in milliseconds.
+   * @param wait_timed_out Optional out-flag set when the wait expires without consuming the caller reference.
+   * @return Activated (not yet initialized) audio client, or nullptr on failure or timeout.
+   */
+  audio_client_t collect_process_loopback_activation(process_loopback_completion_handler_t *handler, std::uint32_t process_id, DWORD timeout_ms = process_loopback_activation_timeout_ms, bool *wait_timed_out = nullptr) {
+    auto wait_result = WaitForSingleObject(handler->event_handle, timeout_ms);
+    if (wait_result != WAIT_OBJECT_0) {
+      BOOST_LOG(warning) << "Process loopback activation timed out for process ["sv << process_id
+                         << "]: wait returned [0x"sv << util::hex(wait_result).to_string_view() << "] after timeout ["sv << timeout_ms
+                         << " ms]; completion results unavailable"sv;
+      if (wait_timed_out) {
+        *wait_timed_out = true;
+        return nullptr;
+      }
+      handler->Release();
+      return nullptr;
+    }
+    audio_client_t client;
+    if (SUCCEEDED(handler->activate_result) && SUCCEEDED(handler->activation_hresult) && SUCCEEDED(handler->query_interface_result) && handler->activated_client) {
+      client = std::move(handler->activated_client);
+    } else {
+      BOOST_LOG(warning) << "Process loopback activation did not complete successfully for process ["sv << process_id
+                         << "]: wait returned [0x"sv << util::hex(wait_result).to_string_view() << "] after timeout ["sv << timeout_ms
+                         << " ms], GetActivateResult returned [0x"sv << util::hex(handler->activate_result).to_string_view()
+                         << "], activation returned [0x"sv << util::hex(handler->activation_hresult).to_string_view()
+                         << "], QueryInterface(IAudioClient) returned [0x"sv << util::hex(handler->query_interface_result).to_string_view() << ']';
+    }
+    handler->Release();
+    return client;
+  }
+
+  /**
+   * @brief ActivateAudioInterfaceAsync entry point signature, injectable for deterministic tests.
+   *
+   * Production passes the real WASAPI API; tests bind a fake that drives the
+   * completion handler on a worker thread, so the real activation path below
+   * (blob ownership, timeout waiter, reference discipline) is exercised
+   * without audio hardware.
+   */
+  using activate_audio_interface_async_fn_t = std::function<HRESULT(LPCWSTR, REFIID, PROPVARIANT *, IActivateAudioInterfaceCompletionHandler *, IActivateAudioInterfaceAsyncOperation **)>;
+
+  /**
+   * @brief Activate a WASAPI audio client for a process tree via ActivateAudioInterfaceAsync.
+   *
+   * @param process_id Launched application PID to capture.
+   * @param timeout_ms Wait deadline in milliseconds.
+   * @param activate_fn Asynchronous activation entry point, real by default.
+   * @return Activated (not yet initialized) audio client, or nullptr on failure.
+   */
+  audio_client_t activate_process_loopback_audio_client(std::uint32_t process_id, DWORD timeout_ms = process_loopback_activation_timeout_ms, const activate_audio_interface_async_fn_t &activate_fn = activate_audio_interface_async_fn_t {ActivateAudioInterfaceAsync}) {
+    auto *handler = new process_loopback_completion_handler_t();
+    if (!handler->event_handle) {
+      BOOST_LOG(warning) << "Process loopback activation for process ["sv << process_id << "] failed to create its completion event: [0x"sv << util::hex(GetLastError()).to_string_view() << ']';
+      handler->Release();
+      return nullptr;
+    }
+    // Unlike Microsoft's ApplicationLoopback sample, which borrows the address of
+    // the stack-local params for the activation blob, the payload here is a
+    // heap copy: init_process_loopback_activation_blob() allocates it with
+    // CoTaskMemAlloc, so the prop_var_t destructor's PropVariantClear() always
+    // frees a heap address and can never free the stack. The prop_var_t itself
+    // is heap-allocated too, because on a wait timeout the pending operation
+    // may still read the blob and call the handler: both must outlive this
+    // stack frame until the completion event fires (handled below).
+    const auto params = make_process_loopback_activation_params(process_id);
+    auto *activation_prop = new prop_var_t();
+    if (FAILED(init_process_loopback_activation_blob(activation_prop->prop, params))) {
+      BOOST_LOG(warning) << "Process loopback activation for process ["sv << process_id << "] could not allocate its activation blob"sv;
+      delete activation_prop;
+      handler->Release();
+      return nullptr;
+    }
+    IActivateAudioInterfaceAsyncOperation *operation = nullptr;
+    auto status = activate_fn(
+      VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK,
+      IID_IAudioClient,
+      &activation_prop->prop,
+      handler,
+      &operation
+    );
+    if (operation) {
+      operation->Release();
+    }
+    if (FAILED(status)) {
+      BOOST_LOG(warning) << "Process loopback activation failed to start for process ["sv << process_id << "]: ActivateAudioInterfaceAsync returned [0x"sv << util::hex(status).to_string_view() << ']';
+      delete activation_prop;
+      handler->Release();
+      return nullptr;
+    }
+    // collect_process_loopback_activation() consumes the caller's handler
+    // reference unless the wait times out; on timeout keep the handler and
+    // activation blob alive on a detached waiter until the pending
+    // operation completes, instead of freeing state it may still read.
+    bool wait_timed_out = false;
+    auto client = collect_process_loopback_activation(handler, process_id, timeout_ms, &wait_timed_out);
+    if (wait_timed_out) {
+      // The unbounded wait is deliberate: Windows always completes the pending
+      // operation with a callback eventually, so the waiter retires the blob
+      // and handler exactly once. A bounded wait here would only reintroduce
+      // the free-while-pending hazard this waiter exists to prevent.
+      try {
+        std::thread {[handler, activation_prop]() {
+          WaitForSingleObject(handler->event_handle, INFINITE);
+          delete activation_prop;
+          handler->Release();
+        }}.detach();
+      } catch (...) {
+        // No waiter could be started; leak the handler and blob on purpose
+        // rather than free state the pending operation may still read.
+        BOOST_LOG(warning) << "Process loopback activation for process ["sv << process_id << "] timed out and its cleanup waiter could not start; leaking its activation state until process exit"sv;
+      }
+      return nullptr;
+    }
+    delete activation_prop;
+    return client;
+  }
+#endif
+
+  /**
+   * @brief Create and initialize a process-loopback audio client using a supplied activation step.
+   *
+   * @param process_id Launched application PID to capture.
+   * @param format Requested capture format.
+   * @param activation Activation step returning an activated, not yet initialized, client for the PID.
+   * @return Initialized audio client, or nullptr when activation is missing or initialization fails.
+   */
+  audio_client_t make_process_loopback_audio_client(std::uint32_t process_id, const format_t &format, const process_loopback_activation_t &activation) {
+    if (!activation) {
+      BOOST_LOG(warning) << "Process loopback activation is unavailable for process ["sv << process_id << ']';
+      return nullptr;
+    }
+    return initialize_audio_client(activation(process_id), format, mix_format_failure_e::tolerate);
+  }
+
+  /**
+   * @brief Create and initialize a process-loopback audio client for a PID.
+   *
+   * @param process_id Launched application PID to capture.
+   * @param format Requested capture format.
+   * @return Initialized audio client, or nullptr when process loopback is unavailable or fails.
+   */
+  audio_client_t make_process_loopback_audio_client(std::uint32_t process_id, const format_t &format) {
+#if defined(SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS) && defined(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)
+    return make_process_loopback_audio_client(process_id, format, process_loopback_activation_t {&activate_process_loopback_audio_client});
+#else
+    (void) process_id;
+    (void) format;
+    return nullptr;
+#endif
+  }
+
+  /**
+   * @brief Whether WASAPI process loopback can work on this build and OS.
+   *
+   * Process loopback needs the activation-parameter headers at compile time
+   * and Windows build 20348 or later (Windows 11 / Server 2022) at runtime.
+   * The version is read through `RtlGetVersion` so application-manifest
+   * version lies cannot mask the real build, and the result is cached.
+   *
+   * @return True when process-loopback activation is worth attempting.
+   */
+  [[nodiscard]] bool process_loopback_supported() {
+#if defined(SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS) && defined(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)
+    static const bool supported = []() {
+      using rtl_get_version_t = LONG(WINAPI *)(PRTL_OSVERSIONINFOW);
+      const auto ntdll = GetModuleHandleW(L"ntdll.dll");
+      if (!ntdll) {
+        return false;
+      }
+      const auto rtl_get_version = reinterpret_cast<rtl_get_version_t>(GetProcAddress(ntdll, "RtlGetVersion"));
+      if (!rtl_get_version) {
+        return false;
+      }
+      RTL_OSVERSIONINFOW version {};
+      version.dwOSVersionInfoSize = sizeof(version);
+      if (rtl_get_version(&version) != 0) {
+        return false;
+      }
+      return version.dwMajorVersion > 10 || (version.dwMajorVersion == 10 && version.dwBuildNumber >= 20348);
+    }();
+    return supported;
+#else
+    return false;
+#endif
+  }
+
+  /**
    * @brief Create audio client.
    *
    * @param device D3D, audio, or platform device used by the operation.
@@ -370,46 +950,7 @@ namespace platf::audio {
       return nullptr;
     }
 
-    WAVEFORMATEXTENSIBLE capture_waveformat =
-      create_waveformat(sample_format_e::f32, format.channel_count, format.capture_waveformat_channel_mask);
-
-    {
-      wave_format_t mixer_waveformat;
-      status = audio_client->GetMixFormat(&mixer_waveformat);
-      if (FAILED(status)) {
-        BOOST_LOG(error) << "Couldn't get mix format for audio device: [0x"sv << util::hex(status).to_string_view() << ']';
-        return nullptr;
-      }
-
-      // Prefer the native channel layout of captured audio device when channel counts match
-      if (mixer_waveformat->nChannels == format.channel_count && mixer_waveformat->wFormatTag == WAVE_FORMAT_EXTENSIBLE && mixer_waveformat->cbSize >= 22) {
-        auto waveformatext_pointer = reinterpret_cast<const WAVEFORMATEXTENSIBLE *>(mixer_waveformat.get());
-        capture_waveformat.dwChannelMask = waveformatext_pointer->dwChannelMask;
-      }
-
-      BOOST_LOG(info) << "Audio mixer format is "sv << mixer_waveformat->wBitsPerSample << "-bit, "sv
-                      << mixer_waveformat->nSamplesPerSec << " Hz, "sv
-                      << ((mixer_waveformat->nSamplesPerSec != 48000) ? "will be resampled to 48000 by Windows"sv : "no resampling needed"sv);
-    }
-
-    status = audio_client->Initialize(
-      AUDCLNT_SHAREMODE_SHARED,
-      AUDCLNT_STREAMFLAGS_LOOPBACK | AUDCLNT_STREAMFLAGS_EVENTCALLBACK |
-        AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY,  // Enable automatic resampling to 48 KHz
-      0,
-      0,
-      (LPWAVEFORMATEX) &capture_waveformat,
-      nullptr
-    );
-
-    if (status) {
-      BOOST_LOG(error) << "Couldn't initialize audio client for ["sv << format.name << "]: [0x"sv << util::hex(status).to_string_view() << ']';
-      return nullptr;
-    }
-
-    BOOST_LOG(info) << "Audio capture format is "sv << logging::bracket(waveformat_to_pretty_string(capture_waveformat));
-
-    return audio_client;
+    return initialize_audio_client(std::move(audio_client), format, mix_format_failure_e::fail);
   }
 
   /**
@@ -599,14 +1140,15 @@ namespace platf::audio {
     /**
      * @brief Initialize WASAPI capture for the selected audio endpoint.
      *
-     * @param sample_rate Audio sample rate in hertz.
-     * @param frame_size Number of samples captured per audio frame.
-     * @param channels_out Channels out.
-     * @param continuous Whether silent audio should continue to be emitted.
+     * Only the channels, frame size, and continuous flag are used: WASAPI
+     * capture is fixed at 48 kHz float, the Opus mapping is encoder-side, and
+     * host-audio routing is resolved by the shared capture layer.
+     *
+     * @param params Microphone capture parameters for the requested layout.
      * @param capture_device Endpoint device to capture from; the default render device is used when empty.
      * @return 0 on success; nonzero or negative platform status on failure.
      */
-    int init(std::uint32_t sample_rate, std::uint32_t frame_size, std::uint32_t channels_out, bool continuous, device_t capture_device) {
+    int init(const microphone_params_t &params, device_t capture_device) {
       audio_event.reset(CreateEventA(nullptr, FALSE, FALSE, nullptr));
       if (!audio_event) {
         BOOST_LOG(error) << "Couldn't create Event handle"sv;
@@ -644,9 +1186,9 @@ namespace platf::audio {
       }
 
       for (const auto &format : formats) {
-        if (format.channel_count != channels_out) {
+        if (format.channel_count != params.channels) {
           BOOST_LOG(debug) << "Skipping audio format ["sv << format.name << "] with channel count ["sv
-                           << format.channel_count << " != "sv << channels_out << ']';
+                           << format.channel_count << " != "sv << params.channels << ']';
           continue;
         }
 
@@ -655,7 +1197,7 @@ namespace platf::audio {
 
         if (audio_client) {
           BOOST_LOG(debug) << "Found audio format ["sv << format.name << ']';
-          channels = channels_out;
+          channels = params.channels;
           break;
         }
       }
@@ -665,10 +1207,53 @@ namespace platf::audio {
         return -1;
       }
 
-      REFERENCE_TIME default_latency;
+      return finish_capture_init(params);
+    }
+
+    /**
+     * @brief Initialize WASAPI capture for a specific process tree.
+     *
+     * @param params Microphone capture parameters for the requested layout.
+     * @param process_id Launched application PID to capture.
+     * @param activator Activator creating an initialized process-loopback client.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
+    int init_process_loopback(const microphone_params_t &params, std::uint32_t process_id, const process_loopback_activator_t &activator) {
+      audio_event.reset(CreateEventA(nullptr, FALSE, FALSE, nullptr));
+      if (!audio_event) {
+        BOOST_LOG(error) << "Couldn't create Event handle"sv;
+        return -1;
+      }
+      follows_default_device = false;
+      for (const auto &format : formats) {
+        if (format.channel_count != params.channels) {
+          continue;
+        }
+        audio_client = activator(process_id, format);
+        if (audio_client) {
+          channels = params.channels;
+          break;
+        }
+      }
+      if (!audio_client) {
+        BOOST_LOG(warning) << "Couldn't create process loopback audio client"sv;
+        return -1;
+      }
+      return finish_capture_init(params);
+    }
+
+    /**
+     * @brief Finish capture initialization after an audio client is initialized.
+     *
+     * @param params Microphone capture parameters for the requested layout.
+     * @return 0 on success; nonzero or negative platform status on failure.
+     */
+    int finish_capture_init(const microphone_params_t &params) {
+      HRESULT status;
+      REFERENCE_TIME default_latency = 100000;
       audio_client->GetDevicePeriod(&default_latency, nullptr);
       default_latency_ms = default_latency / 1000;
-      continuous_audio = continuous;
+      continuous_audio = params.continuous_audio;
 
       std::uint32_t frames;
       status = audio_client->GetBufferSize(&frames);
@@ -679,7 +1264,7 @@ namespace platf::audio {
       }
 
       // *2 --> needs to fit double
-      sample_buf = util::buffer_t<float> {std::max(frames, frame_size) * 2 * channels_out};
+      sample_buf = util::buffer_t<float> {std::max(frames, params.frame_size) * 2 * static_cast<std::uint32_t>(params.channels)};
       sample_buf_pos = std::begin(sample_buf);
 
       status = audio_client->GetService(IID_IAudioCaptureClient, (void **) &audio_capture);
@@ -870,6 +1455,11 @@ namespace platf::audio {
    */
   class audio_control_t: public ::platf::audio_control_t {
   public:
+    // The positional microphone() override below hides the parameter-bundle
+    // overload; unhide it so new code (and the test seams) can call the bundle
+    // form on this type directly instead of via a base-class reference.
+    using ::platf::audio_control_t::microphone;
+
     /**
      * @brief Query host and virtual sink names available to Sunshine.
      *
@@ -878,19 +1468,17 @@ namespace platf::audio {
     std::optional<sink_t> sink_info() override {
       sink_t sink;
 
-      if (config::audio.external_audio) {
-        if (config::audio.sink.empty()) {
-          BOOST_LOG(error) << "external_audio requires an explicit audio_sink";
-          return std::nullopt;
-        }
-        sink.host = config::audio.sink;
-        return sink;
-      }
-
       // Fill host sink name with the device_id of the current default audio device.
       {
         auto device = default_device(device_enum);
         if (!device) {
+          // Keep-default with a configured sink does not need a default: capture that
+          // endpoint directly, but only when it resolves to an active device right now.
+          if (config::audio.keep_default_sink && !config::audio.sink.empty() && get_sink_device(config::audio.sink)) {
+            BOOST_LOG(warning) << "No default audio device available; capturing configured sink ["sv << config::audio.sink << ']';
+            sink.host = config::audio.sink;
+            return sink;
+          }
           return std::nullopt;
         }
 
@@ -898,6 +1486,11 @@ namespace platf::audio {
         device->GetId(&id);
 
         sink.host = utf_utils::to_utf8(id.get());
+      }
+
+      // Keep-default routing never selects the virtual sink, so skip its discovery.
+      if (config::audio.keep_default_sink) {
+        return sink;
       }
 
       // Prepare to search for the device_id of the virtual audio sink device,
@@ -941,17 +1534,17 @@ namespace platf::audio {
      * @return A pair of device_id and format reference if the sink name matches
      *         our naming scheme for virtual audio sinks, `std::nullopt` otherwise.
      */
-    std::optional<std::pair<std::wstring, std::reference_wrapper<const format_t>>> extract_virtual_sink_info(const std::string &sink) {
+    std::optional<std::pair<std::wstring, std::reference_wrapper<const format_t>>> extract_virtual_sink_info(std::string_view sink) const {
       // Encoding format:
       // [virtual-(format name)]device_id
-      std::string current = sink;
+      std::string_view current = sink;
       if (auto prefix = "virtual-"sv; current.find(prefix) == 0) {
         current = current.substr(prefix.size(), current.size() - prefix.size());
 
         for (const auto &format : formats) {
           auto &name = format.name;
           if (current.find(name) == 0) {
-            auto device_id = utf_utils::from_utf8(current.substr(name.size(), current.size() - name.size()));
+            auto device_id = utf_utils::from_utf8(std::string {current.substr(name.size(), current.size() - name.size())});
             return std::make_pair(device_id, std::reference_wrapper(format));
           }
         }
@@ -989,7 +1582,124 @@ namespace platf::audio {
     }
 
     /**
+     * @brief Consistent copy of the recorded capture target.
+     */
+    struct capture_target_snapshot_t {
+      audio_capture_intent_e intent;  ///< Intent for the next microphone() call.
+      std::uint32_t process_id;  ///< PID for process-loopback capture, or 0 for endpoint capture.
+      process_identity_t identity;  ///< Creation-time identity recorded with `process_id`, empty when unverifiable.
+    };
+
+    /**
+     * @brief Copy the recorded capture target under the base capture mutex.
+     *
+     * Holds `capture_state_mutex_` once so the intent, PID, and identity form
+     * one consistent snapshot with the shared `recorded_target_` record.
+     *
+     * @return Intent, PID, and identity as one consistent snapshot.
+     */
+    capture_target_snapshot_t snapshot_capture_target() const {
+      std::lock_guard lock {capture_state_mutex_};
+      return {recorded_target_.intent, recorded_target_.process_id, capture_target_identity};
+    }
+
+    /**
+     * @brief Copy the assigned sink name under the base capture mutex.
+     *
+     * @return Sink assigned while Sunshine captures host audio, possibly empty.
+     */
+    std::string snapshot_assigned_sink() const {
+      return snapshot_recorded_sink();
+    }
+
+    /**
+     * @brief Record the capture target for the next microphone() call.
+     *
+     * Thread-safe: the intent, PID, and identity are stored as one snapshot
+     * under `capture_state_mutex_`, so microphone() never sees a mismatched
+     * triple. The identity arrives pre-queried from the owned child handle
+     * under the process lifecycle lock and is stored verbatim as the
+     * revalidation baseline: querying it here by PID instead would reopen the
+     * reuse window the handoff closes (an exited process whose PID was already
+     * reused would record the replacement's creation time and defeat both the
+     * pre-activation and post-activation checks). An unverifiable baseline
+     * fails closed at validation time, where the PID resolves to endpoint capture.
+     *
+     * @param intent Capture intent resolved from the audio configuration.
+     * @param identity Operating-system identity to capture, or {0, 0} for endpoint capture.
+     */
+    void set_capture_target(audio_capture_intent_e intent, process_identity_t identity) override {
+      if (identity.process_id == 0) {
+        identity = {};
+      }
+      std::lock_guard lock {capture_state_mutex_};
+      recorded_target_.intent = intent;
+      recorded_target_.process_id = identity.process_id;
+      capture_target_identity = identity;
+    }
+
+    /**
+     * @brief Release the recorded capture target when it still belongs to the caller.
+     *
+     * Thread-safe: the compare-and-reset runs under `capture_state_mutex_`.
+     * The target resets to endpoint capture only when the stored intent and
+     * PID still equal the given ones, so one exiting session cannot wipe
+     * another session's recorded target.
+     *
+     * @param intent Capture intent recorded by the session being torn down.
+     * @param process_id PID recorded by the session being torn down, or 0 for endpoint capture.
+     */
+    void clear_capture_target(audio_capture_intent_e intent, std::uint32_t process_id) override {
+      clear_recorded_capture_target_if_matches(intent, process_id);
+    }
+
+#ifdef SUNSHINE_TESTS
+    /**
+     * @brief Install a test override for the process-loopback activator used by microphone().
+     *
+     * Tests install a counting activator that returns no client so the
+     * loopback-attempt and activation-failure fallback can be exercised
+     * without audio hardware. Production never calls this; an empty override
+     * selects the real WASAPI activator.
+     *
+     * @param activator Activator microphone() uses instead of the production one.
+     */
+    void set_test_loopback_activator(process_loopback_activator_t activator) {
+      test_loopback_activator = std::move(activator);
+    }
+#endif
+
+    /**
+     * @brief Revalidate the recorded capture target immediately before activation.
+     *
+     * Snapshots the target under `capture_state_mutex_`, then revalidates without
+     * holding the lock so process queries never block other sessions.
+     *
+     * @return Recorded PID when it still refers to the same live process, or 0 when the process exited, the PID was reused, or its identity cannot be verified.
+     */
+    std::uint32_t validated_capture_process_id() {
+      return validated_snapshot_process_id(snapshot_capture_target());
+    }
+
+    /**
+     * @brief Whether the Windows backend can capture one launched process tree.
+     *
+     * @return True only when this build and OS support WASAPI process loopback.
+     */
+    bool supports_process_capture() const override {
+      return process_loopback_supported();
+    }
+
+    /**
      * @brief Create a microphone capture stream for the requested layout.
+     *
+     * Positional override per the shared design; new callers use the
+     * parameter-bundle overload unhidden above. Operates on mutex-guarded
+     * snapshots of the capture target and assigned sink, so concurrent
+     * sessions cannot change either mid-creation. The default-endpoint
+     * callback reasserts the snapshot taken here, never the shared string.
+     * Test builds may override the loopback activator via
+     * set_test_loopback_activator(); production always uses the WASAPI activator.
      *
      * @param mapping Opus channel mapping table for the requested layout.
      * @param channels Number of audio channels in the stream.
@@ -999,22 +1709,57 @@ namespace platf::audio {
      * @param host_audio_enabled Whether host playback should remain enabled during capture.
      * @return Microphone capture object for the requested audio layout.
      */
-    std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, [[maybe_unused]] bool host_audio_enabled) override {
+    std::unique_ptr<mic_t> microphone(const std::uint8_t *mapping, int channels, std::uint32_t sample_rate, std::uint32_t frame_size, bool continuous_audio, bool host_audio_enabled) override {
+      const microphone_params_t params {mapping, channels, sample_rate, frame_size, continuous_audio, host_audio_enabled};
+      const auto capture_snapshot = snapshot_capture_target();
+      const auto target_process_id = validated_snapshot_process_id(capture_snapshot);
+      if (use_process_loopback(target_process_id, capture_snapshot.intent)) {
+        auto process_mic = std::make_unique<mic_wasapi_t>();
+        auto loopback_activator = process_loopback_activator_t {static_cast<audio_client_t (*)(std::uint32_t, const format_t &)>(&make_process_loopback_audio_client)};
+#ifdef SUNSHINE_TESTS
+        // Tests install a failing activator to exercise the loopback-attempt
+        // and activation-failure fallback without audio hardware.
+        if (test_loopback_activator) {
+          loopback_activator = test_loopback_activator;
+        }
+#endif
+        if (!process_mic->init_process_loopback(params, target_process_id, loopback_activator)) {
+          // The PID may have exited or been reused while activation was
+          // resolving it, so revalidate after activation and discard on
+          // mismatch instead of capturing the wrong process.
+          if (activated_process_target_is_current(target_process_id, validated_snapshot_process_id(capture_snapshot))) {
+            BOOST_LOG(info) << "Capturing audio from process ["sv << target_process_id << "] via process loopback"sv;
+            return process_mic;
+          }
+          BOOST_LOG(warning) << "Process ["sv << target_process_id << "] exited or its PID was reused during activation; falling back to endpoint capture"sv;
+        } else {
+          BOOST_LOG(warning) << "Process loopback capture failed for process ["sv << target_process_id << "]; falling back to endpoint capture"sv;
+        }
+      }
+
       auto mic = std::make_unique<mic_wasapi_t>();
 
-      // External routing pins capture to the configured sink; otherwise prefer the session's assigned sink.
-      const auto &requested_sink = config::audio.external_audio || assigned_sink.empty() ? config::audio.sink : assigned_sink;
+      // An explicit sink pin stays pinned. With keep-default and no configured
+      // sink, the assigned sink is only the host sink recorded at startup, so
+      // capture must follow the Windows default instead of resolving that
+      // snapshot after the startup endpoint disappears.
+      const bool follow_default_device = should_follow_default_device();
 
-      if (config::audio.external_audio && requested_sink.empty()) {
-        BOOST_LOG(error) << "external_audio requires an explicit audio_sink";
-        return nullptr;
-      }
+      // Snapshot the assigned sink once: the default-endpoint callback installed
+      // below runs on the capture thread and must reassert this copy, never a
+      // shared string that another session may rewrite concurrently.
+      const auto assigned_sink_snapshot = snapshot_assigned_sink();
+
+      // Prefer the session's assigned sink; otherwise use the configured sink.
+      const auto requested_sink = assigned_sink_snapshot.empty() ? config::audio.sink : assigned_sink_snapshot;
 
       // Capture the requested sink directly instead of relying on it being the default
       // render device, so that capture keeps working when the default device differs
       // from the sink or changes during the session.
       device_t capture_device;
-      if (!requested_sink.empty()) {
+      if (follow_default_device) {
+        BOOST_LOG(info) << "Capturing audio from the Windows default sink"sv;
+      } else if (!requested_sink.empty()) {
         capture_device = get_sink_device(requested_sink);
         if (!capture_device) {
           BOOST_LOG(error) << "Couldn't resolve audio sink ["sv << requested_sink << "] to a capture device"sv;
@@ -1024,16 +1769,16 @@ namespace platf::audio {
         BOOST_LOG(info) << "Capturing audio from sink ["sv << requested_sink << ']';
       }
 
-      if (mic->init(sample_rate, frame_size, channels, continuous_audio, std::move(capture_device))) {
+      if (mic->init(params, std::move(capture_device))) {
         return nullptr;
       }
 
-      // If this is a virtual sink, set a callback that will change the sink back if it's changed
-      auto virtual_sink_info = extract_virtual_sink_info(assigned_sink);
-      if (virtual_sink_info && !config::audio.external_audio) {
-        mic->default_endpt_changed_cb = [this] {
-          BOOST_LOG(info) << "Resetting sink to ["sv << assigned_sink << "] after default changed";
-          set_sink(assigned_sink);
+      // If this is a virtual sink, set a callback that will change the sink back if it's changed.
+      // Hands-off modes never reinstall: capture follows the recorded endpoint directly.
+      if (should_install_default_callback(assigned_sink_snapshot)) {
+        mic->default_endpt_changed_cb = [this, sink = assigned_sink_snapshot] {
+          BOOST_LOG(info) << "Resetting sink to ["sv << sink << "] after default changed";
+          set_sink(sink);
         };
       }
 
@@ -1113,11 +1858,17 @@ namespace platf::audio {
     /**
      * @brief Update the sink value on the backend.
      *
+     * Thread-safe: only the assigned-sink store is guarded; the endpoint
+     * switch itself runs outside `capture_state_mutex_`. Safe to call from the
+     * default-endpoint callback on the capture thread.
+     *
      * @param sink Audio sink name to route or capture.
      * @return Status from updating sink.
      */
     int set_sink(const std::string &sink) override {
-      if (config::audio.external_audio) {
+      if (config::audio.keep_default_sink) {
+        // Keep-default never swaps the host default; capture follows the recorded endpoint.
+        record_capture_sink(sink);
         return 0;
       }
 
@@ -1144,10 +1895,80 @@ namespace platf::audio {
       // Remember the assigned sink name, so we have it for later if we need to set it
       // back after another application changes it
       if (!failure) {
-        assigned_sink = sink;
+        record_capture_sink(sink);
       }
 
       return failure;
+    }
+
+    /**
+     * @brief Whether the backend can capture a sink without changing the host default.
+     *
+     * @return Always true: capture_sink() records the target for direct WASAPI capture.
+     */
+    bool supports_keep_default_sink() const override {
+      return true;
+    }
+
+    /**
+     * @brief Capture the given sink without changing the host default.
+     *
+     * Records the target for microphone() under the base capture mutex; unlike
+     * set_sink(), this never calls SetDefaultEndpoint and never installs the
+     * Steam drivers.
+     *
+     * @param sink Audio sink name to capture.
+     * @return Always 0: recording a capture target cannot fail here.
+     */
+    int capture_sink(const std::string &sink) override {
+      return record_keep_default_capture_sink(sink);
+    }
+
+    /**
+     * @brief Whether endpoint capture should follow the Windows default device.
+     *
+     * Only the automatically captured host sink follows the default: an
+     * explicit `audio_sink` pin stays pinned, and the swap path keeps
+     * capturing its assigned (virtual) endpoint.
+     *
+     * @return True when keep-default is enabled with no configured sink.
+     */
+    [[nodiscard]] bool should_follow_default_device() const noexcept {
+      return config::audio.keep_default_sink && config::audio.sink.empty();
+    }
+
+    /**
+     * @brief Whether a default-endpoint change may reinstall the assigned sink.
+     *
+     * Keep-default sessions must never reassert the default: capture follows the
+     * recorded endpoint directly, so default changes are simply observed.
+     *
+     * @param sink Assigned sink name that would be reinstalled.
+     * @return True when the reassertion callback may be installed.
+     */
+    [[nodiscard]] bool should_install_default_callback(std::string_view sink) const {
+      return static_cast<bool>(extract_virtual_sink_info(sink)) && !config::audio.keep_default_sink;
+    }
+
+    /**
+     * @brief Whether startup may move the default away from Steam Streaming Speakers.
+     *
+     * @return False in hands-off modes that never touch the host default.
+     */
+    [[nodiscard]] bool should_reset_default_device() const noexcept {
+      return !config::audio.keep_default_sink;
+    }
+
+    /**
+     * @brief Whether the Steam Streaming Speakers driver may be installed.
+     *
+     * Installing a driver reconfigures the audio subsystem (device arrival makes
+     * Windows re-evaluate defaults), which keep-default sessions must not trigger.
+     *
+     * @return False in hands-off modes that never touch the host audio graph.
+     */
+    [[nodiscard]] bool should_install_steam_drivers() const noexcept {
+      return !config::audio.keep_default_sink && config::audio.install_steam_drivers;
     }
 
     /**
@@ -1186,18 +2007,68 @@ namespace platf::audio {
      * @param name Endpoint name or identifier to match across all fields.
      * @return Field list requiring every supported endpoint field to match the name.
      */
-    audio_control_t::match_fields_list_t match_all_fields(const std::wstring &name) {
+    audio_control_t::match_fields_list_t match_all_fields(std::wstring_view name) {
       using enum match_field_e;
       return {
-        {device_id, name},  // {0.0.0.00000000}.{29dd7668-45b2-4846-882d-950f55bf7eb8}
-        {device_friendly_name, name},  // Digital Audio (S/PDIF) (High Definition Audio Device)
-        {device_description, name},  // Digital Audio (S/PDIF)
-        {adapter_friendly_name, name},  // High Definition Audio Device
+        {device_id, std::wstring {name}},  // {0.0.0.00000000}.{29dd7668-45b2-4846-882d-950f55bf7eb8}
+        {device_friendly_name, std::wstring {name}},  // Digital Audio (S/PDIF) (High Definition Audio Device)
+        {device_description, std::wstring {name}},  // Digital Audio (S/PDIF)
+        {adapter_friendly_name, std::wstring {name}},  // High Definition Audio Device
       };
     }
 
     /**
+     * @brief Identity and property store read from one enumerated endpoint.
+     */
+    struct endpoint_probe_t {
+      std::wstring device_id;  ///< Device identifier string.
+      prop_t prop;  ///< Opened property store for endpoint metadata.
+    };
+
+    /**
+     * @brief Read one enumerated endpoint's identity and property store.
+     *
+     * Every Item(), GetId(), and OpenPropertyStore() HRESULT is checked; an
+     * entry that cannot be read reports std::nullopt so the caller skips it
+     * instead of risking a null device id or a null property store dereference.
+     *
+     * @param collection Enumerated active render endpoints.
+     * @param index Endpoint index within the collection, used for diagnostics.
+     * @return Probe data, or std::nullopt when the endpoint cannot be read.
+     */
+    static std::optional<endpoint_probe_t> probe_audio_endpoint(collection_t &collection, int index) {
+      device_t device;
+      auto status = collection->Item(index, &device);
+      if (FAILED(status) || !device) {
+        BOOST_LOG(warning) << "Skipping endpoint ["sv << index << "] that could not be read: [0x"sv << util::hex(status).to_string_view() << ']';
+        return std::nullopt;
+      }
+
+      wstring_t wstring_id;
+      status = device->GetId(&wstring_id);
+      if (FAILED(status) || !wstring_id.get()) {
+        BOOST_LOG(warning) << "Skipping endpoint ["sv << index << "] without a readable device id: [0x"sv << util::hex(status).to_string_view() << ']';
+        return std::nullopt;
+      }
+
+      prop_t prop;
+      status = device->OpenPropertyStore(STGM_READ, &prop);
+      if (FAILED(status) || !prop) {
+        BOOST_LOG(warning) << "Skipping endpoint ["sv << index << "] without a readable property store: [0x"sv << util::hex(status).to_string_view() << ']';
+        return std::nullopt;
+      }
+
+      return endpoint_probe_t {std::wstring {wstring_id.get()}, std::move(prop)};
+    }
+
+    /**
      * @brief Search for currently present audio device_id using multiple match fields.
+     *
+     * Entries that cannot be read are skipped: every Item(), GetId(), and
+     * OpenPropertyStore() HRESULT is checked, and a failed entry continues to
+     * the next device instead of risking a null device id or a null property
+     * store dereference.
+     *
      * @param match_list Pairs of match fields and values
      * @return Optional pair of matched field and device_id
      */
@@ -1214,19 +2085,20 @@ namespace platf::audio {
       }
 
       UINT count = 0;
-      collection->GetCount(&count);
+      status = collection->GetCount(&count);
+      if (FAILED(status)) {
+        BOOST_LOG(error) << "Couldn't count endpoints: [0x"sv << util::hex(status).to_string_view() << ']';
+        return std::nullopt;
+      }
 
       std::vector<std::wstring> matched(match_list.size());
       for (auto x = 0; x < count; ++x) {
-        audio::device_t device;
-        collection->Item(x, &device);
-
-        audio::wstring_t wstring_id;
-        device->GetId(&wstring_id);
-        std::wstring device_id = wstring_id.get();
-
-        audio::prop_t prop;
-        device->OpenPropertyStore(STGM_READ, &prop);
+        auto probe = probe_audio_endpoint(collection, x);
+        if (!probe) {
+          continue;
+        }
+        std::wstring device_id = std::move(probe->device_id);
+        audio::prop_t prop = std::move(probe->prop);
 
         prop_var_t adapter_friendly_name;
         prop_var_t device_friendly_name;
@@ -1239,6 +2111,8 @@ namespace platf::audio {
         for (size_t i = 0; i < match_list.size(); i++) {
           if (matched[i].empty()) {
             const wchar_t *match_value = nullptr;
+            // Note: no using-enum here; the enumerator names would shadow the
+            // device_id/device_friendly_name/adapter_friendly_name locals below.
             switch (match_list[i].first) {
               case match_field_e::device_id:
                 match_value = device_id.c_str();
@@ -1276,7 +2150,7 @@ namespace platf::audio {
      * @brief Resets the default audio device from Steam Streaming Speakers.
      */
     void reset_default_device() {
-      if (config::audio.external_audio) {
+      if (!should_reset_default_device()) {
         return;
       }
 
@@ -1416,7 +2290,7 @@ namespace platf::audio {
      */
     template<typename CreateInstance = decltype(&CoCreateInstance)>
     int init(const CreateInstance &create_instance = &CoCreateInstance) {
-      if (!config::audio.external_audio) {
+      if (!config::audio.keep_default_sink) {
         auto status = create_instance(
           CLSID_CPolicyConfigClient,
           nullptr,
@@ -1455,7 +2329,45 @@ namespace platf::audio {
 
     policy_t policy;  ///< Windows policy configuration interface used to switch default audio devices.
     audio::device_enum_t device_enum;  ///< Device enumerator used to query and watch audio endpoints.
-    std::string assigned_sink;  ///< Sink assigned while Sunshine captures host audio, captured directly by the microphone.
+
+  private:
+    /**
+     * @brief Revalidate a capture-target snapshot immediately before or after activation.
+     *
+     * Operates only on the given snapshot plus a fresh process query, so
+     * callers must not hold `capture_state_mutex_` while revalidation runs.
+     *
+     * @param snapshot Capture target snapshot to revalidate.
+     * @return Snapshot PID when it still refers to the same live process, or 0 for endpoint capture.
+     */
+    static std::uint32_t validated_snapshot_process_id(const capture_target_snapshot_t &snapshot) {
+      if (snapshot.process_id == 0) {
+        return 0;
+      }
+      const auto current = query_process_identity(snapshot.process_id);
+      const auto effective = effective_capture_process_id(snapshot.identity, current);
+      if (effective == 0) {
+        BOOST_LOG(warning) << "Capture target process ["sv << snapshot.process_id << "] exited or its PID was reused; falling back to endpoint capture"sv;
+      }
+      return effective;
+    }
+
+#ifdef SUNSHINE_TESTS
+    process_loopback_activator_t test_loopback_activator;  ///< Test override for the loopback activator used by microphone(), empty in production.
+#endif
+    /**
+     * @brief Reset the WASAPI creation-time identity paired with the recorded target.
+     *
+     * Invoked by the base `clear_recorded_capture_target_if_matches()` while holding
+     * `capture_state_mutex_`, so the intent/PID/identity reset stays atomic under one
+     * lock hold. Non-reentrant by design: plain struct reset only, no OS queries,
+     * no base-helper calls.
+     */
+    void on_capture_target_cleared() override {
+      capture_target_identity = {};
+    }
+
+    process_identity_t capture_target_identity {};  ///< Creation-time identity recorded with the PID, guarded by the base `capture_state_mutex_`, empty when unverifiable.
   };
 
 #ifdef SUNSHINE_TESTS
@@ -1490,23 +2402,1244 @@ namespace platf::audio {
     }
 
     /**
-     * @brief Exercise sink discovery without initializing Windows policy interfaces.
-     * @return Sinks reported by the production controller for the current configuration.
-     */
-    std::optional<sink_t> configured_sink_info() {
-      audio_control_t control;
-      return control.sink_info();
-    }
-
-    /**
-     * @brief Exercise the external-routing sink-change guard without policy interfaces.
+     * @brief Exercise the keep-default sink-change guard without policy interfaces.
      * @param sink Sink a caller attempts to select.
      * @return Status from the production sink setter.
      */
-    int set_external_sink(const std::string &sink) {
+    int set_keep_default_sink(const std::string &sink) {
       audio_control_t control;
       control.reset_default_device();
       return control.set_sink(sink);
+    }
+
+    /**
+     * @brief Exercise keep-default support detection without initializing Windows policy interfaces.
+     * @return True when the backend captures without changing the host default.
+     */
+    bool keep_default_supported() {
+      audio_control_t control;
+      return control.supports_keep_default_sink();
+    }
+
+    /**
+     * @brief Exercise capture-only sink recording without policy interfaces.
+     * @param sink Sink a caller attempts to capture.
+     * @return Sink recorded for direct capture, or empty when recording failed.
+     */
+    std::string capture_assigned_sink(const std::string &sink) {
+      audio_control_t control;
+      if (control.capture_sink(sink)) {
+        return {};
+      }
+
+      return control.snapshot_assigned_sink();
+    }
+
+    /**
+     * @brief Exercise the process-loopback predicate without audio hardware.
+     * @param process_id Revalidated application PID, or 0 for endpoint capture.
+     * @param intent Capture intent recorded for the next microphone() call.
+     * @return True when process loopback should be attempted.
+     */
+    bool use_process_loopback(std::uint32_t process_id, audio_capture_intent_e intent) {
+      return platf::audio::use_process_loopback(process_id, intent);
+    }
+
+  #ifdef SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS
+    /**
+     * @brief Build process-loopback activation parameters for a PID.
+     * @param process_id Launched application PID to capture.
+     * @return Activation parameters including the target process tree.
+     */
+    AUDIOCLIENT_ACTIVATION_PARAMS make_process_loopback_activation_params(std::uint32_t process_id) {
+      return platf::audio::make_process_loopback_activation_params(process_id);
+    }
+
+    /**
+     * @brief Build a heap-owned activation blob and verify it clears safely.
+     *
+     * Pins the regression-proof property of the production activation blob:
+     * the payload is a heap copy (never the address of the stack params), and
+     * PropVariantClear() releases it cleanly.
+     *
+     * @param process_id Launched application PID to capture.
+     * @return True when the blob holds a heap copy of the params and clears cleanly.
+     */
+    bool activation_blob_holds_heap_copy(std::uint32_t process_id) {
+      const auto params = platf::audio::make_process_loopback_activation_params(process_id);
+      PROPVARIANT prop {};
+      PropVariantInit(&prop);
+      if (FAILED(platf::audio::init_process_loopback_activation_blob(prop, params))) {
+        return false;
+      }
+      const bool holds_copy = prop.vt == VT_BLOB &&
+                              prop.blob.cbSize == sizeof(params) &&
+                              prop.blob.pBlobData != nullptr &&
+                              prop.blob.pBlobData != reinterpret_cast<const BYTE *>(&params) &&
+                              std::memcmp(prop.blob.pBlobData, &params, sizeof(params)) == 0;
+      const auto clear_status = PropVariantClear(&prop);
+      return holds_copy && SUCCEEDED(clear_status) && prop.vt == VT_EMPTY;
+    }
+  #endif
+
+    /**
+     * @brief Exercise process-loopback initialization with an activator that always fails.
+     * @return True when initialization fails as expected (the fallback trigger).
+     */
+    bool process_loopback_fails_with_null_activator() {
+      mic_wasapi_t mic;
+      process_loopback_activator_t activator = [](std::uint32_t, const format_t &) -> audio_client_t {
+        return nullptr;
+      };
+      const microphone_params_t params {nullptr, 2, 48000, 240, false, false};
+      return mic.init_process_loopback(params, 1234, activator) != 0;
+    }
+
+    /**
+     * @brief Fake IAudioClient with a controllable Initialize result for process-loopback wrapper tests.
+     */
+    /**
+     * @brief Minimal fake capture client served only to satisfy GetService().
+     *
+     * Exists so end-to-end loopback tests can drive microphone() through a
+     * succeeding activator: endpoint initialization requires a capture client
+     * service, but no test samples audio through it, so every method reports
+     * unimplemented.
+     */
+    class fake_process_loopback_capture_client_t final: public IAudioCaptureClient {
+    public:
+      fake_process_loopback_capture_client_t() {
+        ++live_count;
+      }
+
+      /**
+       * @brief Destroy the fake capture client, releasing its lifetime count.
+       */
+      ~fake_process_loopback_capture_client_t() {
+        --live_count;
+      }
+
+      HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override {  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+        if (!object) {
+          return E_POINTER;
+        }
+        if (riid == IID_IUnknown || riid == __uuidof(IAudioCaptureClient)) {
+          *object = static_cast<IAudioCaptureClient *>(this);
+          AddRef();
+          return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+      }
+
+      ULONG STDMETHODCALLTYPE AddRef() override {
+        return ++ref_count;
+      }
+
+      ULONG STDMETHODCALLTYPE Release() override {
+        auto count = --ref_count;
+        if (count == 0) {
+          delete this;
+        }
+        return count;
+      }
+
+      HRESULT STDMETHODCALLTYPE GetBuffer(BYTE **, UINT32 *, DWORD *, UINT64 *, UINT64 *) override {
+        return E_NOTIMPL;
+      }
+
+      HRESULT STDMETHODCALLTYPE ReleaseBuffer(UINT32) override {
+        return E_NOTIMPL;
+      }
+
+      HRESULT STDMETHODCALLTYPE GetNextPacketSize(UINT32 *) override {
+        return E_NOTIMPL;
+      }
+
+      static inline std::atomic live_count {0};  ///< Live fake-capture-client count for leak checks.
+
+    private:
+      std::atomic<ULONG> ref_count {1};  ///< COM reference count.
+    };
+
+    class fake_process_loopback_audio_client_t final: public IAudioClient {
+    public:
+      /**
+       * @brief Construct a fake client returning the given result from Initialize().
+       * @param initialize_status HRESULT returned by Initialize().
+       * @param serve_capture_client Whether GetService() serves a fake capture client instead of failing.
+       */
+      explicit fake_process_loopback_audio_client_t(HRESULT initialize_status, bool serve_capture_client = false):
+          initialize_status {initialize_status},
+          serve_capture_client {serve_capture_client} {
+        ++live_count;
+      }
+
+      /**
+       * @brief Destroy the fake client, releasing its lifetime count.
+       */
+      ~fake_process_loopback_audio_client_t() {
+        --live_count;
+      }
+
+      /**
+       * @brief Query a supported COM interface.
+       * @param riid Requested interface identifier.
+       * @param object Receives the interface pointer.
+       * @return S_OK when supported, E_NOINTERFACE otherwise.
+       */
+      HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override {  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+        if (!object) {
+          return E_POINTER;
+        }
+        if (riid == IID_IUnknown || riid == __uuidof(IAudioClient)) {
+          *object = static_cast<IAudioClient *>(this);
+          AddRef();
+          return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+      }
+
+      /**
+       * @brief Increment the reference count.
+       * @return New reference count.
+       */
+      ULONG STDMETHODCALLTYPE AddRef() override {
+        return ++ref_count;
+      }
+
+      /**
+       * @brief Decrement the reference count, deleting when it reaches zero.
+       * @return New reference count.
+       */
+      ULONG STDMETHODCALLTYPE Release() override {
+        auto count = --ref_count;
+        if (count == 0) {
+          delete this;
+        }
+        return count;
+      }
+
+      /**
+       * @brief Simulate client initialization with the configured result.
+       * @return Configured Initialize() result.
+       */
+      HRESULT STDMETHODCALLTYPE Initialize(AUDCLNT_SHAREMODE, DWORD, REFERENCE_TIME, REFERENCE_TIME, const WAVEFORMATEX *, LPCGUID) override {
+        return initialize_status;
+      }
+
+      /**
+       * @brief Report an empty buffer.
+       * @param buffer_frames Receives the buffer size in frames.
+       * @return S_OK after reporting zero frames.
+       */
+      HRESULT STDMETHODCALLTYPE GetBufferSize(UINT32 *buffer_frames) override {
+        if (buffer_frames) {
+          *buffer_frames = 0;
+        }
+        return S_OK;
+      }
+
+      /**
+       * @brief Report zero stream latency.
+       * @param latency Receives the stream latency.
+       * @return S_OK after reporting zero latency.
+       */
+      HRESULT STDMETHODCALLTYPE GetStreamLatency(REFERENCE_TIME *latency) override {
+        if (latency) {
+          *latency = 0;
+        }
+        return S_OK;
+      }
+
+      /**
+       * @brief Report zero padding frames.
+       * @param padding_frames Receives the padding size in frames.
+       * @return S_OK after reporting zero frames.
+       */
+      HRESULT STDMETHODCALLTYPE GetCurrentPadding(UINT32 *padding_frames) override {
+        if (padding_frames) {
+          *padding_frames = 0;
+        }
+        return S_OK;
+      }
+
+      /**
+       * @brief Reject format support queries, which wrapper tests do not use.
+       * @return E_NOTIMPL.
+       */
+      HRESULT STDMETHODCALLTYPE IsFormatSupported(AUDCLNT_SHAREMODE, const WAVEFORMATEX *, WAVEFORMATEX **closest_match) override {
+        if (closest_match) {
+          *closest_match = nullptr;
+        }
+        return E_NOTIMPL;
+      }
+
+      /**
+       * @brief Fail mix-format lookup so the tolerated failure path is exercised.
+       * @param device_format Receives the device format on success.
+       * @return E_FAIL to exercise the tolerated mix-format failure.
+       */
+      HRESULT STDMETHODCALLTYPE GetMixFormat(WAVEFORMATEX **device_format) override {
+        if (device_format) {
+          *device_format = nullptr;
+        }
+        return E_FAIL;
+      }
+
+      /**
+       * @brief Report zero device periods.
+       * @param default_period Receives the default device period.
+       * @param minimum_period Receives the minimum device period.
+       * @return S_OK after reporting zero periods.
+       */
+      HRESULT STDMETHODCALLTYPE GetDevicePeriod(REFERENCE_TIME *default_period, REFERENCE_TIME *minimum_period) override {
+        if (default_period) {
+          *default_period = 0;
+        }
+        if (minimum_period) {
+          *minimum_period = 0;
+        }
+        return S_OK;
+      }
+
+      /**
+       * @brief Simulate starting capture.
+       * @return S_OK.
+       */
+      HRESULT STDMETHODCALLTYPE Start() override {
+        return S_OK;
+      }
+
+      /**
+       * @brief Simulate stopping capture.
+       * @return S_OK.
+       */
+      HRESULT STDMETHODCALLTYPE Stop() override {
+        return S_OK;
+      }
+
+      /**
+       * @brief Simulate resetting capture.
+       * @return S_OK.
+       */
+      HRESULT STDMETHODCALLTYPE Reset() override {
+        return S_OK;
+      }
+
+      /**
+       * @brief Accept an event handle without storing it.
+       * @return S_OK.
+       */
+      HRESULT STDMETHODCALLTYPE SetEventHandle(HANDLE) override {
+        return S_OK;
+      }
+
+      /**
+       * @brief Serve a fake capture client when enabled, else reject service queries.
+       *
+       * Wrapper tests leave serving disabled and never reach this branch; the
+       * end-to-end loopback test enables it so finish_capture_init() succeeds
+       * without audio hardware.
+       *
+       * @param object Receives the requested service.
+       * @return S_OK with a fake capture client when serving, else E_NOTIMPL.
+       */
+      HRESULT STDMETHODCALLTYPE GetService(REFIID riid, void **object) override {  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+        if (object) {
+          *object = nullptr;
+        }
+        if (!serve_capture_client || !object) {
+          return object ? E_NOTIMPL : E_POINTER;
+        }
+        if (riid != IID_IAudioCaptureClient && riid != IID_IUnknown) {
+          return E_NOINTERFACE;
+        }
+        auto *capture = new fake_process_loopback_capture_client_t();
+        *object = static_cast<IAudioCaptureClient *>(capture);
+        return S_OK;
+      }
+
+      static inline std::atomic live_count {0};  ///< Live fake-client count for leak checks.
+
+    private:
+      HRESULT initialize_status;  ///< HRESULT returned by Initialize().
+      bool serve_capture_client = false;  ///< Whether GetService() serves a fake capture client.
+      std::atomic<ULONG> ref_count {1};  ///< COM reference count.
+    };
+
+  #if defined(SUNSHINE_HAS_AUDIOCLIENT_ACTIVATION_PARAMS) && defined(VIRTUAL_AUDIO_DEVICE_PROCESS_LOOPBACK)
+    /**
+     * @brief Fake async operation reporting successful activation of a supplied interface.
+     */
+    class fake_process_loopback_async_operation_t final: public IActivateAudioInterfaceAsyncOperation {
+    public:
+      /**
+       * @brief Construct a fake operation serving the given interface.
+       * @param served_interface Interface returned from GetActivateResult; the operation holds its own reference.
+       * @param activate_result Result reported as the GetActivateResult return value.
+       * @param activation_hresult Result reported as the activation HRESULT.
+       */
+      explicit fake_process_loopback_async_operation_t(IUnknown *served_interface, HRESULT activate_result = S_OK, HRESULT activation_hresult = S_OK):
+          served_interface {served_interface},
+          activate_result {activate_result},
+          activation_hresult {activation_hresult} {
+        if (served_interface) {
+          served_interface->AddRef();
+        }
+      }
+
+      /**
+       * @brief Destroy the operation, releasing the served interface.
+       */
+      ~fake_process_loopback_async_operation_t() {
+        if (served_interface) {
+          served_interface->Release();
+        }
+      }
+
+      /**
+       * @brief Query a supported COM interface.
+       * @param riid Requested interface identifier.
+       * @param object Receives the interface pointer.
+       * @return S_OK when supported, E_NOINTERFACE otherwise.
+       */
+      HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **object) override {  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+        if (!object) {
+          return E_POINTER;
+        }
+        if (riid == IID_IUnknown || riid == __uuidof(IActivateAudioInterfaceAsyncOperation)) {
+          *object = static_cast<IActivateAudioInterfaceAsyncOperation *>(this);
+          AddRef();
+          return S_OK;
+        }
+        *object = nullptr;
+        return E_NOINTERFACE;
+      }
+
+      /**
+       * @brief Increment the reference count.
+       * @return New reference count.
+       */
+      ULONG STDMETHODCALLTYPE AddRef() override {
+        return ++ref_count;
+      }
+
+      /**
+       * @brief Decrement the reference count, deleting when it reaches zero.
+       * @return New reference count.
+       */
+      ULONG STDMETHODCALLTYPE Release() override {
+        auto count = --ref_count;
+        if (count == 0) {
+          delete this;
+        }
+        return count;
+      }
+
+      /**
+       * @brief Report successful activation of the served interface.
+       * @param activation_hresult Receives the activation HRESULT.
+       * @param activated_interface Receives the served interface.
+       * @return S_OK.
+       */
+      HRESULT STDMETHODCALLTYPE GetActivateResult(HRESULT *activation_hresult, IUnknown **activated_interface) override {
+        if (!activation_hresult || !activated_interface) {
+          return E_POINTER;
+        }
+        *activation_hresult = this->activation_hresult;
+        *activated_interface = served_interface;
+        if (served_interface) {
+          served_interface->AddRef();
+        }
+        return activate_result;
+      }
+
+    private:
+      IUnknown *served_interface {};  ///< Served interface held with an owning reference, or nullptr.
+      HRESULT activate_result {S_OK};  ///< Reported GetActivateResult return value.
+      HRESULT activation_hresult {S_OK};  ///< Reported activation HRESULT.
+      std::atomic<ULONG> ref_count {1};  ///< COM reference count.
+    };
+
+    /**
+     * @brief Verify timeout, failure, and success activation paths discard and deliver safely.
+     *
+     * Drives the real completion handler through the production wait-and-collect path
+     * in phases: a null completion arriving strictly after a short timeout must be
+     * discarded without delivering a client, a late success completion must likewise be
+     * discarded without leaking its client, an invalid wait handle must report no
+     * client, a pre-signaled failure must report no client, a pre-signaled success
+     * must deliver its client, and the same success through the default timeout
+     * argument must deliver it the way production calls it. The timeout phases hold
+     * the worker behind a gate event
+     * so the completion provably starts only after the wait expired, and hold an extra
+     * handler reference while waiting to model the reference Windows retains until the
+     * callback runs, so the late callback always sees a live handler. A final overlap
+     * loop hammers the race to pin crash-freedom and lifetime balance.
+     *
+     * The stress loop pins crash-freedom and lifetime balance only; it does not prove
+     * overlap occurred. Data-race freedom is unverified: the msys2/ucrt64 MinGW
+     * toolchain has no ThreadSanitizer support.
+     *
+     * @return 0 when every phase passes; otherwise the failing-phase id. Setup failures
+     * (a missing completion event or gate handle) reuse the id of the phase they belong to.
+     */
+    int process_loopback_completion_after_timeout_is_discarded() {
+      constexpr int kPhasePassed {0};  ///< All phases passed.
+      constexpr int kPhaseTimeoutOrdering {1};  ///< Timeout setup failed, or the wait did not expire before the late null completion started.
+      constexpr int kPhaseTimeoutDiscard {2};  ///< Expired wait delivered a client for the late null completion.
+      constexpr int kPhaseLateSuccess {3};  ///< Late-success setup failed, the wait did not expire first, or the expired wait delivered a client.
+      constexpr int kPhaseWaitFailed {4};  ///< Invalid-handle wait delivered a client.
+      constexpr int kPhaseSignaledFailure {5};  ///< Pre-signaled failure setup failed or delivered a client.
+      constexpr int kPhaseSignaledSuccess {6};  ///< Pre-signaled success setup failed or delivered no client.
+      constexpr int kPhaseStress {7};  ///< Overlap stress iteration setup failed.
+      constexpr int kPhaseLifetime {8};  ///< A fake client leaked across the late-success phase or the stress loop.
+      constexpr int kPhaseDefaultTimeout {9};  ///< Pre-signaled success through the default timeout delivered no client.
+      constexpr DWORD kShortTimeoutMs {10};  ///< Timeout that expires while the gated completion is still held.
+      constexpr DWORD kSignaledWaitMs {1000};  ///< Wait allowing pre-signaled completions to report.
+      constexpr DWORD kGateWaitMs {5000};  ///< Bound on the gated worker wait so a stuck gate fails instead of hanging.
+      {
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseTimeoutOrdering;
+        }
+        handler->AddRef();  // Model the reference Windows holds until the callback runs.
+        HANDLE gate = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+        if (!gate) {
+          handler->Release();
+          handler->Release();
+          return kPhaseTimeoutOrdering;
+        }
+        std::atomic<bool> completion_started {false};
+        std::thread late_completion([handler, gate, &completion_started] {
+          WaitForSingleObject(gate, kGateWaitMs);
+          completion_started.store(true, std::memory_order_release);
+          handler->ActivateCompleted(nullptr);
+          handler->Release();
+        });
+        bool wait_timed_out = false;
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kShortTimeoutMs, &wait_timed_out);
+        const bool expired_before_completion = !completion_started.load(std::memory_order_acquire);
+        SetEvent(gate);
+        late_completion.join();
+        CloseHandle(gate);
+        if (wait_timed_out) {
+          // Model the production detached waiter releasing the retained
+          // caller reference once the late completion has run.
+          handler->Release();
+        }
+        if (!expired_before_completion || !wait_timed_out) {
+          return kPhaseTimeoutOrdering;
+        }
+        if (client) {
+          return kPhaseTimeoutDiscard;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        {
+          auto *served_client = new fake_process_loopback_audio_client_t(S_OK);
+          fake_process_loopback_async_operation_t operation(served_client);
+          served_client->Release();
+          auto *handler = new platf::audio::process_loopback_completion_handler_t();
+          if (!handler->event_handle) {
+            handler->Release();
+            return kPhaseLateSuccess;
+          }
+          handler->AddRef();  // Model the reference Windows holds until the callback runs.
+          HANDLE gate = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+          if (!gate) {
+            handler->Release();
+            handler->Release();
+            return kPhaseLateSuccess;
+          }
+          std::atomic<bool> completion_started {false};
+          std::thread late_completion([handler, gate, &completion_started, &operation] {
+            WaitForSingleObject(gate, kGateWaitMs);
+            completion_started.store(true, std::memory_order_release);
+            handler->ActivateCompleted(&operation);
+            handler->Release();
+          });
+          bool wait_timed_out = false;
+          auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kShortTimeoutMs, &wait_timed_out);
+          const bool expired_before_completion = !completion_started.load(std::memory_order_acquire);
+          SetEvent(gate);
+          late_completion.join();
+          CloseHandle(gate);
+          if (wait_timed_out) {
+            handler->Release();
+          }
+          if (!expired_before_completion || !wait_timed_out || client) {
+            return kPhaseLateSuccess;
+          }
+        }
+        if (fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseLifetime;
+        }
+      }
+      {
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseWaitFailed;
+        }
+        // Production never passes an invalid handle (activate_process_loopback_audio_client checks
+        // creation), so this pins the shared non-signaled wait branch rather than a production path.
+        CloseHandle(handler->event_handle);
+        handler->event_handle = nullptr;
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (client) {
+          return kPhaseWaitFailed;
+        }
+      }
+      {
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseSignaledFailure;
+        }
+        handler->ActivateCompleted(nullptr);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (client) {
+          return kPhaseSignaledFailure;
+        }
+      }
+      {
+        auto *served_client = new fake_process_loopback_audio_client_t(S_OK);
+        fake_process_loopback_async_operation_t operation(served_client);
+        served_client->Release();
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseSignaledSuccess;
+        }
+        handler->ActivateCompleted(&operation);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (!client) {
+          return kPhaseSignaledSuccess;
+        }
+      }
+      {
+        // Same success shape production uses: default timeout argument with a pre-signaled event.
+        auto *served_client = new fake_process_loopback_audio_client_t(S_OK);
+        fake_process_loopback_async_operation_t operation(served_client);
+        served_client->Release();
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseDefaultTimeout;
+        }
+        handler->ActivateCompleted(&operation);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234);
+        if (!client) {
+          return kPhaseDefaultTimeout;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        for (int i = 0; i < 25; ++i) {
+          auto *served_client = new fake_process_loopback_audio_client_t(S_OK);
+          fake_process_loopback_async_operation_t operation(served_client);
+          served_client->Release();
+          auto *handler = new platf::audio::process_loopback_completion_handler_t();
+          if (!handler->event_handle) {
+            handler->Release();
+            return kPhaseStress;
+          }
+          handler->AddRef();  // Model the reference Windows holds until the callback runs.
+          std::thread racer([handler, &operation, i] {
+            if (i % 2 != 0) {
+              ::Sleep(1);
+            }
+            if (i % 2 == 0) {
+              handler->ActivateCompleted(&operation);
+            } else {
+              handler->ActivateCompleted(nullptr);
+            }
+            handler->Release();
+          });
+          bool wait_timed_out = false;
+          auto client = platf::audio::collect_process_loopback_activation(handler, 1234, (i % 3 == 0) ? 0 : 1, &wait_timed_out);
+          (void) client;  // Either outcome is legal under the race; only crash-freedom and lifetime are pinned.
+          racer.join();
+          if (wait_timed_out) {
+            handler->Release();
+          }
+        }
+        if (fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseLifetime;
+        }
+      }
+      return kPhasePassed;
+    }
+
+    /**
+     * @brief Hostile IUnknown violating the QueryInterface success contract.
+     *
+     * Real implementations null the out-pointer on failure, but the production
+     * handler defensively releases a non-null object anyway; this fake pins
+     * that branch by returning E_FAIL while handing out a referenced self.
+     */
+    class fake_hostile_unknown_t final: public IUnknown {
+    public:
+      HRESULT STDMETHODCALLTYPE QueryInterface(REFIID, void **object) override {  // NOSONAR(cpp:S5008): IUnknown::QueryInterface requires a void double pointer in the COM ABI.
+        if (object) {
+          *object = this;
+          AddRef();
+        }
+        return E_FAIL;
+      }
+
+      ULONG STDMETHODCALLTYPE AddRef() override {
+        return ++ref_count;
+      }
+
+      ULONG STDMETHODCALLTYPE Release() override {
+        auto count = --ref_count;
+        if (count == 0) {
+          delete this;
+        }
+        return count;
+      }
+
+    private:
+      std::atomic<ULONG> ref_count {1};  ///< COM reference count.
+    };
+
+    /**
+     * @brief Verify collect() rejects every failure combination of the completion fields.
+     *
+     * The timeout test above pins wait/ordering semantics; this covers the result
+     * matrix instead: a failed GetActivateResult return, a failed activation
+     * HRESULT with a successful return, a null served interface under success
+     * results, and a hostile QueryInterface that fails while returning an
+     * object. Each phase pre-signals synchronously, so no timing is involved,
+     * and each asserts the client count returns to baseline.
+     *
+     * @return 0 when every phase passes; otherwise the failing-phase id.
+     */
+    int collect_reports_failure_combinations() {
+      constexpr int kPhasePassed {0};  ///< All phases passed.
+      constexpr int kPhaseActivateResult {1};  ///< FAILED GetActivateResult return delivered a client.
+      constexpr int kPhaseActivationHresult {2};  ///< FAILED activation HRESULT delivered a client.
+      constexpr int kPhaseNullInterface {3};  ///< Null served interface under success results delivered a client.
+      constexpr int kPhaseHostileQueryInterface {4};  ///< Hostile QueryInterface failure delivered a client.
+      constexpr DWORD kSignaledWaitMs {1000};  ///< Wait allowing pre-signaled completions to report.
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        auto *served_client = new fake_process_loopback_audio_client_t(S_OK);
+        fake_process_loopback_async_operation_t operation(served_client, E_FAIL, S_OK);
+        served_client->Release();
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseActivateResult;
+        }
+        handler->ActivateCompleted(&operation);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (client || fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseActivateResult;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        auto *served_client = new fake_process_loopback_audio_client_t(S_OK);
+        fake_process_loopback_async_operation_t operation(served_client, S_OK, E_FAIL);
+        served_client->Release();
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseActivationHresult;
+        }
+        handler->ActivateCompleted(&operation);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (client || fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseActivationHresult;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        fake_process_loopback_async_operation_t operation(nullptr);
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseNullInterface;
+        }
+        handler->ActivateCompleted(&operation);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (client || fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseNullInterface;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        auto *hostile = new fake_hostile_unknown_t();
+        fake_process_loopback_async_operation_t operation(hostile);
+        hostile->Release();
+        auto *handler = new platf::audio::process_loopback_completion_handler_t();
+        if (!handler->event_handle) {
+          handler->Release();
+          return kPhaseHostileQueryInterface;
+        }
+        handler->ActivateCompleted(&operation);
+        auto client = platf::audio::collect_process_loopback_activation(handler, 1234, kSignaledWaitMs);
+        if (client || fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseHostileQueryInterface;
+        }
+      }
+      return kPhasePassed;
+    }
+
+    /**
+     * @brief Scripted ActivateAudioInterfaceAsync replacement for real-path activation tests.
+     *
+     * Records the PROPVARIANT blob the production code passes, then completes
+     * asynchronously on a joined worker thread so the real wait/collect path
+     * runs. The worker must be joined (via join() or destruction) before
+     * reading final observations; all observations except the blob bytes are
+     * written before completion and are stable once the worker joins.
+     */
+    struct scripted_activate_audio_interface_async_t {
+      HRESULT immediate_result = S_OK;  ///< Synchronous return; FAILED skips completion entirely.
+      DWORD complete_delay_ms = 20;  ///< Worker delay before completing.
+      bool called = false;  ///< Whether the fake API was invoked.
+      VARTYPE seen_vt = VT_EMPTY;  ///< Observed blob variant type.
+      ULONG seen_blob_size = 0;  ///< Observed blob byte count.
+      std::vector<BYTE> seen_blob_bytes;  ///< Observed blob bytes.
+      fake_process_loopback_async_operation_t *operation = nullptr;  ///< Heap operation owned until join().
+      std::thread worker;  ///< Completion worker, joined before assertions.
+
+      ~scripted_activate_audio_interface_async_t() {
+        join();
+      }
+
+      /**
+       * @brief Bind the script as an activation entry point for the real function.
+       * @return Callable matching activate_audio_interface_async_fn_t.
+       */
+      [[nodiscard]] activate_audio_interface_async_fn_t bind() {
+        return [this](LPCWSTR, REFIID, PROPVARIANT *prop, IActivateAudioInterfaceCompletionHandler *handler, IActivateAudioInterfaceAsyncOperation **operation_out) -> HRESULT {
+          called = true;
+          if (prop && prop->vt == VT_BLOB && prop->blob.pBlobData) {
+            seen_vt = VT_BLOB;
+            seen_blob_size = prop->blob.cbSize;
+            seen_blob_bytes.assign(prop->blob.pBlobData, prop->blob.pBlobData + prop->blob.cbSize);
+          }
+          if (FAILED(immediate_result)) {
+            *operation_out = nullptr;
+            return immediate_result;
+          }
+          auto *served = new fake_process_loopback_audio_client_t(S_OK);
+          operation = new fake_process_loopback_async_operation_t(served);
+          served->Release();
+          operation->AddRef();  // Caller reference; production releases it immediately.
+          *operation_out = operation;
+          handler->AddRef();  // Model the reference Windows holds until the callback runs.
+          // The worker borrows the script-owned operation (released by join(),
+          // which always runs before the script is destroyed); only the
+          // Windows-role handler reference is released here.
+          worker = std::thread([this, handler] {
+            ::Sleep(complete_delay_ms);
+            handler->ActivateCompleted(operation);
+            handler->Release();
+          });
+          return S_OK;
+        };
+      }
+
+      /**
+       * @brief Join the completion worker and release the script-owned operation.
+       */
+      void join() {
+        if (worker.joinable()) {
+          worker.join();
+        }
+        if (operation) {
+          operation->Release();
+          operation = nullptr;
+        }
+      }
+    };
+
+    /**
+     * @brief Drive the real activation entry point through success, failure, and timeout paths.
+     *
+     * Unlike the collect-level tests, which hand-drive a handler, this binds a
+     * scripted ActivateAudioInterfaceAsync into the real
+     * activate_process_loopback_audio_client(), so blob ownership, the
+     * immediate-failure path, and the timeout detached-waiter path all execute.
+     * Each phase asserts the exact blob bytes handed to the API alongside the
+     * client outcome, and the timeout phase polls the fake-client count back
+     * to baseline to prove the detached waiter retired the late completion.
+     *
+     * @return 0 when every phase passes; otherwise the failing-phase id.
+     */
+    int real_activation_paths_cover_success_failure_and_timeout() {
+      constexpr int kPhasePassed {0};  ///< All phases passed.
+      constexpr int kPhaseSuccess {1};  ///< Async success did not deliver an exact-blob client.
+      constexpr int kPhaseImmediateFailure {2};  ///< Immediate API failure delivered a client or leaked.
+      constexpr int kPhaseTimeout {3};  ///< Timeout did not discard, or the waiter did not retire the late completion.
+      constexpr DWORD kShortTimeoutMs {10};  ///< Wait expiring before the scripted late completion.
+      constexpr DWORD kLateCompleteMs {100};  ///< Scripted completion delay, strictly after the short timeout.
+      const auto expected_params = platf::audio::make_process_loopback_activation_params(1234);
+      const auto blob_matches = [&](const scripted_activate_audio_interface_async_t &script) {
+        return script.called && script.seen_vt == VT_BLOB && script.seen_blob_size == sizeof(expected_params) &&
+               script.seen_blob_bytes.size() == sizeof(expected_params) &&
+               std::memcmp(script.seen_blob_bytes.data(), &expected_params, sizeof(expected_params)) == 0;
+      };
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        scripted_activate_audio_interface_async_t script;
+        auto client = platf::audio::activate_process_loopback_audio_client(1234, 1000, script.bind());
+        script.join();
+        const bool delivered = static_cast<bool>(client);
+        client.reset();
+        if (!delivered || !blob_matches(script) || fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseSuccess;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        scripted_activate_audio_interface_async_t script;
+        script.immediate_result = E_FAIL;
+        auto client = platf::audio::activate_process_loopback_audio_client(1234, 1000, script.bind());
+        script.join();
+        if (client || !blob_matches(script) || fake_process_loopback_audio_client_t::live_count.load() != live_baseline) {
+          return kPhaseImmediateFailure;
+        }
+      }
+      {
+        const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+        scripted_activate_audio_interface_async_t script;
+        script.complete_delay_ms = kLateCompleteMs;
+        auto client = platf::audio::activate_process_loopback_audio_client(1234, kShortTimeoutMs, script.bind());
+        const bool discarded = !client;
+        script.join();
+        // The production detached waiter retires the late completion
+        // asynchronously; poll for its effects with a generous deadline.
+        bool retired = false;
+        for (int i = 0; i < 100; ++i) {
+          if (fake_process_loopback_audio_client_t::live_count.load() == live_baseline) {
+            retired = true;
+            break;
+          }
+          ::Sleep(50);
+        }
+        if (!discarded || !blob_matches(script) || !retired) {
+          return kPhaseTimeout;
+        }
+      }
+      return kPhasePassed;
+    }
+  #endif
+
+    /**
+     * @brief Exercise the process-loopback wrapper with a fake activation that succeeds.
+     * @return True when the wrapper returns an initialized client.
+     */
+    bool process_loopback_wrapper_succeeds_with_fake_activation() {
+      process_loopback_activation_t activation = [](std::uint32_t) {
+        audio_client_t client;
+        client.reset(new fake_process_loopback_audio_client_t(S_OK));
+        return client;
+      };
+      auto client = make_process_loopback_audio_client(1234, formats[0], activation);
+      return static_cast<bool>(client);
+    }
+
+    /**
+     * @brief Exercise the process-loopback wrapper with an activation that returns no client.
+     * @return True when the wrapper returns no client.
+     */
+    bool process_loopback_wrapper_fails_with_null_activation() {
+      process_loopback_activation_t activation = [](std::uint32_t) -> audio_client_t {
+        return nullptr;
+      };
+      return !make_process_loopback_audio_client(1234, formats[0], activation);
+    }
+
+    /**
+     * @brief Exercise the process-loopback wrapper with no activation step installed.
+     * @return True when the wrapper returns no client.
+     */
+    bool process_loopback_wrapper_fails_with_empty_activation() {
+      process_loopback_activation_t activation;
+      return !make_process_loopback_audio_client(1234, formats[0], activation);
+    }
+
+    /**
+     * @brief Exercise the process-loopback wrapper when client initialization fails.
+     * @return True when the wrapper returns no client.
+     */
+    bool process_loopback_wrapper_fails_when_initialization_fails() {
+      process_loopback_activation_t activation = [](std::uint32_t) {
+        audio_client_t client;
+        client.reset(new fake_process_loopback_audio_client_t(E_FAIL));
+        return client;
+      };
+      return !make_process_loopback_audio_client(1234, formats[0], activation);
+    }
+
+    /**
+     * @brief Record a capture PID through the production setter.
+     * @param process_id PID to record.
+     * @param creation_time Creation marker to record with the PID.
+     * @return PID stored on the control.
+     */
+    std::uint32_t recorded_capture_process_id(std::uint32_t process_id, std::uint64_t creation_time) {
+      audio_control_t control;
+      control.set_capture_target(audio_capture_intent_e::host_and_client, process_identity_t {process_id, creation_time});
+      return control.snapshot_capture_target().process_id;
+    }
+
+    /**
+     * @brief Record a capture identity through the production setter.
+     *
+     * The baseline is stored verbatim without a PID query, so even a
+     * fabricated identity for a nonexistent PID round-trips unchanged; only
+     * validation resolves it to endpoint capture.
+     *
+     * @param process_id PID to record.
+     * @param creation_time Creation marker to record with the PID.
+     * @return Creation marker stored on the control.
+     */
+    std::uint64_t recorded_capture_creation_time(std::uint32_t process_id, std::uint64_t creation_time) {
+      audio_control_t control;
+      control.set_capture_target(audio_capture_intent_e::host_and_client, process_identity_t {process_id, creation_time});
+      return control.snapshot_capture_target().identity.creation_time;
+    }
+
+    /**
+     * @brief Exercise the pure process-identity comparison with synthetic identities.
+     * @param recorded_process_id PID recorded with the capture target.
+     * @param recorded_creation_time Creation time recorded with the capture target.
+     * @param current_process_id PID queried before activation.
+     * @param current_creation_time Creation time queried before activation.
+     * @return True when the current identity is the recorded process.
+     */
+    bool process_identity_matches(std::uint32_t recorded_process_id, std::uint64_t recorded_creation_time, std::uint32_t current_process_id, std::uint64_t current_creation_time) {
+      return platf::audio::process_identity_matches(
+        process_identity_t {recorded_process_id, recorded_creation_time},
+        process_identity_t {current_process_id, current_creation_time}
+      );
+    }
+
+    /**
+     * @brief Exercise the pure effective-PID resolution with synthetic identities.
+     * @param recorded_process_id PID recorded with the capture target.
+     * @param recorded_creation_time Creation time recorded with the capture target.
+     * @param current_available Whether a current identity could be queried at all.
+     * @param current_process_id PID queried before activation.
+     * @param current_creation_time Creation time queried before activation.
+     * @return Recorded PID when still valid, or 0 for endpoint capture.
+     */
+    std::uint32_t effective_capture_process_id(std::uint32_t recorded_process_id, std::uint64_t recorded_creation_time, bool current_available, std::uint32_t current_process_id, std::uint64_t current_creation_time) {
+      std::optional<process_identity_t> current;
+      if (current_available) {
+        current = process_identity_t {current_process_id, current_creation_time};
+      }
+      return platf::audio::effective_capture_process_id(
+        process_identity_t {recorded_process_id, recorded_creation_time},
+        current
+      );
+    }
+
+    /**
+     * @brief Exercise recorded-target validation through the production control.
+     * @param process_id PID to record and immediately revalidate.
+     * @param creation_time Creation marker recorded as the validation baseline.
+     * @return PID accepted for process loopback, or 0 for endpoint capture.
+     */
+    std::uint32_t validated_capture_target_for_pid(std::uint32_t process_id, std::uint64_t creation_time) {
+      audio_control_t control;
+      control.set_capture_target(audio_capture_intent_e::host_and_client, process_identity_t {process_id, creation_time});
+      return control.validated_capture_process_id();
+    }
+
+    /**
+     * @brief Exercise the post-activation discard decision with synthetic PIDs.
+     * @param activated_process_id PID the completed activation was started for.
+     * @param revalidated_process_id PID revalidation still accepts, or 0 when the target exited or was reused.
+     * @return True when revalidation still accepts the activated PID.
+     */
+    bool activated_process_target_is_current(std::uint32_t activated_process_id, std::uint32_t revalidated_process_id) {
+      return platf::audio::activated_process_target_is_current(activated_process_id, revalidated_process_id);
+    }
+
+    /**
+     * @brief Set a capture target then conditionally clear it, reporting the stored intent.
+     *
+     * @param set_intent Intent recorded by set_capture_target().
+     * @param set_pid PID recorded by set_capture_target().
+     * @param clear_intent Intent passed to clear_capture_target().
+     * @param clear_pid PID passed to clear_capture_target().
+     * @return Intent stored on the control after the conditional clear.
+     */
+    audio_capture_intent_e intent_after_conditional_clear(audio_capture_intent_e set_intent, std::uint32_t set_pid, audio_capture_intent_e clear_intent, std::uint32_t clear_pid) {
+      audio_control_t control;
+      // The clear contract matches on intent and PID only; the marker is unverifiable here by design.
+      control.set_capture_target(set_intent, process_identity_t {set_pid, 0});
+      control.clear_capture_target(clear_intent, clear_pid);
+      return control.snapshot_capture_target().intent;
+    }
+
+    /**
+     * @brief Set a capture target then conditionally clear it, reporting the stored PID.
+     *
+     * @param set_intent Intent recorded by set_capture_target().
+     * @param set_pid PID recorded by set_capture_target().
+     * @param clear_intent Intent passed to clear_capture_target().
+     * @param clear_pid PID passed to clear_capture_target().
+     * @return PID stored on the control after the conditional clear.
+     */
+    std::uint32_t pid_after_conditional_clear(audio_capture_intent_e set_intent, std::uint32_t set_pid, audio_capture_intent_e clear_intent, std::uint32_t clear_pid) {
+      audio_control_t control;
+      // The clear contract matches on intent and PID only; the marker is unverifiable here by design.
+      control.set_capture_target(set_intent, process_identity_t {set_pid, 0});
+      control.clear_capture_target(clear_intent, clear_pid);
+      return control.snapshot_capture_target().process_id;
+    }
+
+    /**
+     * @brief Record this process as the capture target, conditionally clear it, and report the stored identity.
+     *
+     * The current process is the deterministic verifiable target: its PID and
+     * creation time are read directly from the owned process handle, so the
+     * recorded identity is nonzero until `on_capture_target_cleared()` runs.
+     *
+     * @param matching_clear Whether the clear uses the recorded intent and PID.
+     * @return Identity creation time stored on the control after the clear.
+     */
+    std::uint64_t identity_creation_time_after_conditional_clear(bool matching_clear) {
+      audio_control_t control;
+      const auto process_id = static_cast<std::uint32_t>(GetCurrentProcessId());
+      FILETIME creation_time {};
+      FILETIME exit_time {};
+      FILETIME kernel_time {};
+      FILETIME user_time {};
+      std::uint64_t combined_creation_time = 0;
+      if (GetProcessTimes(GetCurrentProcess(), &creation_time, &exit_time, &kernel_time, &user_time)) {
+        combined_creation_time = (static_cast<std::uint64_t>(creation_time.dwHighDateTime) << 32) | static_cast<std::uint64_t>(creation_time.dwLowDateTime);
+      }
+      control.set_capture_target(audio_capture_intent_e::host_and_client, process_identity_t {process_id, combined_creation_time});
+      control.clear_capture_target(audio_capture_intent_e::host_and_client, matching_clear ? process_id : process_id + 1);
+      return control.snapshot_capture_target().identity.creation_time;
+    }
+
+    /**
+     * @brief Verify an assigned-sink snapshot stays stable while the shared value changes.
+     *
+     * The default-endpoint callback reasserts the snapshot taken at install
+     * time; this proves later writes cannot mutate a previously taken copy.
+     *
+     * @return True when the first snapshot keeps the old sink after a rewrite.
+     */
+    bool assigned_sink_snapshot_is_stable() {
+      audio_control_t control;
+      control.capture_sink("sink-a");
+      const auto snapshot = control.snapshot_assigned_sink();
+      control.capture_sink("sink-b");
+      return snapshot == "sink-a" && control.snapshot_assigned_sink() == "sink-b";
+    }
+
+    /**
+     * @brief Hammer the guarded control state from multiple threads.
+     *
+     * Exercises capture-target set/clear/snapshot together with assigned-sink
+     * writes and snapshots. Every snapshot must read one of the written
+     * values, including the paired creation marker: each worker records
+     * identity {pid, pid}, so a snapshot whose marker does not match its PID
+     * is torn and fails. Completing without a data race is the regression pin.
+     *
+     * @return True when every snapshot read a consistent value.
+     */
+    bool concurrent_control_access_is_consistent() {
+      using enum audio_capture_intent_e;
+      audio_control_t control;
+      std::atomic consistent {true};
+      const auto worker = [&](std::uint32_t pid) {
+        for (int i = 0; i < 50 && consistent.load(std::memory_order_relaxed); ++i) {
+          control.capture_sink(std::format("sink-{}", pid));
+          if (control.snapshot_assigned_sink().compare(0, 5, "sink-") != 0) {
+            consistent.store(false, std::memory_order_relaxed);
+          }
+          control.set_capture_target(host_and_client, process_identity_t {pid, pid});
+          const auto target = control.snapshot_capture_target();
+          const bool valid_target = (target.intent == host_and_client && target.process_id >= 1 && target.process_id <= 4 &&
+                                     target.identity.process_id == target.process_id && target.identity.creation_time == target.process_id) ||
+                                    (target.intent == client_only && target.process_id == 0 && target.identity.process_id == 0 && target.identity.creation_time == 0);
+          if (!valid_target) {
+            consistent.store(false, std::memory_order_relaxed);
+          }
+          control.clear_capture_target(host_and_client, pid);
+        }
+      };
+      {
+        std::vector<std::jthread> threads;
+        threads.reserve(4);
+        for (std::uint32_t pid = 1; pid <= 4; ++pid) {
+          threads.emplace_back(worker, pid);
+        }
+      }
+      return consistent.load(std::memory_order_relaxed);
+    }
+
+    /**
+     * @brief Exercise the default-callback guard with a controlled keep-default mode.
+     * @param sink Assigned sink name that would be reinstalled.
+     * @param keep_default keep_default_sink value to test with.
+     * @return True when the production guard installs the reassertion callback.
+     */
+    bool installs_default_callback(const std::string &sink, bool keep_default) {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
+      bool installed = control.should_install_default_callback(sink);
+      config::audio.keep_default_sink = previous_keep;
+      return installed;
+    }
+
+    /**
+     * @brief Exercise the startup-reset guard with a controlled keep-default mode.
+     * @param keep_default keep_default_sink value to test with.
+     * @return True when the production guard permits resetting the default device.
+     */
+    bool resets_default_device(bool keep_default) {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
+      bool resets = control.should_reset_default_device();
+      config::audio.keep_default_sink = previous_keep;
+      return resets;
+    }
+
+    /**
+     * @brief Exercise the driver-install guard with a controlled keep-default mode.
+     * @param keep_default keep_default_sink value to test with.
+     * @param install_requested install_steam_drivers value to test with.
+     * @return True when the production guard permits installing the Steam drivers.
+     */
+    bool installs_steam_drivers(bool keep_default, bool install_requested) {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, keep_default);
+      auto previous_install = std::exchange(config::audio.install_steam_drivers, install_requested);
+      bool installs = control.should_install_steam_drivers();
+      config::audio.keep_default_sink = previous_keep;
+      config::audio.install_steam_drivers = previous_install;
+      return installs;
+    }
+
+    /**
+     * @brief Exercise the startup reset with keep-default enabled and null policy interfaces.
+     *
+     * Surviving this call proves the guard returns before touching policy or enumerator.
+     */
+    void reset_with_keep_default() {
+      audio_control_t control;
+      auto previous_keep = std::exchange(config::audio.keep_default_sink, true);
+      control.reset_default_device();
+      config::audio.keep_default_sink = previous_keep;
     }
 
     /**
@@ -1524,7 +3657,40 @@ namespace platf::audio {
     }
 
     /**
+     * @brief Run endpoint lookup against a test-supplied enumerator, reporting match success.
+     *
+     * Exercises the production find_device_id() path, including its
+     * skip-on-failure handling for unreadable entries, without audio hardware.
+     *
+     * @param match_name Endpoint name to match across all supported fields.
+     * @param device_enum Device enumerator supplied by the test.
+     * @return True when the endpoint resolves to an active device.
+     */
+    bool find_device_matches(const std::wstring &match_name, IMMDeviceEnumerator *device_enum) {
+      audio_control_t control;
+      device_enum->AddRef();
+      control.device_enum.reset(device_enum);
+      return static_cast<bool>(control.find_device_id(control.match_all_fields(match_name)));
+    }
+
+    /**
+     * @brief Report host and virtual sinks through the production discovery path.
+     *
+     * @param device_enum Device enumerator supplied by the test.
+     * @return Sinks reported for the current configuration, when any.
+     */
+    std::optional<sink_t> reported_sinks(IMMDeviceEnumerator *device_enum) {
+      audio_control_t control;
+      device_enum->AddRef();
+      control.device_enum.reset(device_enum);
+      return control.sink_info();
+    }
+
+    /**
      * @brief Exercise microphone creation with controlled assigned and configured sinks.
+     *
+     * Calls through the parameter-bundle overload, so the shared params shape
+     * is the exercised path on this backend.
      *
      * @param assigned_sink Sink selected by the shared audio context.
      * @param configured_sink Sink configured by the user.
@@ -1535,12 +3701,125 @@ namespace platf::audio {
       audio_control_t control;
       device_enum->AddRef();
       control.device_enum.reset(device_enum);
-      control.assigned_sink = assigned_sink;
+      control.capture_sink(assigned_sink);
 
+      const microphone_params_t params {nullptr, 2, 48000, 240, false, false};
       auto previous_configured_sink = std::exchange(config::audio.sink, configured_sink);
-      auto microphone = control.microphone(nullptr, 2, 48000, 240, false, false);
+      auto microphone = control.microphone(params);
       config::audio.sink = std::move(previous_configured_sink);
       return static_cast<bool>(microphone);
+    }
+
+    /**
+     * @brief Exercise microphone() end to end with a recorded capture target and a failing test activator.
+     *
+     * Records the given capture target through the production setter, installs
+     * a counting activator that returns no client, and runs the production
+     * microphone() via the parameter-bundle overload. A valid target proves
+     * the loopback-attempt branch ran when the activator was invoked; the
+     * failing activator then proves the activation-failure fallback by
+     * resolving the endpoint path afterwards. The current process identity is
+     * the deterministic valid target: its PID and creation time are read from
+     * the owned handle, while PID 0, an unverifiable marker, a mismatched
+     * marker, or a mismatched intent must never attempt loopback.
+     *
+     * @param probe Capture probe: sinks, intent, identity, enumerator, and keep-default flag in; attempt evidence out.
+     * @return True when process-loopback activation was attempted.
+     */
+    bool microphone_attempts_loopback_for_target(microphone_loopback_probe_t &probe) {
+      audio_control_t control;
+      probe.device_enum->AddRef();
+      control.device_enum.reset(probe.device_enum);
+      control.capture_sink(probe.assigned_sink);
+      control.set_capture_target(probe.intent, process_identity_t {probe.process_id, probe.creation_time});
+      control.set_test_loopback_activator([&probe](std::uint32_t attempted_pid, const format_t &) -> audio_client_t {
+        probe.attempted_process_id = attempted_pid;
+        return nullptr;
+      });
+
+      probe.attempted_process_id = 0;
+      const microphone_params_t params {nullptr, 2, 48000, 240, false, false};
+      auto previous_configured_sink = std::exchange(config::audio.sink, probe.configured_sink);
+      auto previous_keep_default = std::exchange(config::audio.keep_default_sink, probe.keep_default);
+      auto microphone = control.microphone(params);
+      config::audio.sink = std::move(previous_configured_sink);
+      config::audio.keep_default_sink = previous_keep_default;
+      probe.microphone_returned = static_cast<bool>(microphone);
+      return probe.attempted_process_id != 0;
+    }
+
+    /**
+     * @brief Exercise microphone() end to end through a succeeding loopback activation.
+     *
+     * Records the given capture target through the production setter, installs
+     * an activator that initializes a fake client (serving a fake capture
+     * client so finish_capture_init() succeeds without audio hardware), and
+     * runs the production microphone(). The endpoint fallback path creates no
+     * fake clients, so exactly one live fake client paired with the attempt
+     * proves the loopback branch — including post-activation revalidation —
+     * returned the microphone rather than the fallback.
+     *
+     * @param probe Capture probe: sinks, intent, identity, enumerator, and keep-default flag in; attempt evidence out.
+     * @return True when loopback activation succeeded and its microphone was returned without leaking.
+     */
+    bool microphone_returns_loopback_for_valid_target(microphone_loopback_probe_t &probe) {
+      audio_control_t control;
+      probe.device_enum->AddRef();
+      control.device_enum.reset(probe.device_enum);
+      control.capture_sink(probe.assigned_sink);
+      control.set_capture_target(probe.intent, process_identity_t {probe.process_id, probe.creation_time});
+      control.set_test_loopback_activator([&probe](std::uint32_t attempted_pid, const format_t &format) -> audio_client_t {
+        probe.attempted_process_id = attempted_pid;
+        process_loopback_activation_t activation = [](std::uint32_t) {
+          audio_client_t client;
+          client.reset(new fake_process_loopback_audio_client_t(S_OK, true));
+          return client;
+        };
+        return make_process_loopback_audio_client(attempted_pid, format, activation);
+      });
+
+      probe.attempted_process_id = 0;
+      const int live_baseline = fake_process_loopback_audio_client_t::live_count.load();
+      const int capture_baseline = fake_process_loopback_capture_client_t::live_count.load();
+      const microphone_params_t params {nullptr, 2, 48000, 240, false, false};
+      auto previous_configured_sink = std::exchange(config::audio.sink, probe.configured_sink);
+      auto previous_keep_default = std::exchange(config::audio.keep_default_sink, probe.keep_default);
+      {
+        auto microphone = control.microphone(params);
+        if (!microphone || probe.attempted_process_id != probe.process_id || fake_process_loopback_audio_client_t::live_count.load() != live_baseline + 1 || fake_process_loopback_capture_client_t::live_count.load() != capture_baseline + 1) {
+          config::audio.sink = std::move(previous_configured_sink);
+          config::audio.keep_default_sink = previous_keep_default;
+          probe.microphone_returned = static_cast<bool>(microphone);
+          return false;
+        }
+      }
+      config::audio.sink = std::move(previous_configured_sink);
+      config::audio.keep_default_sink = previous_keep_default;
+      probe.microphone_returned = true;
+      return fake_process_loopback_audio_client_t::live_count.load() == live_baseline &&
+             fake_process_loopback_capture_client_t::live_count.load() == capture_baseline;
+    }
+
+    /**
+     * @brief Report whether endpoint capture follows the Windows default device.
+     *
+     * Exercises the production should_follow_default_device() decision without
+     * requiring microphone initialization (which builds its own enumerator and
+     * needs audio hardware), so the blank keep-default follow behavior is
+     * pinned directly instead of via untouched-enumerator call counts.
+     *
+     * @param configured_sink Configured audio sink tested with, possibly empty.
+     * @param keep_default keep_default_sink value tested with.
+     * @return True when endpoint capture follows the default endpoint.
+     */
+    bool microphone_follows_default_device(const std::string &configured_sink, bool keep_default) {
+      audio_control_t control;
+      auto previous_configured_sink = std::exchange(config::audio.sink, configured_sink);
+      auto previous_keep_default = std::exchange(config::audio.keep_default_sink, keep_default);
+      const bool follows = control.should_follow_default_device();
+      config::audio.sink = std::move(previous_configured_sink);
+      config::audio.keep_default_sink = previous_keep_default;
+      return follows;
     }
 
     /**
@@ -1623,7 +3902,8 @@ namespace platf {
 
     // Install Steam Streaming Speakers if needed. We do this during audio_control() to ensure
     // the sink information returned includes the new Steam Streaming Speakers device.
-    if (!config::audio.external_audio && config::audio.install_steam_drivers && !control->find_device_id(control->match_steam_speakers())) {
+    // Hands-off modes skip the install: driver installation reconfigures the audio subsystem.
+    if (control->should_install_steam_drivers() && !control->find_device_id(control->match_steam_speakers())) {
       // This is best effort. Don't fail if it doesn't work.
       control->install_steam_audio_drivers();
     }
