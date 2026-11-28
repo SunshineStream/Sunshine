@@ -21,10 +21,10 @@ import en from '../../src_assets/common/assets/web/public/assets/locale/en.json'
  */
 async function mountTroubleshooting(platform, gamepadDriver, licenseStatus = {}, permissions = [], i18n = null) {
   vi.stubGlobal('fetch', vi.fn(async (url) => {
-    if (url === '/api/config') {
+    if (url === './api/config') {
       return { json: async () => ({ platform, gamepad_driver: gamepadDriver }) }
     }
-    if (url === '/api/virtual-input/status') {
+    if (url === './api/virtual-input/status') {
       return {
         json: async () => ({
           virtualhid: {
@@ -37,7 +37,7 @@ async function mountTroubleshooting(platform, gamepadDriver, licenseStatus = {},
         }),
       }
     }
-    if (url === '/api/virtual-input/license') {
+    if (url === './api/virtual-input/license') {
       return { ok: true, json: async () => ({ service_available: true, state: 'licensed', licensed: true, ...licenseStatus }) }
     }
     if (url === './api/permissions') {
@@ -243,7 +243,7 @@ describe('virtual input troubleshooting', () => {
     expect(status.attributes('title')).toBe('troubleshooting.driver_status_compatible')
     expect(status.attributes('role')).toBeUndefined()
     expect(status.attributes('tabindex')).toBeUndefined()
-    expect(fetch).toHaveBeenCalledWith('/api/virtual-input/status')
+    expect(fetch).toHaveBeenCalledWith('./api/virtual-input/status')
     wrapper.unmount()
   })
 

@@ -410,7 +410,21 @@ namespace config {
     // List of allowed origins for CSRF protection (e.g., "https://example.com,https://app.example.com")
     // Comma-separated list of additional origins. Default includes localhost variants and web UI port.
     std::vector<std::string> csrf_allowed_origins;  ///< Additional origins allowed by CSRF validation.
+
+    std::string web_ui_base_path;  ///< Normalized external path prefix of the Web UI, such as "/sunshine"; empty serves it from the root.
   };
+
+  /**
+   * @brief Validate and normalize the configured external path prefix of the Web UI.
+   *
+   * The value must be an absolute path whose segments contain only ASCII letters, digits, '-', '.', '_' and '~'.
+   * A single trailing slash is accepted. Empty segments, "." and "..", and a first segment that is one of the
+   * server-owned prefixes "api", "assets" or "images" are rejected.
+   *
+   * @param value Configured value.
+   * @return The path without a trailing slash, an empty string for "" or "/", or std::nullopt when the value is rejected.
+   */
+  std::optional<std::string> normalize_web_ui_base_path(std::string_view value);
 
   extern video_t video;
   extern audio_t audio;

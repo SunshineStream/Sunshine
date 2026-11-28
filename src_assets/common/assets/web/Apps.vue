@@ -49,7 +49,7 @@
           <div class="app-poster-container">
             <img
               v-if="app['image-path']"
-              :src="'/api/covers/' + index"
+              :src="'./api/covers/' + index"
               class="app-poster"
               :alt="app.name"
               @error="handleImageError"
